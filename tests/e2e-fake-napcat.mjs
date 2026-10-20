@@ -211,7 +211,11 @@ async function main() {
     }
 
     const dailyDir = path.join(memoryRoot, '30-日志');
-    const dailyFile = path.join(dailyDir, `${new Date().toISOString().slice(0, 10)}.md`);
+    const todayLocal = (() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    })();
+    const dailyFile = path.join(dailyDir, `${todayLocal}.md`);
     const dailyExists = await waitFor(() => fs.existsSync(dailyFile), { timeout: 20000, label: '当日日志页生成' });
     if (dailyExists || fs.existsSync(dailyFile)) {
       const dailyBody = await fsp.readFile(dailyFile, 'utf8');

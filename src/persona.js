@@ -81,7 +81,7 @@ function clampText(value, maxChars) {
 }
 
 /**
- * 人格加载器：按 mtime+size 缓存，文件没变就不重复读盘。
+ * 人格加载器：按 inode+mtime+size 缓存，文件没变就不重复读盘。
  * 支持多套人格：每条消息先看一眼 `active.json` 有没有变（一次 stat，几乎不要钱），
  * 变了就立刻换文件，不需要重启桥接。
  * 任何错误都退化成空串，绝不影响回话。
@@ -108,8 +108,10 @@ export class PersonaLoader {
     const file = activeFilePath(this.dir);
     let stamp = 'missing';
     try {
-      const st = await fsp.stat(file);
-      stamp = `${st.mtimeMs}:${st.size}`;
+      const st = await fsp.stat(file, { bigint: true });
+      // 用 ino + 纳秒当 key。Windows 上 rename 覆盖 active.json 后，stat 可能还会短暂
+      // 返回旧文件的 mtime（NTFS 元数据缓存），但 ino 每次都变，所以不会漏读。
+      stamp = `${st.ino}:${st.mtimeNs}:${st.size}`;
       if (stamp === this.stateStamp && this.state) return this.state;
     } catch (err) {
       if (err?.code !== 'ENOENT') this.log?.debug?.(`读取人格选择失败：${err?.message ?? err}`);
@@ -168,13 +170,13 @@ export class PersonaLoader {
     }
 
     try {
-      const st = await fsp.stat(resolution.file);
+      const st = await fsp.stat(resolution.file, { bigint: true });
       if (!st.isFile()) {
         result.missing = true;
         this.last = result;
         return result;
       }
-      const stamp = `${resolution.file}|${st.mtimeMs}:${st.size}`;
+      const stamp = `${resolution.file}|${st.ino}:${st.mtimeNs}:${st.size}`;
       if (this.cache && this.cache.stamp === stamp) {
         this.last = { ...this.cache.result };
         return this.last;
@@ -182,8 +184,8 @@ export class PersonaLoader {
       const raw = await fsp.readFile(resolution.file, 'utf8');
       const { body, truncated } = clampText(raw, this.config?.persona?.maxChars ?? DEFAULT_PERSONA_MAX_CHARS);
       result.body = body;
-      result.bytes = st.size;
-      result.updatedAt = new Date(st.mtimeMs).toISOString();
+      result.bytes = Number(st.size);
+      result.updatedAt = new Date(Number(st.mtimeMs)).toISOString();
       result.truncated = truncated;
       result.text = body ? `[人格设定]\n${body}\n\n` : '';
       this.cache = { stamp, result: { ...result } };

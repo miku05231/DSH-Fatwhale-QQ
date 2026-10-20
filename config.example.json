@@ -5,7 +5,12 @@
   },
   "dsh": {
     "command": "dsh",
+    "mode": "auto",
     "profile": "headless",
+    "desktopProfile": "desktop",
+    "desktopBootTimeoutMs": 120000,
+    "desktopIdleMs": 900000,
+    "fallbackToHeadless": true,
     "patchPath": "patches/headless-model.yml",
     "cwd": ".",
     "timeoutMs": 300000,

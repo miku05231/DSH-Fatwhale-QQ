@@ -336,7 +336,7 @@ node tools\package.mjs --force              # 覆盖已有目录
 2. 记忆库目录不存在会**自动建库**（`ObsidianMemory.ensure()`），不需要手工建文件夹。
 3. 改完要**重启桥接**才生效（控制台里有「保存并重启桥接」一键完成）；控制台本身不用重启。
 
-实现位置：`src\persona.js`（路径解析 + 人格读取 + mtime 缓存）、`src\index.js` 的 `PersonaLoader` 注入、`src\webui\server.mjs` 的 `GET /api/paths`、`POST /api/paths/check` 与设置白名单。测试 `tests\persona-test.mjs`（24 项）覆盖解析、缓存、截断、去重，以及真桥接下 `prompt` 里有人格块、`dsh` 的 cwd 就是配置的工作区、记忆库落在配置的根目录。
+实现位置：`src\persona.js`（路径解析 + 人格读取 + inode/mtime 缓存）、`src\index.js` 的 `PersonaLoader` 注入、`src\webui\server.mjs` 的 `GET /api/paths`、`POST /api/paths/check` 与设置白名单。测试 `tests\persona-test.mjs`（24 项）覆盖解析、缓存、截断、去重，以及真桥接下 `prompt` 里有人格块、`dsh` 的 cwd 就是配置的工作区、记忆库落在配置的根目录。
 
 ---
 
@@ -399,6 +399,7 @@ docker compose up -d
 - 数据全在宿主机的 `./data/`（配置、状态、日志、人格、记忆），删容器不丢
 - 镜像里**不带 DSH**（模型执行端体积大、更新快）。要真回话：把宿主机的 DSH 挂进 `/opt/dsh` 并设 `DSH_COMMAND`，细节见 [docs/Docker部署.md](docs/Docker部署.md)
 - 不接 DSH 也能跑：控制台、收消息、记忆、表情包都正常，只是不会回话
+- Docker 里没有桌面 profile，`dsh.mode: auto` 会自动退回 headless；也可显式写 `"mode": "headless"`
 
 > 换台机器、换目录、进容器都不用改代码：配置里的 `dsh.cwd` 默认是 `.`（配置文件所在目录），
 > 配置文件本身也支持用环境变量 `QQ_CONFIG` 指到别处。
@@ -469,12 +470,17 @@ QQ 里也能直接切（这几个指令不需要 @，主人发才算）：
 {
   "onebot":   { "url": "ws://127.0.0.1:3001", "accessToken": "" },
   "dsh": {
+    "mode":      "auto",                          // auto | desktop | headless（见下）
     "command":   "dsh",
     "profile":   "headless",
     "patchPath": "patches/headless-model.yml",   // 模型路由补丁
-    "cwd":       "C:\\D\\DSH\\qq-bridge\\qq-workspace",
+    "cwd":       "qq-workspace",
     "timeoutMs": 300000,
-    "permissionMode": "danger-full-access"       // 见下方说明
+    "permissionMode": "danger-full-access",      // 见下方说明
+    "desktopProfile": "desktop",                 // desktop 模式用哪个 profile，也可写绝对路径
+    "desktopBootTimeoutMs": 120000,              // 第一条消息等宿主启动的上限（毫秒）
+    "desktopIdleMs": 900000,                     // 多久没消息关掉宿主（毫秒，0 = 不关）
+    "fallbackToHeadless": true                   // 桌面宿主起不来时，这条消息回退 headless
   },
   "persona": {                             // 人格文件（见「一·十二」）
     "enabled": true,
@@ -549,6 +555,27 @@ copy patches\headless-model.yml patches\headless-model.local.yml
 
 `patches/*.local.yml` 已经在 `.gitignore` 里，不会被提交。`patchPath` 留空（`""`）表示不挂补丁，直接用 `dsh --profile headless` 自己的模型配置。
 
+### dsh.mode：desktop（全插件）还是 headless（轻量）
+
+桥接可以按两种方式调用本机 DSH，`dsh.mode` 决定用哪种：
+
+| 模式 | 加载的 profile | 能用的能力 | 代价 |
+| --- | --- | --- | --- |
+| `desktop` | 你桌面端在用的 `~/.dsh/profiles/desktop` | 和桌面端完全一致：全部插件、技能、工具、Agent Team、浏览器等 | 第一条消息要先起一个常驻宿主（约 10–30 秒），常驻时多占一份内存 |
+| `headless` | 只有 base + `dsh-headless` | 基础对话与工具，没有桌面插件 | 启动快；Docker、服务器、没装桌面端也能跑 |
+
+默认 `auto`：启动时探测 `~/.dsh/profiles/desktop`，有就 `desktop`，没有就 `headless`；也可以写死一个。
+
+`desktop` 模式的行为：
+
+- **会话互通**：会话写进同一个 `~/.dsh/sessions`。QQ 这边新开的会话，桌面端刷新后能在侧栏「未分组」看到，点开就能接着聊。
+- **不抢默认模型**：QQ 侧手动指定的模型只作用于当次请求，不会改掉桌面端的默认模型。
+- **宿主复用**：第一条消息等宿主启动（`desktopBootTimeoutMs`，默认 120 秒），之后复用同一个宿主；`desktopIdleMs`（默认 15 分钟）没消息就关掉释放内存，下一条再拉起。
+- **自动回退**：桌面 profile 不存在、启动失败或超时，这一条消息回退 headless，桥接不会因此不回话；不想回退就把 `fallbackToHeadless` 设成 `false`。
+- **Docker**：镜像里没有桌面 profile，`auto` 会自动走 headless；想省掉探测就写 `"mode": "headless"`。
+
+> 安全边界不变：两种模式都受 `dsh.permissionMode` 约束，desktop 模式不会额外获得权限。
+
 ### dsh.permissionMode 是什么
 
 它会被塞进子进程的环境变量 `DSH_PERMISSION_MODE`，决定 QQ 里的 agent 有多大的权限：
@@ -609,7 +636,11 @@ qq-bridge\
   src\                    桥接源码
     index.js              消息编排（白名单 → 队列 → DSH → 分段回发）
     onebot.js             OneBot v11 WebSocket 客户端（自动重连）
-    dsh.js                调用 dsh headless 并解析 NDJSON
+    dsh.js                调用 dsh headless 并解析 NDJSON（命令解析 / 进程树终止）
+    dsh-desktop.js        desktop 模式宿主客户端（探测 profile、协议、空闲回收）
+    dsh-desktop-host.mjs  desktop 模式常驻宿主（独立进程加载全部桌面插件）
+    agent-runner.js       auto / desktop / headless 路由与失败回退
+    redact.js             日志与错误里的 token / 密钥打码
     security.js           白名单 / 群准入 / 限流 / 文本清洗
     sessions.js           会话持久化
     groupmem.js           群聊记忆（JSONL，超限原子重写）
@@ -698,7 +729,7 @@ cd D:\code\qq-bridge
 node tests\run-all.mjs
 ```
 
-它会按顺序跑下面的用例，逐条打勾，最后汇总「通过 N 项，失败 0 项」，同时把结果写进 `state\test-log\<时间戳>.md|.json`（`latest.md` 是最新一轮）；`docs\测试清单.md` 记的是逐条的人工/自动对照表。全部 31 组用例，最近一轮 343.3 秒全过（包含 UI CDP、真 dsh、干净环境模拟、命令行模式、容器静态校验、封装应用与公开导出，机器忙时会慢）。
+它会按顺序跑下面的用例，逐条打勾，最后汇总「通过 N 项，失败 0 项」，同时把结果写进 `state\test-log\<时间戳>.md|.json`（`latest.md` 是最新一轮）；`docs\测试清单.md` 记的是逐条的人工/自动对照表。全部 32 组用例，最近一轮 405.8 秒全过（包含 UI CDP、真 dsh、干净环境模拟、命令行模式、容器静态校验、封装应用与公开导出，机器忙时会慢）。
 
 单条单跑：
 
@@ -719,6 +750,7 @@ node tests\model-follow-test.mjs    # 模型跟随：解析桌面端补丁层 / 
 node tests\e2e-model-patch.mjs      # 模型跟随端到端：真桥接的 dsh argv、手动优先、桌面端换模型立刻跟上（20 项）
 node tests\model-patch-real-dsh.mjs # 把两层补丁交给真 dsh --dump-config，确认 runtime 覆盖基础（9 项）
 node tests\tray-click-target.mjs    # 托盘左键绑定 + 菜单只剩退出 + Open-WebUiConsole 的 Edge 参数（18 项，不动鼠标）
+node tests\agent-runner-test.mjs    # DSH 运行模式：安装根/profile 探测 + auto/desktop/headless 路由 + 脱敏（20 项）
 node tests\wake-word-test.mjs       # 唤醒词语义：私聊免唤醒 / @ 了不受唤醒词限制（5 项）
 node tests\reflect-test.mjs         # 自学习：recent 契约 / 秒跳过 / dsh 入口解析（14 项）
 node tests\reflect-schedule-test.mjs # 反思定时：一天一次 / 关机补跑 / 覆盖前备份 / 锁 / 记账（56 项）

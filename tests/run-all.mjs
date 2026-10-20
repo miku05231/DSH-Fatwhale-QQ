@@ -66,6 +66,13 @@ const SUITE = [
     note: '桌面端补丁层解析 / runtime patch 生成与幂等 / 手动模式 / 兜底',
   },
   {
+    name: 'DSH 运行模式（desktop / headless）',
+    file: 'tests/agent-runner-test.mjs',
+    expect: ['通过'],
+    timeoutMs: 60_000,
+    note: '安装根/profile 探测、auto/desktop/headless 路由、配置默认值与校验、脱敏、宿主契约',
+  },
+  {
     name: '群成员对话权限',
     file: 'tests/group-members-test.mjs',
     expect: ['通过'],
