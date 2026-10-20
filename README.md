@@ -303,7 +303,7 @@ node tools\package.mjs --force              # 覆盖已有目录
 
 首次运行：双击 `初始化配置.cmd` 生成 `config.json` → 按自己的 QQ 号改黑白名单 → 把 NapCat 解压到 `napcat\` → 双击 `一键启动.cmd`。
 
-`打包信息.json` 记版本、构建时间、脱敏文件数；校验方式是 `node tests\package-test.mjs`（46 项），它会真的运行产物里的 `blacklist-test.mjs`，证明拷出去的代码是活的。
+`打包信息.json` 记版本、构建时间、脱敏文件数；校验方式是 `node tests\package-test.mjs`（65 项），它会真的运行产物里的 `blacklist-test.mjs`，证明拷出去的代码是活的。
 
 ---
 
@@ -729,7 +729,7 @@ cd D:\code\qq-bridge
 node tests\run-all.mjs
 ```
 
-它会按顺序跑下面的用例，逐条打勾，最后汇总「通过 N 项，失败 0 项」，同时把结果写进 `state\test-log\<时间戳>.md|.json`（`latest.md` 是最新一轮）；`docs\测试清单.md` 记的是逐条的人工/自动对照表。全部 32 组用例，最近一轮 405.8 秒全过（包含 UI CDP、真 dsh、干净环境模拟、命令行模式、容器静态校验、封装应用与公开导出，机器忙时会慢）。
+它会按顺序跑下面的用例，逐条打勾，最后汇总「通过 N 项，失败 0 项」，同时把结果写进 `state\test-log\<时间戳>.md|.json`（`latest.md` 是最新一轮）；`docs\测试清单.md` 记的是逐条的人工/自动对照表。共 34 组用例，包含 UI CDP、真 dsh、干净环境模拟、命令行模式、容器静态校验、托盘外观、EXE 封装与公开导出；每轮结果以对应的测试记录为准。
 
 单条单跑：
 
@@ -750,6 +750,8 @@ node tests\model-follow-test.mjs    # 模型跟随：解析桌面端补丁层 / 
 node tests\e2e-model-patch.mjs      # 模型跟随端到端：真桥接的 dsh argv、手动优先、桌面端换模型立刻跟上（20 项）
 node tests\model-patch-real-dsh.mjs # 把两层补丁交给真 dsh --dump-config，确认 runtime 覆盖基础（9 项）
 node tests\tray-click-target.mjs    # 托盘左键绑定 + 菜单只剩退出 + Open-WebUiConsole 的 Edge 参数（18 项，不动鼠标）
+node tests\tray-appearance-test.mjs # 托盘深浅色、缩放、退出确认与停服顺序（175 项，隔离运行）
+node tests\exe-host-test.mjs        # EXE 编译、参数、真实引导路径与发行包（隔离运行）
 node tests\agent-runner-test.mjs    # DSH 运行模式：安装根/profile 探测 + auto/desktop/headless 路由 + 脱敏（20 项）
 node tests\wake-word-test.mjs       # 唤醒词语义：私聊免唤醒 / @ 了不受唤醒词限制（5 项）
 node tests\reflect-test.mjs         # 自学习：recent 契约 / 秒跳过 / dsh 入口解析（14 项）
@@ -759,10 +761,10 @@ node tests\webui-test.mjs           # 控制台接口 + 模型接口 + 开机自
 node tests\ui-cdp.mjs               # Edge 无头真渲染 + 点击 + 模型页 + 插件页 + 表情页 + 人格页（46 项，控制台没起会自跳过）
 node tests\perm-mode-check.mjs      # 子进程真的拿到了 shell（会算 123456+654321）
 node tests\real-config-check.mjs    # 用真实 config 验证 cwd 与补丁
-node tests\package-test.mjs         # 封装应用：产物齐全、无泄漏、拷出去真跑测试、出 zip（46 项）
+node tests\package-test.mjs         # 封装应用：产物齐全、无泄漏、拷出去真跑测试、出 zip（65 项）
 node tests\persona-test.mjs         # 自定义路径：解析 / 人格注入 / cwd / 记忆根（24 项）
 node tests\personas-test.mjs        # 多套人格：名字清洗 / 库增删改 / 全局与按会话选择 / 热切换 / 指令解析 / 接口（144 项）
-node tests\export-public-test.mjs   # 公开导出：产物齐全、无泄漏、自身可跑（28 项）
+node tests\export-public-test.mjs   # 公开导出：产物齐全、无泄漏、自身可跑（43 项）
 node tests\final-audit.mjs          # 工程审计（文件/编码/BOM/残留/配置/关键实现点）
 ```
 

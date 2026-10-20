@@ -337,7 +337,7 @@ if (-not (Test-Path -LiteralPath $psExe)) { $psExe = 'powershell.exe' }
 Write-BootLog '启动托盘'
 try {
     Start-Process -FilePath $psExe `
-        -ArgumentList @('-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', $trayScript) `
+        -ArgumentList @('-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $trayScript + '"')) `
         -WindowStyle Hidden -ErrorAction Stop | Out-Null
 } catch {
     Write-BootLog ('托盘启动失败：' + $_.Exception.Message)
@@ -348,7 +348,7 @@ try {
 Write-BootLog '启动流程完成'
 Write-Host ''
 Write-Host '[✓] 已就绪 —— 看任务栏右下角的托盘图标（绿色 = 一切正常）' -ForegroundColor Green
-Write-Host '    右键图标可以看到全部控制项；退出时桥接、NapCat 和 DSH 会一起停掉。' -ForegroundColor DarkGray
+Write-Host '    左键打开控制台，右键退出；退出时停止桥接和 NapCat，DSH 保持运行。' -ForegroundColor DarkGray
 Write-Host ''
 
 exit 0

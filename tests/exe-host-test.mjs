@@ -261,6 +261,56 @@ exit ([int]$env:QQ_EXE_TEST_EXIT)
       assert.match(missingBootstrap.stderr, /bootstrap\.ps1/);
     });
 
+    await fs.copyFile(path.join(ROOT, 'launcher', 'bootstrap.ps1'), bootstrap);
+    await fs.mkdir(path.join(app, 'launcher', 'lib'), { recursive: true });
+    await fs.writeFile(path.join(app, 'launcher', 'lib', 'ProcessControl.ps1'), `
+function Get-NapCatProcess { return [pscustomobject]@{ Running = $true } }
+function Get-BridgeProcess { return [pscustomobject]@{ Running = $true } }
+function Start-NapCat { throw 'The isolated fixture must not start NapCat.' }
+function Start-Bridge { throw 'The isolated fixture must not start the bridge.' }
+function Get-CimInstance {
+  [CmdletBinding()]
+  param([string]$ClassName, [string]$Filter)
+  if ($Filter -eq "Name='DeepSeek Harness.exe'") {
+    return [pscustomobject]@{ ProcessId = 1 }
+  }
+  if ($Filter -eq "Name='node.exe'") {
+    return [pscustomobject]@{ CommandLine = 'node.exe src\\webui\\server.mjs' }
+  }
+  throw ('Unexpected process query: ' + $Filter)
+}
+`, 'utf8');
+    const trayFixture = path.join(app, 'launcher', 'Launcher.ps1');
+    const trayCapture = path.join(temporary, 'tray.json');
+    await fs.writeFile(trayFixture, `
+$ErrorActionPreference = 'Stop'
+$data = [pscustomobject]@{
+  script = $PSCommandPath
+  cwd = [Environment]::CurrentDirectory
+  apartment = [Threading.Thread]::CurrentThread.ApartmentState.ToString()
+  arguments = @($args)
+}
+$capture = $env:QQ_EXE_TEST_TRAY_CAPTURE
+[IO.File]::WriteAllText(($capture + '.tmp'), ($data | ConvertTo-Json -Compress))
+[IO.File]::Move(($capture + '.tmp'), $capture)
+`, 'utf8');
+    successful(exe, [], { env: { ...desktopEnv, QQ_EXE_TEST_TRAY_CAPTURE: trayCapture } });
+    await waitForFile(trayCapture);
+    const trayData = JSON.parse(await fs.readFile(trayCapture, 'utf8'));
+    check('The real bootstrap launches its tray script from a path with spaces, Unicode and an apostrophe', () => {
+      assert.equal(trayData.script.toLowerCase(), trayFixture.toLowerCase());
+      assert.equal(trayData.cwd.toLowerCase(), app.toLowerCase());
+      assert.equal(trayData.apartment, 'STA');
+      assert.deepEqual(trayData.arguments, []);
+    });
+    const bootstrapLog = await fs.readFile(path.join(app, 'state', 'launcher.log'), 'utf8');
+    check('The isolated real bootstrap skips all existing services and completes startup', () => {
+      for (const component of ['NapCat', '\u6865\u63a5', '\u63a7\u5236\u53f0', 'DSH']) {
+        assert.match(bootstrapLog, new RegExp(`${component}\\s*\u5df2\u5728\u8fd0\u884c`));
+      }
+      assert.ok(bootstrapLog.includes('\u542f\u52a8\u6d41\u7a0b\u5b8c\u6210'));
+    });
+
     const invalidBuild = run(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
       path.join(ROOT, 'scripts', 'build-exe.ps1'), '-OutputPath', path.join(temporary, 'invalid.exe'),
       '-Version', '1.2.3";[assembly:AssemblyCompany("injected")]']);
