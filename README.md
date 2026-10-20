@@ -1,4 +1,5 @@
 # QQ-DSH · 在 QQ 里和 DeepSeek Harness 聊天
+![Uploading deepseek-waitou.png…]()
 
 你在手机或电脑 QQ 里发消息，本机 DSH 执行并回复。
 
