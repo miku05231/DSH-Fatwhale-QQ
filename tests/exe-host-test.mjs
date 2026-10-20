@@ -108,7 +108,7 @@ async function main() {
     console.log('SKIP exe-host-test requires Windows and .NET Framework csc.exe.');
     return;
   }
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-exe-host-'));
+  const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'qq-exe-host-')));
   const app = path.join(temporary, "app space ' \u6d4b\u8bd5");
   try {
     await fs.mkdir(path.join(app, 'tools'), { recursive: true });
