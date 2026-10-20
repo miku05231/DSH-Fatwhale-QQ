@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#6750A4" />
+  <title>大肥鱼控制台</title>
+  <link rel="icon" type="image/png" href="/app-icon.png" />
+  <link rel="apple-touch-icon" href="/app-icon.png" />
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <!-- ============================ 顶部应用栏 ============================ -->
+  <header class="top-app-bar">
+    <div class="top-app-bar__inner">
+      <div class="top-app-bar__text">
+        <h1 class="top-app-bar__title" id="appTitle">概览</h1>
+        <p class="top-app-bar__subtitle" id="appSubtitle">大肥鱼 · QQ 桥接控制台</p>
+      </div>
+      <button class="status-chip ripple" id="statusChip" type="button" aria-label="刷新状态">
+        <span class="status-dot" id="statusDot" data-state="unknown"></span>
+        <span class="status-chip__text" id="statusText">连接中</span>
+        <svg class="icon icon--xs" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ============================ 下拉刷新 ============================ -->
+  <div class="ptr" id="ptr" aria-hidden="true">
+    <span class="ptr__spinner"></span>
+    <span class="ptr__label" id="ptrLabel">下拉刷新</span>
+  </div>
+
+  <!-- ============================ 页面容器 ============================ -->
+  <main class="page-host" id="pageHost">
+
+    <!-- ---------------------------- 概览 ---------------------------- -->
+    <section class="page is-active" id="page-overview" data-page="overview" aria-label="概览">
+      <div class="grid" id="serviceCards"></div>
+      <section class="card">
+        <div class="card__head">
+          <h2 class="card__title">今日概览</h2>
+          <span class="card__hint" id="overviewTime">—</span>
+        </div>
+        <div class="stat-row">
+          <div class="stat"><span class="stat__value" id="statMemory">—</span><span class="stat__label">记忆条目</span></div>
+          <div class="stat"><span class="stat__value" id="statMessages">—</span><span class="stat__label">今日消息</span></div>
+          <div class="stat"><span class="stat__value" id="statSessions">—</span><span class="stat__label">活跃会话</span></div>
+        </div>
+        <p class="section-label">最近日志</p>
+        <pre class="log-box log-box--mini" id="overviewLog">正在读取…</pre>
+      </section>
+    </section>
+
+    <!-- ---------------------------- 记忆 ---------------------------- -->
+    <section class="page" id="page-memory" data-page="memory" aria-label="记忆">
+      <form class="search-field ripple" id="memoryForm" role="search">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+        <input id="memoryQuery" type="search" name="q" placeholder="搜索记忆，例如：群聊 / 主人 / 白米饭" autocomplete="off" />
+        <button class="icon-btn ripple" type="submit" aria-label="搜索">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+        </button>
+      </form>
+      <div class="chips" id="memoryQuick">
+        <button class="chip ripple" type="button" data-q="群聊">群聊</button>
+        <button class="chip ripple" type="button" data-q="主人">主人</button>
+        <button class="chip ripple" type="button" data-q="白米饭">白米饭</button>
+        <button class="chip ripple" type="button" data-q="反思">反思</button>
+        <button class="chip ripple" type="button" data-q="日志">日志</button>
+      </div>
+      <section class="card card--pad">
+        <div class="row-between">
+          <h2 class="card__title">记忆库</h2>
+          <span class="card__hint" id="memoryRootHint">—</span>
+        </div>
+        <div class="stat-row" id="memoryStats">
+          <div class="stat"><span class="stat__value">—</span><span class="stat__label">合计</span></div>
+        </div>
+        <div class="row-end">
+          <button class="btn btn--text ripple" type="button" id="memoryOpenDir">打开文件夹</button>
+          <button class="btn btn--tonal ripple" type="button" id="memoryOpenObsidian">用 Obsidian 打开</button>
+        </div>
+      </section>
+      <section class="card card--pad">
+        <div class="row-between">
+          <h2 class="card__title">记忆反思</h2>
+          <span class="card__hint" id="reflectWeek">—</span>
+        </div>
+        <label class="switch-row">
+          <span class="switch-row__text">每天自动反思一次（电脑关着错过的那次，开机后会补上）</span>
+          <input class="switch" type="checkbox" id="reflectDaily" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-row__text">每天几点跑（凌晨最安静）</span>
+          <input class="text-field text-field--time" type="time" id="reflectTime" step="60" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-row__text">重写前先备份这一周已有的反思</span>
+          <input class="switch" type="checkbox" id="reflectBackup" />
+        </label>
+        <p class="card__hint" id="reflectHint">—</p>
+        <div class="row-end">
+          <button class="btn btn--text ripple" type="button" id="reflectOpen">打开本周反思</button>
+          <button class="btn btn--tonal ripple" type="button" id="reflectSave">保存设置</button>
+          <button class="btn btn--filled ripple" type="button" id="reflectNow">立即反思</button>
+        </div>
+        <pre class="log-box log-box--mini" id="reflectLog">—</pre>
+      </section>
+      <div class="stack" id="memoryResults">
+        <p class="empty">输入关键词，或点上面的标签开始检索</p>
+      </div>
+    </section>
+
+    <!-- --------------------------- 表情包 --------------------------- -->
+    <section class="page" id="page-stickers" data-page="stickers" aria-label="表情包">
+      <section class="card card--pad">
+        <div class="row-between">
+          <div class="card__head card__head--flush">
+            <h2 class="card__title">表情包库</h2>
+            <p class="card__sub" id="stickerRootHint">—</p>
+          </div>
+          <span class="chip" id="stickerCount">—</span>
+        </div>
+        <div class="stat-row" id="stickerStats">
+          <div class="stat"><span class="stat__value">—</span><span class="stat__label">合计</span></div>
+        </div>
+        <form class="search-field ripple" id="stickerForm" role="search">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+          <input id="stickerQuery" type="search" name="q" placeholder="搜标签 / 文字 / 谁发的，例如：猫 / 搞笑" autocomplete="off" />
+          <button class="icon-btn ripple" type="submit" aria-label="搜索">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+          </button>
+        </form>
+        <div class="chips" id="stickerTags"></div>
+        <div class="row-end">
+          <button class="btn btn--text ripple" type="button" id="stickerOpen">打开文件夹</button>
+          <button class="btn btn--tonal ripple" type="button" id="stickerRebuild">重建索引</button>
+        </div>
+        <p class="card__hint" id="stickerGridHint">—</p>
+      </section>
+
+      <div class="sticker-grid" id="stickerGrid"></div>
+      <p class="empty" id="stickerEmpty" hidden>还没有表情包。群里有人发表情、你发图给它，都会自动收进来。</p>
+
+      <section class="card card--pad">
+        <div class="row-between">
+          <h2 class="card__title">采集与存放</h2>
+          <span class="card__hint" id="stickerStoreHint">—</span>
+        </div>
+        <label class="field-label" for="stickerRoot">存放目录</label>
+        <input class="text-field" type="text" id="stickerRoot" spellcheck="false" placeholder="state\stickers" />
+        <label class="switch-row">
+          <span class="switch-row__text">自动采集对话里的表情包（不用 @ 我，群里发的图也收）</span>
+          <input class="switch" type="checkbox" id="stickerAutoCollect" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-row__text">自动打标签（来源 / 群 / 谁发的 / 关键词 / 动图还是静态 / 尺寸）</span>
+          <input class="switch" type="checkbox" id="stickerAutoTag" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-row__text">每分钟最多收几张</span>
+          <input class="text-field text-field--num" type="number" id="stickerPerMinute" min="1" max="200" step="1" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-row__text">一条消息最多收几张</span>
+          <input class="text-field text-field--num" type="number" id="stickerMaxPerMessage" min="1" max="9" step="1" />
+        </label>
+        <p class="card__hint" id="stickerStoreNote">改目录不用重启；搬家用「迁移」，会先逐张复制校验，旧目录留着不删。</p>
+        <div class="row-end">
+          <button class="btn btn--text ripple" type="button" id="stickerMigrate">迁移到新目录</button>
+          <button class="btn btn--filled ripple" type="button" id="stickerSave">保存设置</button>
+        </div>
+      </section>
+    </section>
+
+    <!-- ---------------------------- 人格 ---------------------------- -->
+    <section class="page" id="page-persona" data-page="persona" aria-label="人格">
+      <section class="card card--pad">
+        <div class="row-between">
+          <div class="card__head card__head--flush">
+            <h2 class="card__title">人格库</h2>
+            <p class="card__sub" id="personaDirHint">state/personas</p>
+          </div>
+          <span class="chip" id="personaActiveChip">未载入</span>
+        </div>
+        <div class="stack" id="personaList"><p class="empty">加载中…</p></div>
+        <div class="row-end">
+          <button class="btn btn--text ripple" type="button" id="personaSeed" hidden>把当前人格导入库</button>
+          <button class="btn btn--tonal ripple" type="button" id="personaNew">新建人格</button>
+        </div>
+        <p class="card__hint" id="personaLibHint">切哪套就立刻生效，不用重启桥接。群里发 /人格 名字 只改那个群。</p>
+      </section>
+
+      <section class="card card--pad">
+        <div class="row-between">
+          <div class="card__head card__head--flush">
+            <h2 class="card__title" id="personaEditorTitle">人格内容</h2>
+            <p class="card__sub" id="personaEditorPath">—</p>
+          </div>
+          <span class="chip" id="personaMeta">未载入</span>
+        </div>
+        <textarea class="text-field text-field--area" id="personaBody" spellcheck="false" placeholder="正在加载人格文件…"></textarea>
+        <div class="row-end">
+          <button class="btn btn--text ripple" type="button" id="personaReload">重新载入</button>
+          <button class="btn btn--filled ripple" type="button" id="personaSave">保存</button>
+        </div>
+        <p class="card__hint" id="personaHint">保存前会自动备份到 state/persona-backup/</p>
+      </section>
+    </section>
+
+    <!-- ---------------------------- 会话 ---------------------------- -->
+    <section class="page" id="page-sessions" data-page="sessions" aria-label="会话">
+      <section class="card card--pad">
+        <div class="row-between">
+          <div class="card__head card__head--flush">
+            <h2 class="card__title">会话映射</h2>
+            <p class="card__sub">清掉后，下一次对话会重新开一个会话</p>
+          </div>
+          <button class="btn btn--tonal ripple" type="button" id="sessionsRefresh">刷新</button>
+        </div>
+        <div class="stack" id="sessionList"><p class="empty">加载中…</p></div>
+      </section>
+    </section>
+
+    <!-- ---------------------------- 模型 ---------------------------- -->
+    <section class="page" id="page-model" data-page="model" aria-label="模型">
+      <section class="card card--pad">
+        <div class="row-between">
+          <div class="card__head card__head--flush">
+            <h2 class="card__title">当前生效模型</h2>
+            <p class="card__sub" id="modelDesktop">正在读取…</p>
+          </div>
+          <span class="chip" id="modelModeChip">—</span>
+        </div>
+        <p class="model-label" id="modelCurrent">—</p>
+        <p class="card__hint" id="modelSourceHint">—</p>
+      </section>
+
+      <section class="card card--pad">
+        <div class="card__head">
+          <h2 class="card__title">模式</h2>
+          <p class="card__sub">跟随：桌面端换模型，这里自动跟着换。手动：只认这里选的，不看桌面端。</p>
+        </div>
+        <div class="segmented" id="modelModeSwitch">
+          <button class="segmented__item ripple is-active" type="button" data-mode="follow">跟随 DSH</button>
+          <button class="segmented__item ripple" type="button" data-mode="manual">手动指定</button>
+        </div>
+      </section>
+
+      <section class="card card--pad" id="modelManualCard">
+        <div class="row-between">
+          <div class="card__head card__head--flush">
+            <h2 class="card__title">手动指定</h2>
+            <p class="card__sub">供应商与模型来自 DSH 桌面端的配置清单</p>
+          </div>
+          <span class="card__hint" id="modelUpdated">—</span>
+        </div>
+        <label class="field-label" for="modelProvider">供应商</label>
+        <select class="select-field" id="modelProvider"></select>
+        <label class="field-label" for="modelModel">模型</label>
+        <select class="select-field" id="modelModel"></select>
+        <label class="field-label" for="modelEffort">思考强度（reasoningEffort）</label>
+        <select class="select-field" id="modelEffort"></select>
+        <div class="row-end">
+          <button class="btn btn--text ripple" type="button" id="modelReload">重新读取</button>
+          <button class="btn btn--filled ripple" type="button" id="modelSave">保存</button>
+        </div>
+        <p class="card__hint" id="modelHint">改完下一条 QQ 消息就会用新模型，不需要重启桥接。</p>
+      </section>
+    </section>
+
+    <!-- ---------------------------- 插件 ---------------------------- -->
+    <section class="page" id="page-plugins" data-page="plugins" aria-label="插件">
+      <section class="card card--pad">
+        <div class="row-between">
+          <div class="card__head card__head--flush">
+            <h2 class="card__title">插件</h2>
+            <p class="card__sub" id="pluginsSummary">正在读取…</p>
+          </div>
+          <button class="btn btn--text ripple" type="button" id="pluginsReload">重新读取</button>
+        </div>
+        <p class="card__hint" id="pluginsHint">插件放在 <code>src/plugins/</code>，开关和配置写盘后需要重启桥接才会生效。</p>
+        <p class="card__hint card__hint--warn" id="pluginsFailures" hidden></p>
+      </section>
+      <div id="pluginsList"></div>
+    </section>
+
+    <!-- ---------------------------- 系统 ---------------------------- -->
+    <section class="page" id="page-system" data-page="system" aria-label="系统">
+      <section class="card card--pad">
+        <h2 class="card__title">运行信息</h2>
+        <dl class="kv" id="systemInfo"></dl>
+      </section>
+      <section class="card card--pad">
+        <div class="row-between">
+          <h2 class="card__title">日志</h2>
+          <div class="segmented" id="logSwitch">
+            <button class="segmented__item is-active ripple" type="button" data-log="napcat">NapCat</button>
+            <button class="segmented__item ripple" type="button" data-log="bridge">桥接</button>
+          </div>
+        </div>
+        <pre class="log-box" id="logBox">加载中…</pre>
+        <div class="row-end">
+          <button class="btn btn--text ripple" type="button" id="logReload">刷新日志</button>
+          <button class="btn btn--tonal ripple" type="button" id="openNapcat">打开 NapCat WebUI</button>
+        </div>
+      </section>
+      <section class="card card--pad">
+        <h2 class="card__title">路径</h2>
+        <p class="card__hint">人格、记忆库、工作区都可以指到任意位置：支持绝对路径、相对项目根的路径、<code>~</code> 和 <code>%USERPROFILE%</code> 这类变量。保存后重启桥接生效。</p>
+        <label class="field-label" for="setPersonaPath">人格文件（Markdown）</label>
+        <input class="text-field" type="text" id="setPersonaPath" placeholder="qq-workspace\AGENTS.md" />
+        <p class="card__hint" id="personaPathHint">—</p>
+        <label class="field-label" for="setMemoryRoot">记忆库根目录</label>
+        <input class="text-field" type="text" id="setMemoryRoot" placeholder="D:\memory\你的机器人" />
+        <p class="card__hint" id="memoryRootHint">—</p>
+        <label class="field-label" for="setWorkspaceCwd">工作区（DSH 的 cwd）</label>
+        <input class="text-field" type="text" id="setWorkspaceCwd" placeholder="D:\workspace" />
+        <p class="card__hint" id="workspaceCwdHint">—</p>
+        <div class="row-end">
+          <button class="btn btn--text ripple" type="button" id="pathsRefresh">重新读取</button>
+          <button class="btn btn--text ripple" type="button" id="pathsOpen">打开工作区</button>
+          <button class="btn btn--tonal ripple" type="button" id="pathsSave">保存路径</button>
+          <button class="btn btn--filled ripple" type="button" id="pathsSaveRestart">保存并重启桥接</button>
+        </div>
+      </section>
+      <section class="card card--pad">
+        <h2 class="card__title">启动</h2>
+        <label class="switch-row">
+          <span class="switch-row__text">开机自启（登录 Windows 后自动拉起托盘）</span>
+          <input class="switch" type="checkbox" id="setAutostart" />
+        </label>
+        <p class="card__hint" id="autostartHint">—</p>
+      </section>
+      <section class="card card--pad">
+        <h2 class="card__title">黑白名单</h2>
+        <p class="card__hint">QQ 号 / 群号用逗号、空格或换行分隔。黑名单优先级最高：同时在两份名单里时按拉黑处理。</p>
+        <label class="field-label" for="setPrivatePolicy">私聊策略</label>
+        <select class="select-field" id="setPrivatePolicy">
+          <option value="allowlist">白名单：只有名单里的号能私聊</option>
+          <option value="blacklist">黑名单：除名单外谁都能私聊</option>
+        </select>
+        <label class="field-label" for="setAllowFrom">私聊白名单（allowFrom）</label>
+        <textarea class="text-field text-field--list" id="setAllowFrom" rows="3" placeholder="1000000002"></textarea>
+        <label class="field-label" for="setDenyFrom">私聊黑名单（denyFrom）</label>
+        <textarea class="text-field text-field--list" id="setDenyFrom" rows="3" placeholder="留空表示不拉黑任何人"></textarea>
+        <label class="field-label" for="setAllowGroupIds">群白名单（allowGroupIds）</label>
+        <textarea class="text-field text-field--list" id="setAllowGroupIds" rows="3" placeholder="200000001"></textarea>
+        <label class="field-label" for="setDenyGroupIds">群黑名单（denyGroupIds）</label>
+        <textarea class="text-field text-field--list" id="setDenyGroupIds" rows="3" placeholder="留空表示不拉黑任何群"></textarea>
+        <label class="switch-row">
+          <span class="switch-row__text">允许群消息（总开关，关掉后哪个群都不理）</span>
+          <input class="switch" type="checkbox" id="setAllowGroups" />
+        </label>
+      </section>
+      <section class="card card--pad">
+        <h2 class="card__title">行为设置</h2>
+        <label class="switch-row">
+          <span class="switch-row__text">在群里显示错误信息</span>
+          <input class="switch" type="checkbox" id="setShowErrors" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-row__text">群聊上下文条数</span>
+          <input class="text-field text-field--num" type="number" id="setGroupContext" min="0" max="200" inputmode="numeric" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-row__text">唤醒词</span>
+          <input class="text-field" type="text" id="setWakeWord" placeholder="群里没 @ 时用它呼唤我" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-row__text">唤醒词出现在句子里也算（不只是开头）</span>
+          <input class="switch" type="checkbox" id="setWakeAnywhere" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-row__text">允许群成员（非主人）@ 我或喊我时对话</span>
+          <input class="switch" type="checkbox" id="setAllowGroupMembers" />
+        </label>
+        <div class="row-end">
+          <button class="btn btn--filled ripple" type="button" id="settingsSave">保存设置</button>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <!-- ============================ 悬浮按钮 ============================ -->
+  <button class="fab ripple" id="fab" type="button" aria-label="刷新当前页">
+    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+  </button>
+
+  <!-- ============================ 底部导航 ============================ -->
+  <nav class="nav-bar" id="navBar" aria-label="主导航">
+    <button class="nav-item is-active ripple" type="button" data-page="overview" aria-current="page">
+      <span class="nav-item__pill"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 12h3v8h6v-6h2v6h6v-8h3L12 3z"/></svg></span>
+      <span class="nav-item__label">概览</span>
+    </button>
+    <button class="nav-item ripple" type="button" data-page="memory">
+      <span class="nav-item__pill"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3H7a2 2 0 0 0-2 2v16l7-4 7 4V5a2 2 0 0 0-2-2z"/></svg></span>
+      <span class="nav-item__label">记忆</span>
+    </button>
+    <button class="nav-item ripple" type="button" data-page="stickers">
+      <span class="nav-item__pill"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg></span>
+      <span class="nav-item__label">表情</span>
+    </button>
+    <button class="nav-item ripple" type="button" data-page="persona">
+      <span class="nav-item__pill"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-4 0-8 2-8 5v1h16v-1c0-3-4-5-8-5z"/></svg></span>
+      <span class="nav-item__label">人格</span>
+    </button>
+    <button class="nav-item ripple" type="button" data-page="sessions">
+      <span class="nav-item__pill"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 2H4a2 2 0 0 0-2 2v14l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/></svg></span>
+      <span class="nav-item__label">会话</span>
+    </button>
+    <button class="nav-item ripple" type="button" data-page="model">
+      <span class="nav-item__pill"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9v2H4V7zm0 8h5v2H4v-2zm13.5-3.5 2.5 2.5-2.5 2.5-1.4-1.4 1.1-1.1H9v-2h8.2l-1.1-1.1 1.4-1.4zM17 3h2v4h-2V3zm0 14h2v4h-2v-4z"/></svg></span>
+      <span class="nav-item__label">模型</span>
+    </button>
+    <button class="nav-item ripple" type="button" data-page="plugins">
+      <span class="nav-item__pill"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v3.8h1.5a2.5 2.5 0 0 1 0 5H2V20a2 2 0 0 0 2 2h4.2v-1.5a2.5 2.5 0 0 1 5 0V22H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z"/></svg></span>
+      <span class="nav-item__label">插件</span>
+    </button>
+    <button class="nav-item ripple" type="button" data-page="system">
+      <span class="nav-item__pill"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.8 7.8 0 0 0 .1-1 7.8 7.8 0 0 0-.1-1l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.5a.5.5 0 0 0-.6-.2l-2.5 1a7.3 7.3 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.5a.5.5 0 0 0 .1.6L4.5 11a7.8 7.8 0 0 0-.1 1c0 .3 0 .7.1 1l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.5c.1.2.4.3.6.2l2.5-1c.5.4 1.1.8 1.7 1l.4 2.6c0 .2.2.4.5.4h4c.3 0 .5-.2.5-.4l.4-2.6c.6-.2 1.2-.6 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.5a.5.5 0 0 0-.1-.6L19.4 13zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg></span>
+      <span class="nav-item__label">系统</span>
+    </button>
+  </nav>
+
+  <!-- ============================ 表情包详情 ============================ -->
+  <div class="scrim" id="stickerScrim" hidden>
+    <div class="dialog sticker-detail" role="dialog" aria-modal="true" aria-labelledby="stickerDetailTitle">
+      <div class="row-between">
+        <h2 class="dialog__title" id="stickerDetailTitle">表情包</h2>
+        <span class="chip" id="stickerDetailSize">—</span>
+      </div>
+      <img class="sticker-detail__img" id="stickerDetailImg" alt="表情包" />
+      <div class="chips" id="stickerDetailTags"></div>
+      <div class="sticker-detail__row">
+        <input class="text-field" type="text" id="stickerTagInput" placeholder="加标签，逗号分隔：猫, 搞笑" autocomplete="off" />
+        <button class="btn btn--tonal ripple" type="button" id="stickerTagAdd">加</button>
+      </div>
+      <p class="card__hint" id="stickerDetailHint">—</p>
+      <div class="dialog__actions">
+        <button class="btn btn--text btn--danger ripple" type="button" id="stickerDelete">删除</button>
+        <button class="btn btn--text ripple" type="button" id="stickerDetailClose">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ 提示条 ============================ -->
+  <div class="snackbar" id="snackbar" role="status" aria-live="polite">
+    <span class="snackbar__text" id="snackbarText"></span>
+    <button class="snackbar__action ripple" type="button" id="snackbarAction" hidden>知道了</button>
+  </div>
+
+  <!-- ============================ 确认对话框 ============================ -->
+  <div class="scrim" id="promptScrim" hidden>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="promptTitle">
+      <h2 class="dialog__title" id="promptTitle">新建人格</h2>
+      <p class="dialog__body" id="promptBody"></p>
+      <input class="text-field" id="promptInput" type="text" autocomplete="off" spellcheck="false" />
+      <p class="card__hint" id="promptHint"></p>
+      <div class="dialog__actions">
+        <button class="btn btn--text ripple" type="button" id="promptCancel">取消</button>
+        <button class="btn btn--filled ripple" type="button" id="promptOk">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="scrim" id="dialogScrim" hidden>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle">
+      <h2 class="dialog__title" id="dialogTitle">确认</h2>
+      <p class="dialog__body" id="dialogBody"></p>
+      <div class="dialog__actions">
+        <button class="btn btn--text ripple" type="button" id="dialogCancel">取消</button>
+        <button class="btn btn--text btn--danger ripple" type="button" id="dialogOk">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

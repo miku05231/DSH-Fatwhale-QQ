@@ -1,0 +1,41 @@
+# ── 运行时数据（每台机器各有一份，绝不入库）──
+config.json
+state/
+logs/
+data/
+memory/
+记忆库/
+qq-workspace/
+
+# 本机的模型路由补丁（含私有中转地址，仓库里只放 headless-model.yml 模板）
+patches/*.local.yml
+
+# ── 第三方运行时 / 依赖 ──
+napcat/
+node_modules/
+vendor/
+
+# ── 构建产物 ──
+dist/
+*.zip
+*.exe
+*.msi
+
+# ── 环境与密钥 ──
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+.credentials.yaml
+
+# ── 编辑器 / 系统垃圾 ──
+.DS_Store
+Thumbs.db
+desktop.ini
+*.bak
+*.bak-*
+*.tmp
+*.log
+.vscode/
+.idea/

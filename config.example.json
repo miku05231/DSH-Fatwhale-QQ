@@ -1,0 +1,77 @@
+{
+  "onebot": {
+    "url": "ws://127.0.0.1:3001",
+    "accessToken": ""
+  },
+  "dsh": {
+    "command": "dsh",
+    "profile": "headless",
+    "patchPath": "patches/headless-model.yml",
+    "cwd": ".",
+    "timeoutMs": 300000,
+    "permissionMode": "danger-full-access"
+  },
+  "security": {
+    "allowFrom": [
+      "1000000002"
+    ],
+    "denyFrom": [],
+    "privatePolicy": "allowlist",
+    "allowGroups": true,
+    "allowGroupMembers": true,
+    "allowGroupIds": [
+      "200000001"
+    ],
+    "denyGroupIds": [],
+    "rateLimitPerMinute": 10,
+    "maxChars": 4000
+  },
+  "groupMemory": {
+    "limit": 300
+  },
+  "behavior": {
+    "queuedNotice": "收到，正在处理…",
+    "maxReplyChunk": 1200,
+    "showErrors": true,
+    "wakeWord": "小助手",
+    "wakeWordMatch": "contains",
+    "groupContextCount": 40
+  },
+  "plugins": {
+    "enabled": true,
+    "dir": "src/plugins"
+  },
+  "logDir": "logs",
+  "stateDir": "state",
+  "memory": {
+    "enabled": true,
+    "root": "记忆库",
+    "inject": true,
+    "capture": true,
+    "maxInjectChars": 1200,
+    "reflectEvery": 20,
+    "reflectDaily": true,
+    "reflectTime": "04:00",
+    "reflectForce": true,
+    "reflectDays": 3,
+    "reflectBackup": true,
+    "reflectCatchUp": true
+  },
+  "stickers": {
+    "enabled": true,
+    "root": "state/stickers",
+    "autoCollect": true,
+    "autoTag": true,
+    "maxBytes": 5242880,
+    "minBytes": 200,
+    "maxPerMessage": 3,
+    "perMinute": 20
+  },
+  "persona": {
+    "enabled": true,
+    "path": "qq-workspace\\AGENTS.md",
+    "maxChars": 8000,
+    "dir": "state\\personas",
+    "active": ""
+  }
+}

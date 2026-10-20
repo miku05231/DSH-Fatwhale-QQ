@@ -1,0 +1,15 @@
+.git
+.gitignore
+node_modules
+dist
+state
+logs
+data
+napcat
+qq-workspace
+memory
+config.json
+.env
+*.zip
+*.log
+state/ui-shots

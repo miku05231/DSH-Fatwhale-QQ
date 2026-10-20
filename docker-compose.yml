@@ -1,0 +1,61 @@
+# ============================================================
+#  QQ-DSH 桥接 · 一键编排（桥接 + NapCat）
+#
+#  用法：
+#    1. cp .env.example .env，填 OWNER_QQ（你的 QQ 号）
+#    2. mkdir -p data/config data/state data/logs data/workspace data/memory
+#    3. docker compose up -d
+#    4. 控制台 http://127.0.0.1:5830/     NapCat 面板 http://127.0.0.1:6099/webui/
+#
+#  只想起桥接（NapCat 用别处现成的）：docker compose up -d bridge
+#  然后把 .env 里的 ONE_BOT_URL 指到那台 NapCat。
+#
+#  想真回话：DSH 必须挂进容器（见 docs/Docker部署.md）：
+#    volumes:
+#      - /宿主机/DSH:/opt/dsh:ro
+#    environment:
+#      DSH_COMMAND: node /opt/dsh/lib/bin.js
+# ============================================================
+name: qq-dsh-bridge
+
+services:
+  bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: qq-dsh-bridge:0.1.0
+    container_name: qq-dsh-bridge
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 配置单独挂一个目录，镜像里的代码层保持只读
+      QQ_CONFIG: /config/config.json
+      ONE_BOT_URL: ${ONE_BOT_URL:-ws://napcat:3001}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "${CONSOLE_PORT:-5830}:5830"
+    volumes:
+      - ./data/config:/config
+      - ./data/state:/app/state
+      - ./data/logs:/app/logs
+      - ./data/workspace:/app/qq-workspace
+      - ./data/memory:/app/memory
+      # 可选：把宿主机现成的 DSH 挂进来（配合 .env 里的 DSH_COMMAND）
+      # - /path/to/DeepSeek Harness:/opt/dsh:ro
+
+  # NapCat（QQ 协议端）。不用容器里的 NapCat 就删掉这一段，改 ONE_BOT_URL 指别处。
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: qq-dsh-napcat
+    restart: unless-stopped
+    environment:
+      NAPCAT_UID: ${NAPCAT_UID:-1000}
+      NAPCAT_GID: ${NAPCAT_GID:-1000}
+      MODE: ${NAPCAT_MODE:-ws}
+      WEBUI_TOKEN: ${NAPCAT_WEBUI_TOKEN:-qqdsh}
+    ports:
+      - "${NAPCAT_WEBUI_PORT:-6099}:6099"
+    volumes:
+      - ./data/napcat/config:/app/napcat/config
+      - ./data/napcat/qq:/app/.config/QQ

@@ -1,0 +1,22 @@
+* text=auto
+
+# Windows PowerShell 5.1 读 LF 会乱码，脚本保持原样不做换行转换
+*.ps1 -text
+*.psm1 -text
+*.cmd -text
+*.bat -text
+
+# 容器和 Linux 脚本必须 LF
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+docker/*.sh text eol=lf
+
+# 二进制资源
+*.png binary
+*.ico binary
+*.jpg binary
+*.gif binary
+*.webp binary
+*.zip binary
+*.exe binary
