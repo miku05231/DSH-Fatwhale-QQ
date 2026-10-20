@@ -24,6 +24,21 @@
 
 ---
 
+## 零、直接下载（不想编译）
+
+发布页：<https://github.com/miku05231/DSH-Fatwhale-QQ/releases/latest>
+
+| 文件 | 适合谁 | 说明 |
+| --- | --- | --- |
+| `qq-bridge-<版本>-portable-win64.zip` | Windows 用户（推荐） | 解压即用，内含 `qq-bridge.exe` 启动器 + 完整工程，不依赖 npm |
+| `qq-bridge-<版本>-source.zip` | 任何平台 / 想自己改 | 纯源码，`node tools/cli.mjs start` 就能跑 |
+| `qq-bridge-launcher-<版本>.exe` | 只要启动器 | 放进工程根目录双击用，单独跑不了 |
+| `SHA256SUMS.txt` | 下载后校验 | 三个文件的 SHA-256 |
+
+前提只有两个：Node.js 18+（本项目零第三方 npm 依赖，不用 `npm install`）、一个能登录 QQ 的 NapCat / OneBot 实现。
+
+---
+
 ## 一、日常使用
 
 **双击 `一键启动.cmd`。** 它会依次拉起 NapCat（带 `-q` 快速登录，不扫码）、桥接、控制台、DSH 和托盘图标，已运行的自动跳过。
