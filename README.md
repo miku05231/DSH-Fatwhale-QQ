@@ -26,8 +26,14 @@
 
 菜单和确认框跟随 Windows 应用主题；退出时停止桥接与 NapCat，DSH 继续运行。
 
+**应用更新 · 确认后安装**
+
+![系统页检查新版、查看发行说明与安装并重启](docs/screenshots/console-updates.png)
+
+更新截图中的 `0.2.0 → 0.3.0` 为演示数据。客户端检查正式 Release，确认安装后保留本机配置、人格与记忆。
+
 <details>
-<summary>更多控制台页面：深色概览、记忆、人格、模型与移动端</summary>
+<summary>更多控制台页面：深色概览、记忆、人格、模型与移动端更新提醒</summary>
 
 **深色概览**
 
@@ -48,6 +54,10 @@
 **移动端**
 
 <img src="docs/screenshots/console-mobile.png" width="390" alt="移动端控制台概览">
+
+**新版提醒**
+
+<img src="docs/screenshots/console-update-notification.png" width="375" alt="移动端发现新版后的更新提醒，使用演示数据">
 
 </details>
 <!-- showcase:end -->
@@ -90,6 +100,10 @@
 | `SHA256SUMS.txt` | 下载后校验 | 三个文件的 SHA-256 |
 
 前提只有两个：Node.js 18+（本项目零第三方 npm 依赖，不用 `npm install`）、一个能登录 QQ 的 NapCat / OneBot 实现。
+
+从 **0.2.0** 起，控制台「系统 → 应用更新」会自动检查 GitHub 稳定版 Release。Windows 便携版确认后可下载安装并重启，保留配置、人格与记忆；源码和 Docker 使用手动更新。旧版需要先手动安装一次完整新版便携包，才能收到后续应用内提醒。
+
+作者发布步骤与更新规则见 [更新发布说明](docs/更新发布.md)。推送源码不会直接给用户升级，发布更高版本的 Release 后，客户端在下次检查时提示。
 
 ---
 
@@ -303,7 +317,7 @@ node tools\package.mjs --force              # 覆盖已有目录
 
 首次运行：双击 `初始化配置.cmd` 生成 `config.json` → 按自己的 QQ 号改黑白名单 → 把 NapCat 解压到 `napcat\` → 双击 `一键启动.cmd`。
 
-`打包信息.json` 记版本、构建时间、脱敏文件数；校验方式是 `node tests\package-test.mjs`（65 项），它会真的运行产物里的 `blacklist-test.mjs`，证明拷出去的代码是活的。
+`打包信息.json` 记版本、构建时间、脱敏文件数；校验方式是 `node tests\package-test.mjs`，它会真的运行产物里的 `blacklist-test.mjs`，证明拷出去的代码是活的。
 
 ---
 
@@ -729,7 +743,7 @@ cd D:\code\qq-bridge
 node tests\run-all.mjs
 ```
 
-它会按顺序跑下面的用例，逐条打勾，最后汇总「通过 N 项，失败 0 项」，同时把结果写进 `state\test-log\<时间戳>.md|.json`（`latest.md` 是最新一轮）；`docs\测试清单.md` 记的是逐条的人工/自动对照表。共 34 组用例，包含 UI CDP、真 dsh、干净环境模拟、命令行模式、容器静态校验、托盘外观、EXE 封装与公开导出；每轮结果以对应的测试记录为准。
+它会按顺序跑下面的用例，逐条打勾，最后汇总「通过 N 项，失败 0 项」，同时把结果写进 `state\test-log\<时间戳>.md|.json`（`latest.md` 是最新一轮）；`docs\测试清单.md` 记的是逐条的人工/自动对照表。共 38 组用例，包含 UI CDP、真 dsh、干净环境模拟、命令行模式、容器静态校验、托盘外观、EXE 封装、应用更新与公开导出；每轮结果以对应的测试记录为准。
 
 单条单跑：
 
@@ -752,6 +766,7 @@ node tests\model-patch-real-dsh.mjs # 把两层补丁交给真 dsh --dump-config
 node tests\tray-click-target.mjs    # 托盘左键绑定 + 菜单只剩退出 + Open-WebUiConsole 的 Edge 参数（18 项，不动鼠标）
 node tests\tray-appearance-test.mjs # 托盘深浅色、缩放、退出确认与停服顺序（175 项，隔离运行）
 node tests\exe-host-test.mjs        # EXE 编译、参数、真实引导路径与发行包（隔离运行）
+node tests\run-all.mjs --only 更新  # 版本检查、下载、安装回滚、HTTP 安全与界面（隔离运行）
 node tests\agent-runner-test.mjs    # DSH 运行模式：安装根/profile 探测 + auto/desktop/headless 路由 + 脱敏（20 项）
 node tests\wake-word-test.mjs       # 唤醒词语义：私聊免唤醒 / @ 了不受唤醒词限制（5 项）
 node tests\reflect-test.mjs         # 自学习：recent 契约 / 秒跳过 / dsh 入口解析（14 项）
@@ -761,10 +776,10 @@ node tests\webui-test.mjs           # 控制台接口 + 模型接口 + 开机自
 node tests\ui-cdp.mjs               # Edge 无头真渲染 + 点击 + 模型页 + 插件页 + 表情页 + 人格页（46 项，控制台没起会自跳过）
 node tests\perm-mode-check.mjs      # 子进程真的拿到了 shell（会算 123456+654321）
 node tests\real-config-check.mjs    # 用真实 config 验证 cwd 与补丁
-node tests\package-test.mjs         # 封装应用：产物齐全、无泄漏、拷出去真跑测试、出 zip（65 项）
+node tests\package-test.mjs         # 封装应用：产物齐全、无泄漏、拷出去真跑测试、出 zip
 node tests\persona-test.mjs         # 自定义路径：解析 / 人格注入 / cwd / 记忆根（24 项）
 node tests\personas-test.mjs        # 多套人格：名字清洗 / 库增删改 / 全局与按会话选择 / 热切换 / 指令解析 / 接口（144 项）
-node tests\export-public-test.mjs   # 公开导出：产物齐全、无泄漏、自身可跑（43 项）
+node tests\export-public-test.mjs   # 公开导出：产物齐全、无泄漏、自身可跑
 node tests\final-audit.mjs          # 工程审计（文件/编码/BOM/残留/配置/关键实现点）
 ```
 

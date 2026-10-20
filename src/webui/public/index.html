@@ -288,6 +288,37 @@
 
     <!-- ---------------------------- 系统 ---------------------------- -->
     <section class="page" id="page-system" data-page="system" aria-label="系统">
+      <section class="card card--pad updates-card" aria-labelledby="updatesTitle">
+        <div class="row-between">
+          <h2 class="card__title" id="updatesTitle">应用更新</h2>
+          <span class="card__hint" id="updatesVersions">正在读取…</span>
+        </div>
+        <p class="updates-status" id="updatesStatus" role="status" aria-live="polite">正在读取更新状态…</p>
+        <progress class="updates-progress" id="updatesProgress" max="100" aria-label="更新下载进度" hidden></progress>
+        <p class="card__hint" id="updatesHint">—</p>
+        <label class="switch-row">
+          <span class="switch-row__text">自动检查新版本</span>
+          <input class="switch" type="checkbox" id="updatesAutomatic" disabled />
+        </label>
+        <details class="updates-notes" id="updatesNotes" hidden>
+          <summary>更新内容</summary>
+          <pre id="updatesReleaseNotes"></pre>
+        </details>
+        <div class="row-end updates-actions">
+          <a class="btn btn--text ripple" id="updatesRelease" target="_blank" rel="noopener noreferrer" hidden title="在 GitHub 查看发行说明">
+            <svg class="icon icon--xs" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7zM5 5h6V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6h-2v6H5V5z"/></svg>
+            查看发行说明
+          </a>
+          <button class="btn btn--tonal ripple" type="button" id="updatesCheck" title="检查 GitHub 上的最新正式版本">
+            <svg class="icon icon--xs" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+            <span id="updatesCheckLabel">检查更新</span>
+          </button>
+          <button class="btn btn--filled ripple" type="button" id="updatesInstall" title="确认后下载更新并重启桥接与托盘" hidden>
+            <svg class="icon icon--xs" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v9l3.5-3.5 1.42 1.42L12 15.84l-5.92-5.92L7.5 8.5 11 12V3zM5 16h2v3h10v-3h2v5H5v-5z"/></svg>
+            <span id="updatesInstallLabel">安装并重启</span>
+          </button>
+        </div>
+      </section>
       <section class="card card--pad">
         <h2 class="card__title">运行信息</h2>
         <dl class="kv" id="systemInfo"></dl>

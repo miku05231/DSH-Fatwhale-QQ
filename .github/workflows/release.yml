@@ -1,0 +1,76 @@
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable version tag, for example v0.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'miku05231/DSH-Fatwhale-QQ'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate the stable version and tag
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw 'A stable vMAJOR.MINOR.PATCH tag is required.'
+          }
+          $taskPackage = Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json
+          if ($env:RELEASE_TAG -ne ('v' + $taskPackage.version)) {
+            throw 'The tag must match package.json exactly.'
+          }
+          git rev-parse --verify ('refs/tags/' + $env:RELEASE_TAG)
+          if ($LASTEXITCODE -ne 0) { throw 'The version tag does not exist.' }
+      - name: Test updates, packaging and the executable
+        shell: pwsh
+        run: |
+          foreach ($taskGroup in @('更新', 'exe', '封装应用', '公开导出')) {
+            node tests/run-all.mjs --only $taskGroup
+            if ($LASTEXITCODE -ne 0) { throw "Tests failed: $taskGroup" }
+          }
+      - name: Build portable files and checksums
+        shell: powershell
+        run: |
+          & scripts\make-release.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Release packaging failed.' }
+      - name: Install the actual portable package in an isolated directory
+        shell: pwsh
+        run: |
+          node tests/release-update-test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'The generated portable package cannot be installed safely.' }
+      - name: Publish the version and all four assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $taskAssets = @(Get-ChildItem -LiteralPath dist/release -File | ForEach-Object { $_.FullName })
+          if ($taskAssets.Count -ne 4) { throw 'Expected three packages and SHA256SUMS.txt.' }
+          gh release create $env:RELEASE_TAG @taskAssets --verify-tag --title "QQ-DSH $env:RELEASE_TAG" --generate-notes --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed; existing releases are never overwritten.' }

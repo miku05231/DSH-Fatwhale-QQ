@@ -80,10 +80,14 @@ async function main() {
     'src/plugins.js',
     'src/plugins/ping.js',
     'src/webui/server.mjs',
+    'src/updates.mjs',
     'src/webui/public/index.html',
     'launcher/Launcher.ps1',
     'tests/run-all.mjs',
     'docs/控制台架构.md',
+    'docs/更新发布.md',
+    'scripts/install-update.ps1',
+    '.github/workflows/release.yml',
     'deepseek-waitou.png',
     'assets/app-icon.png',
     'docs/screenshots/console-overview-light.png',
@@ -145,7 +149,10 @@ async function main() {
   const check = spawnSync(process.execPath, ['--check', path.join(out, 'src', 'plugins.js')], { encoding: 'utf8', timeout: 30000 });
   ok(check.status === 0, '产物里的 src/plugins.js 语法正确');
   const pkg = path.join(out, 'package.json');
-  ok(!fs.existsSync(pkg), '没有 package.json（零依赖，不需要 npm install）');
+  const publicPackage = JSON.parse(await fsp.readFile(pkg, 'utf8'));
+  const projectPackage = JSON.parse(await fsp.readFile(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
+  ok(publicPackage.name === 'qq-bridge' && publicPackage.version === projectPackage.version,
+    'package.json 保留应用身份与版本（仍为零第三方依赖）');
 
   ok(/QQ-DSH/.test(readme) && /MIT/.test(readme), 'README 有项目名与许可说明');
   ok(/NapCat/.test(readme) && /封号风险|服务条款/.test(readme), 'README 写清了 NapCat 与风险提示');

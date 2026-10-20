@@ -433,6 +433,68 @@ textarea {
   margin-top: var(--sp-3);
 }
 
+/* 更新区域沿用系统表单；长版本名和发行说明可自然换行。 */
+.updates-card [hidden] {
+  display: none;
+}
+
+.updates-card .row-between {
+  align-items: baseline;
+}
+
+.updates-card .card__hint,
+.updates-status {
+  overflow-wrap: anywhere;
+}
+
+.updates-status {
+  margin: var(--sp-3) 0 var(--sp-2);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.updates-status[data-error="true"] {
+  color: var(--error);
+}
+
+.updates-progress {
+  display: block;
+  width: 100%;
+  height: 6px;
+  margin-bottom: var(--sp-3);
+  accent-color: var(--primary);
+}
+
+.updates-notes {
+  margin-top: var(--sp-3);
+  font-size: 13px;
+}
+
+.updates-notes summary {
+  color: var(--primary);
+  cursor: pointer;
+  min-height: 32px;
+}
+
+.updates-notes pre {
+  margin: var(--sp-2) 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.65;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.updates-actions .btn {
+  max-width: 100%;
+  text-decoration: none;
+}
+
+.updates-actions .icon {
+  flex: 0 0 auto;
+}
+
 .empty {
   color: var(--on-surface-variant);
   font-size: 13.5px;

@@ -23,7 +23,8 @@ import net from 'node:net';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createUpdateManager } from '../updates.mjs';
 import { describeModelState, writeModelState, MODEL_MODES, REASONING_EFFORTS } from '../model-follow.js';
 import { PluginHost, PLUGIN_HOOKS, SCHEMA_TYPES, coerceValue } from '../plugins.js';
 import { resolvePersonaPath, resolveMemoryRoot, resolveWorkspace, expandPath } from '../persona.js';
@@ -578,7 +579,7 @@ function configFileOf(root) {
   return raw === '' ? path.join(root, 'config.json') : path.resolve(raw);
 }
 
-export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT_PORT } = {}) {
+export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT_PORT, updateManager } = {}) {
   const root = path.resolve(text(configRoot) || PROJECT_ROOT);
   const basePort = Number.isInteger(Number(port)) && Number(port) > 0 ? Number(port) : DEFAULT_PORT;
 
@@ -639,6 +640,14 @@ export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT
     warn: (...a) => log?.warn?.(...a),
     error: (...a) => log?.error?.(...a),
   };
+
+  const updates = updateManager ?? createUpdateManager({
+    projectRoot: root,
+    stateDir,
+    configFile: configPath,
+    log: safeLog,
+  });
+  const updateToken = randomBytes(32).toString('hex');
 
   let server = null;
   let actualPort = 0;
@@ -2125,6 +2134,69 @@ export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT
 
   // ------------------------------------------------------------ 路由
 
+  async function routeUpdates(req, res, pathname, method) {
+    // A separate token and strict loopback origin keep websites from triggering an installer.
+    const authority = text(req.headers.host).toLowerCase();
+    const port = req.socket.localPort;
+    const allowed = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+    if (!allowed.has(authority)) return fail(res, 403, '更新接口仅允许本机控制台访问');
+    const origin = text(req.headers.origin);
+    if ((origin && origin !== `http://${authority}`) ||
+        req.headers['sec-fetch-site'] === 'cross-site') {
+      return fail(res, 403, '更新接口不接受跨站请求');
+    }
+
+    if (pathname === '/api/updates' && method === 'GET') {
+      return ok(res, { ...await updates.status(), updateToken });
+    }
+    const action = {
+      '/api/updates/check': 'POST',
+      '/api/updates/settings': 'PUT',
+      '/api/updates/install': 'POST',
+    }[pathname];
+    if (!action) return fail(res, 404, '没有这个更新接口');
+    if (method !== action) return fail(res, 405, `只支持 ${action}`);
+    const supplied = Buffer.from(text(req.headers['x-qq-update-token']), 'utf8');
+    const expected = Buffer.from(updateToken, 'utf8');
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+      return fail(res, 403, '请刷新控制台后再操作更新');
+    }
+    if (text(req.headers['content-type']).split(';')[0].trim().toLowerCase() !== 'application/json') {
+      return fail(res, 415, '更新请求需要 JSON');
+    }
+    let body;
+    try {
+      body = JSON.parse(await readBody(req, 4096) || '{}');
+    } catch (err) {
+      return fail(res, Number(err?.statusCode) || 400, '更新请求格式不正确');
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return fail(res, 400, '更新请求需要 JSON 对象');
+    }
+    const fields = Object.keys(body);
+    try {
+      let result;
+      if (pathname === '/api/updates/check') {
+        if (fields.length) return fail(res, 400, '检查更新不接受额外参数');
+        result = await updates.check();
+      } else if (pathname === '/api/updates/settings') {
+        if (fields.length !== 1 || fields[0] !== 'automatic' || typeof body.automatic !== 'boolean') {
+          return fail(res, 400, 'automatic 必须是布尔值');
+        }
+        result = await updates.setAutomatic(body.automatic);
+      } else {
+        if (fields.length !== 1 || fields[0] !== 'version' ||
+            typeof body.version !== 'string' || body.version.length > 100) {
+          return fail(res, 400, '请指定确认安装的版本');
+        }
+        result = await updates.install({ version: body.version });
+      }
+      return ok(res, { ...result, updateToken });
+    } catch (err) {
+      return fail(res, Number(err?.statusCode) || 400, err?.message || '更新操作失败，请稍后重试');
+    }
+  }
+
   async function route(req, res) {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     let pathname;
@@ -2141,6 +2213,9 @@ export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT
 
     const method = req.method === 'HEAD' ? 'GET' : req.method;
 
+    if (pathname === '/api/updates' || pathname.startsWith('/api/updates/')) {
+      return routeUpdates(req, res, pathname, method);
+    }
     if (pathname === '/api/overview' && method === 'GET') return ok(res, await buildOverview());
     if (pathname === '/api/logs' && method === 'GET') return getLogs(url, res);
     if (pathname === '/api/memory/stats' && method === 'GET') return getMemoryStats(res);
@@ -2311,12 +2386,18 @@ export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT
       safeLog.warn?.('写入控制台端口文件失败：', err?.message ?? err);
     }
     safeLog.info?.(`控制台已启动：http://127.0.0.1:${actualPort}/`);
+    try {
+      await updates.start();
+    } catch (err) {
+      safeLog.warn?.('自动更新检查未启动：', err?.message ?? err);
+    }
     return { port: actualPort };
   }
 
   async function stop() {
     if (stopping) return;
     stopping = true;
+    updates.stop();
     const s = server;
     server = null;
     const port = actualPort;

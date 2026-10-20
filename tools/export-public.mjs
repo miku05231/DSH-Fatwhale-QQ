@@ -36,7 +36,10 @@ const INCLUDE = [
   'docs/测试清单.md',
   'docs/Docker部署.md',
   'docs/screenshots',
+  'docs/更新发布.md',
+  '.github',
   'README.md',
+  'package.json',
   'deepseek-waitou.png',
   'AGENTS.md',
   'scripts',
@@ -114,6 +117,7 @@ const PUBLIC_README = `> 非官方项目。QQ 侧通过第三方协议端 [NapCa
 - **表情包库**：自动收集聊天里的表情并打标签（来源 / 群 / 谁发的 / 关键词 / 动图静态 / 尺寸），可筛选、改标签、换存放目录、重建索引
 - **插件**：往 \`src/plugins/\` 扔一个 .js 就能加功能，控制台自动生成开关与配置表单
 - **托盘 / 自启**：一键启动全部、左键直达控制台、开机自启；托盘与窗口图标用 \`assets/app-icon.png\`
+- **应用更新**：系统页检查 GitHub 稳定版 Release；Windows 便携版确认后校验、备份并升级，保留本机数据。源码和 Docker 采用手动更新，发布步骤见 \`docs/更新发布.md\`。
 
 ## 环境要求
 

@@ -1615,6 +1615,252 @@ async function savePluginConfig(card, name) {
   }
 }
 
+/* -------------------------------------------------------------- 应用更新 */
+
+const UPDATE_UI = {
+  status: null,
+  unavailable: false,
+  pending: '',
+  reading: null,
+  timer: 0,
+  waitingVersion: '',
+  previousVersion: '',
+  disconnected: false,
+  notified: new Set(),
+};
+
+try {
+  const versions = JSON.parse(localStorage.getItem('qq-update-notified') || '[]');
+  if (Array.isArray(versions)) versions.slice(-20).forEach((version) => UPDATE_UI.notified.add(version));
+} catch { /* Some browsers disable local storage. */ }
+
+function updateInProgress() {
+  return Boolean(UPDATE_UI.waitingVersion)
+    || ['downloading', 'installing'].includes(UPDATE_UI.status?.phase);
+}
+
+function updateReleaseUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol === 'https:' && url.hostname === 'github.com'
+      && !url.username && !url.password
+      && /^\/miku05231\/DSH-Fatwhale-QQ\/releases(?:\/|$)/.test(url.pathname)) return url.href;
+  } catch { /* Untrusted release metadata must never become an executable link. */ }
+  return '';
+}
+
+function renderUpdates() {
+  const status = UPDATE_UI.status;
+  const unavailable = UPDATE_UI.unavailable;
+  const installing = updateInProgress();
+  const busy = Boolean(UPDATE_UI.pending) || installing || status?.phase === 'checking';
+  const versions = $('#updatesVersions');
+  if (!versions) return;
+
+  versions.textContent = status
+    ? `当前 ${status.currentVersion || '未知'}${status.latestVersion ? ` · 最新 ${status.latestVersion}` : ''}`
+    : '版本信息暂不可用';
+  let message;
+  if (installing && unavailable) message = '控制台正在重启，正在等待重新连接…';
+  else if (unavailable) message = '暂时无法读取更新状态，请稍后重试。旧版本控制台可能尚未提供更新功能。';
+  else if (UPDATE_UI.pending === 'checking' || status?.phase === 'checking') message = '正在检查新版本…';
+  else if (status?.phase === 'downloading') message = `正在下载更新${Number.isFinite(status.progress) ? ` · ${Math.round(status.progress)}%` : ''}…`;
+  else if (status?.phase === 'installing' || (installing && status?.phase === 'complete')) message = '正在安装并重启，请稍候…';
+  else if (status?.phase === 'available') message = `发现新版本 ${status.latestVersion || ''}`;
+  else if (status?.phase === 'current') message = status.latestVersion ? '已是最新版本' : 'GitHub 上暂时没有正式发布版本';
+  else if (status?.phase === 'error') message = `更新失败：${status.error || '请稍后重试'}`;
+  else if (status?.phase === 'complete') message = '更新已完成';
+  else message = '尚未检查更新';
+  $('#updatesStatus').textContent = message;
+  $('#updatesStatus').dataset.error = String(!installing && (unavailable || status?.phase === 'error'));
+
+  const progress = $('#updatesProgress');
+  progress.hidden = !installing;
+  if (!unavailable && status?.phase === 'downloading' && Number.isFinite(status.progress)) {
+    progress.value = Math.min(100, Math.max(0, status.progress));
+  } else progress.removeAttribute('value');
+
+  const hint = $('#updatesHint');
+  if (installing) hint.textContent = '配置、人格和记忆会保留。桥接与托盘重启期间暂时离线，DSH 保持运行。';
+  else if (!status || unavailable) hint.textContent = '可先下载 GitHub Release，按原运行方式手动更新。';
+  else {
+    const checked = status.checkedAt ? `上次检查：${relTime(status.checkedAt)}` : '开启后会在后台定期检查，有新版时提醒。';
+    const manual = status.canInstall === false && /手动|源码|git pull|Docker|容器|便携包/.test(status.installReason || '');
+    hint.textContent = manual
+      ? `${status.installReason || '当前运行方式需手动更新。'} 源码版拉取代码；Docker 版更新镜像后重建容器，沿用原配置和数据卷。${status.checkedAt ? ` ${checked}` : ''}`
+      : checked;
+  }
+
+  const automatic = $('#updatesAutomatic');
+  automatic.checked = Boolean(status?.automatic);
+  automatic.disabled = busy || unavailable || !status?.updateToken;
+  $('#updatesCheck').disabled = busy;
+  $('#updatesCheckLabel').textContent = UPDATE_UI.pending === 'checking' || status?.phase === 'checking' ? '检查中…' : '检查更新';
+  const install = $('#updatesInstall');
+  install.hidden = !(status?.latestVersion && (installing || (status.canInstall
+    && ['available', 'error'].includes(status.phase) && status.latestVersion !== status.currentVersion)));
+  install.disabled = busy || unavailable || !status?.updateToken;
+  $('#updatesInstallLabel').textContent = installing ? '更新中…' : status?.phase === 'error' ? '重试安装并重启' : '安装并重启';
+
+  const url = updateReleaseUrl(status?.releaseUrl);
+  const release = $('#updatesRelease');
+  release.hidden = !url;
+  if (url) release.href = url;
+  else release.removeAttribute('href');
+  const notes = typeof status?.releaseNotes === 'string' ? status.releaseNotes : '';
+  $('#updatesReleaseNotes').textContent = notes;
+  $('#updatesNotes').hidden = !notes;
+}
+
+function acceptUpdateStatus(status) {
+  if (!status || typeof status !== 'object') throw new Error('更新状态格式不正确');
+  UPDATE_UI.status = status;
+  UPDATE_UI.unavailable = false;
+  if (UPDATE_UI.waitingVersion && status.currentVersion
+    && status.currentVersion !== UPDATE_UI.previousVersion) {
+    UPDATE_UI.waitingVersion = '';
+    window.location.reload();
+    return;
+  }
+  if (status.phase === 'error' || (UPDATE_UI.disconnected
+    && ['idle', 'available', 'current'].includes(status.phase))) {
+    UPDATE_UI.waitingVersion = '';
+    UPDATE_UI.disconnected = false;
+  } else if (['downloading', 'installing'].includes(status.phase) && !UPDATE_UI.waitingVersion) {
+    UPDATE_UI.waitingVersion = status.latestVersion || 'pending';
+    UPDATE_UI.previousVersion = status.currentVersion;
+  }
+  renderUpdates();
+
+  if (status.phase === 'available' && status.latestVersion && !UPDATE_UI.notified.has(status.latestVersion)) {
+    UPDATE_UI.notified.add(status.latestVersion);
+    try {
+      localStorage.setItem('qq-update-notified', JSON.stringify([...UPDATE_UI.notified].slice(-20)));
+    } catch { /* The current page still remembers notified versions. */ }
+    snackbar(`发现新版本 ${status.latestVersion}`, {
+      action: '查看更新',
+      duration: 8000,
+      onAction: () => {
+        setPage('system');
+        $('#updatesTitle')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      },
+    });
+  }
+}
+
+function scheduleUpdateStatus() {
+  window.clearTimeout(UPDATE_UI.timer);
+  UPDATE_UI.timer = window.setTimeout(() => {
+    if (document.visibilityState === 'visible' || updateInProgress()) loadUpdates();
+    else scheduleUpdateStatus();
+  }, updateInProgress() || UPDATE_UI.status?.phase === 'checking' ? 2000 : 30000);
+}
+
+function loadUpdates() {
+  if (UPDATE_UI.reading) return UPDATE_UI.reading;
+  UPDATE_UI.reading = api('/api/updates', { signal: AbortSignal.timeout(8000) })
+    .then((status) => {
+      acceptUpdateStatus(status);
+      return status;
+    })
+    .catch(() => {
+      UPDATE_UI.unavailable = true;
+      if (updateInProgress()) UPDATE_UI.disconnected = true;
+      renderUpdates();
+      return null;
+    })
+    .finally(() => {
+      UPDATE_UI.reading = null;
+      scheduleUpdateStatus();
+    });
+  return UPDATE_UI.reading;
+}
+
+async function writeUpdate(path, method, body, beforeWrite) {
+  const status = await loadUpdates();
+  if (!status?.updateToken) throw new Error('暂时无法连接更新服务，请稍后重试');
+  beforeWrite?.();
+  return api(path, {
+    method,
+    headers: { 'Content-Type': 'application/json', 'X-QQ-Update-Token': status.updateToken },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30000),
+  });
+}
+
+async function checkUpdates() {
+  if (UPDATE_UI.pending || updateInProgress()) return;
+  UPDATE_UI.pending = 'checking';
+  renderUpdates();
+  try {
+    acceptUpdateStatus(await writeUpdate('/api/updates/check', 'POST', {}));
+  } catch (err) {
+    snackbar(`检查更新失败：${err.message}`, { duration: 5200 });
+  } finally {
+    UPDATE_UI.pending = '';
+    renderUpdates();
+    scheduleUpdateStatus();
+  }
+}
+
+async function setUpdateAutomatic(automatic) {
+  if (UPDATE_UI.pending || updateInProgress()) return;
+  UPDATE_UI.pending = 'settings';
+  renderUpdates();
+  try {
+    acceptUpdateStatus(await writeUpdate('/api/updates/settings', 'PUT', { automatic }));
+    snackbar(automatic ? '已开启自动检查更新' : '已关闭自动检查更新');
+  } catch (err) {
+    snackbar(`更新设置保存失败：${err.message}`, { duration: 5200 });
+  } finally {
+    UPDATE_UI.pending = '';
+    renderUpdates();
+  }
+}
+
+async function installUpdate() {
+  const status = UPDATE_UI.status;
+  if (UPDATE_UI.pending || updateInProgress() || !status?.canInstall || !status.latestVersion) return;
+  const version = status.latestVersion;
+  UPDATE_UI.pending = 'confirm';
+  renderUpdates();
+  const answer = confirmDialog(
+    `安装 ${version} 并重启？`,
+    '配置、人格和记忆会保留。更新会重启桥接与托盘，期间暂时离线；DSH 保持运行。确认后开始下载并安装。',
+    { okText: '安装并重启', danger: false },
+  );
+  $('#dialogCancel')?.focus();
+  const sure = await answer;
+  if (!sure) {
+    UPDATE_UI.pending = '';
+    renderUpdates();
+    $('#updatesInstall')?.focus();
+    return;
+  }
+  UPDATE_UI.pending = 'install';
+  renderUpdates();
+  let submitted = false;
+  try {
+    acceptUpdateStatus(await writeUpdate('/api/updates/install', 'POST', { version }, () => {
+      submitted = true;
+      UPDATE_UI.previousVersion = status.currentVersion;
+      UPDATE_UI.waitingVersion = version;
+      renderUpdates();
+    }));
+  } catch (err) {
+    // A restart can close this request after the server has accepted installation.
+    if (submitted) await loadUpdates();
+    if (!submitted || (!UPDATE_UI.unavailable && !['downloading', 'installing', 'complete'].includes(UPDATE_UI.status?.phase))) {
+      UPDATE_UI.waitingVersion = '';
+      snackbar(`安装更新失败：${err.message}`, { duration: 6000 });
+    }
+  } finally {
+    UPDATE_UI.pending = '';
+    renderUpdates();
+    scheduleUpdateStatus();
+  }
+}
+
 /* ---------------------------------------------------------------- 系统 */
 
 function renderSystemInfo(overview) {
@@ -1762,7 +2008,7 @@ async function loadSystem() {
   STATE.overview = overview;
   setStatusChip(overview);
   renderSystemInfo(overview);
-  await Promise.all([loadLogs(), loadSettings(), loadAutostart(), loadPaths()]);
+  await Promise.all([loadLogs(), loadSettings(), loadAutostart(), loadPaths(), loadUpdates()]);
 }
 
 /* ------------------------------------------------------------ 路径 */
@@ -2106,6 +2352,9 @@ function initEvents() {
   // 设置
   $('#settingsSave')?.addEventListener('click', saveSettings);
   $('#setAutostart')?.addEventListener('change', (event) => setAutostart(Boolean(event.target.checked)));
+  $('#updatesCheck')?.addEventListener('click', checkUpdates);
+  $('#updatesAutomatic')?.addEventListener('change', (event) => setUpdateAutomatic(Boolean(event.target.checked)));
+  $('#updatesInstall')?.addEventListener('click', installUpdate);
 
   // 路径（人格 / 记忆库 / 工作区）
   $('#pathsRefresh')?.addEventListener('click', () => loadPaths());
@@ -2197,6 +2446,7 @@ function init() {
 
   const initial = location.hash.replace(/^#/, '');
   setPage(PAGES[initial] ? initial : 'overview', { push: false });
+  loadUpdates();
 
   // 概览状态每 8 秒悄悄刷新一次（只在概览页）
   window.setInterval(() => {
