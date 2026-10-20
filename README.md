@@ -22,6 +22,8 @@
 
 > 文档里的 `D:\code\qq-bridge` 只是**示例路径**，克隆到哪就是哪；`config.json` 里的账号、群号、路径都是占位值，按自己的改。
 
+> **验证范围**：目前只在 **DSH Desktop**（Windows 桌面版 DeepSeek Harness）上实测跑通。命令行模式、Docker 与其它系统完成了自动测试和静态校验，但没在真机上验证过，第一次跑请先看 `node tools/cli.mjs status` 的输出。
+
 ---
 
 ## 零、直接下载（不想编译）
