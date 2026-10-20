@@ -67,7 +67,7 @@ node C:\D\DSH\qq-bridge\tools\memory.mjs path
 写法建议：一条事实一行，短句，别写小说。例如：
 
 ```
-node C:\D\DSH\qq-bridge\tools\memory.mjs person 10001 --name 主人 --fact "喜欢短句，讨厌啰嗦" --fact "常用 xianapi 中转模型"
+node C:\D\DSH\qq-bridge\tools\memory.mjs person 1000000002 --name 主人 --fact "喜欢短句，讨厌啰嗦" --fact "常用 xianapi 中转模型"
 node C:\D\DSH\qq-bridge\tools\memory.mjs daily "主人让我以后回答前先查记忆库"
 ```
 

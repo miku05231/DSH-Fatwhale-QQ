@@ -40,12 +40,12 @@ node C:\D\DSH\qq-bridge\tools\qq.mjs poke <QQ号> | poke group:<群号> <QQ号>
 ## 常用 OneBot action（同样能透传）
 
 ```
-node C:\D\DSH\qq-bridge\tools\qq.mjs get_group_member_list '{"group_id":20001}'
-node C:\D\DSH\qq-bridge\tools\qq.mjs get_group_msg_history '{"group_id":20001,"count":20}'
+node C:\D\DSH\qq-bridge\tools\qq.mjs get_group_member_list '{"group_id":200000001}'
+node C:\D\DSH\qq-bridge\tools\qq.mjs get_group_msg_history '{"group_id":200000001,"count":20}'
 node C:\D\DSH\qq-bridge\tools\qq.mjs get_stranger_info '{"user_id":123456}'
 node C:\D\DSH\qq-bridge\tools\qq.mjs delete_msg '{"message_id":123}'
-node C:\D\DSH\qq-bridge\tools\qq.mjs send_group_forward_msg '{"group_id":20001,"messages":[...]}'
-node C:\D\DSH\qq-bridge\tools\qq.mjs set_group_card '{"group_id":20001,"user_id":123456,"card":"新名片"}'
+node C:\D\DSH\qq-bridge\tools\qq.mjs send_group_forward_msg '{"group_id":200000001,"messages":[...]}'
+node C:\D\DSH\qq-bridge\tools\qq.mjs set_group_card '{"group_id":200000001,"user_id":123456,"card":"新名片"}'
 node C:\D\DSH\qq-bridge\tools\qq.mjs send_qzone_msg '{"content":"今天天气不错","ugc_right":64}'
 node C:\D\DSH\qq-bridge\tools\qq.mjs get_status
 ```
