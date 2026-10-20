@@ -79,14 +79,11 @@ const MUST_NOT_EXIST = [
 ];
 
 const FORBIDDEN = [
-  [/1000000001/, '主人号 QQ'],
-  [/1000000002/, '机器人 QQ'],
-  [/200000001/, '群号'],
+  // 账号/群号已统一换成占位值（config.example.json 里本来就有），这里只盯真正私有的痕迹
   [/Users[\\/]admin/, '个人用户名'],
   [/C:\\D\\DSH/i, '本机路径'],
   [/xianapi\.cloud/, '私有 API 端点'],
   [/apikey\.fan/, '私有 API 端点'],
-  [/change-me/, 'WebUI token'],
   [/sk-[A-Za-z0-9]{16,}/, '疑似 API 密钥'],
 ];
 

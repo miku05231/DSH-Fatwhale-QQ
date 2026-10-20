@@ -63,12 +63,6 @@ const BASE_REPLACEMENTS = [
   ['C:\\D\\DSH\\qq-bridge', 'D:\\code\\qq-bridge'],
   ['C:\\D\\DSH', 'C:\\DSH'],
   ['C:\\D\\software\\QQ.exe', 'C:\\Program Files\\Tencent\\QQNT\\QQ.exe'],
-  ['1000000001', '1000000001'],
-  ['1000000002', '1000000002'],
-  ['200000001', '200000001'],
-  ['change-me', 'change-me'],
-  ['api.example.com', 'api.example.com'],
-  ['api.example.com', 'api.example.com'],
   ['modian', 'relay-a'],
 ];
 
@@ -95,15 +89,11 @@ const REPLACEMENTS = expandReplacements(BASE_REPLACEMENTS);
 
 /** 导出后绝不允许出现的片段（自检用） */
 const FORBIDDEN = [
-  /1000000001/,
-  /1000000002/,
-  /200000001/,
   /Users[\\/]admin/,
   /C:\\\\D\\\\DSH/i,
   /xianapi\.cloud/,
   /apikey\.fan/,
   /sk-[A-Za-z0-9]{16,}/,
-  /change-me/,
 ];
 
 const PUBLIC_README = `# qq-dsh-bridge

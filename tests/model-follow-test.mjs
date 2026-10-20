@@ -330,8 +330,9 @@ console.log('\n[11] dsh 的 --patch 链拼装（resolvePatchChain）');
   ok(missing.ok === false, '基础 patch 不存在时报错');
   ok(missing.ok === false && missing.error.includes('找不到 patch 文件'), '报错文案点明缺文件');
 
+  // patchPath 是可选配置：留空 = 不套补丁（dsh 用它自己的模型配置），不算错误
   const empty = resolvePatchChain({ dshCfg: {} });
-  ok(empty.ok === false && empty.error.includes('patchPath'), '没配置 patchPath 时报错');
+  ok(empty.ok === true && empty.disabled === true && empty.patches.length === 0, '没配置 patchPath 时按不套补丁运行');
 
   for (const dir of [root, otherWorkDir]) {
     try {

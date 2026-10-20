@@ -93,10 +93,8 @@ async function main() {
     if (!['.js', '.mjs', '.ps1', '.cmd', '.md', '.json', '.yml', '.html', '.css', '.txt'].includes(ext) && !file.endsWith('LICENSE')) continue;
     const text = await fsp.readFile(file, 'utf8');
     for (const [label, re] of [
-      ['QQ 号', /1000000001|1000000002|200000001/],
       ['个人路径', /Users[\\/]admin/],
       ['私有端点', /xianapi\.cloud|apikey\.fan/],
-      ['WebUI token', /change-me/],
       ['疑似密钥', /sk-[A-Za-z0-9]{20,}/],
     ]) {
       if (re.test(text)) leaks.push(`${path.relative(out, file)} → ${label}`);

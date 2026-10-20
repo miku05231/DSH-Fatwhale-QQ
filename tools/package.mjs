@@ -83,23 +83,13 @@ const REPLACEMENTS = [
   ['C:\\dev\\nodejs\\node_modules', 'C:\\Program Files\\nodejs\\node_modules'],
   ['C:\\dev\\nodejs', 'C:\\Program Files\\nodejs'],
   ['C:\\D\\software\\QQ.exe', 'C:\\Program Files\\Tencent\\QQNT\\QQ.exe'],
-  ['change-me', 'change-me'],
-  ['api.example.com', 'api.example.com'],
-  ['api.example.com', 'api.example.com'],
-  ['1000000001', '1000000001'],
-  ['1000000002', '1000000002'],
-  ['200000001', '200000001'],
 ];
 
 const FORBIDDEN = [
-  /1000000001/,
-  /1000000002/,
-  /200000001/,
   /Users[\\/]admin/,
   /C:\\D\\DSH/i,
   /xianapi\.cloud/,
   /apikey\.fan/,
-  /change-me/,
   /sk-[A-Za-z0-9]{16,}/,
 ];
 

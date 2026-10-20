@@ -25,8 +25,22 @@ import { SessionStore } from '../src/sessions.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(HERE, '..');
-const PATCH_REL = 'patches/headless-model.yml';
-const PATCH_ABS = path.join(PROJECT_ROOT, PATCH_REL);
+
+// 用真实 config.json 里的 patchPath（通常是本机的 patches/*.local.yml）；
+// 没有 config.json 时退回仓库里的模板，保证在干净机器上也能跑起来。
+function pickPatchRel() {
+  try {
+    const raw = fs.readFileSync(path.join(PROJECT_ROOT, 'config.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    const p = parsed?.dsh?.patchPath;
+    if (typeof p === 'string' && p.trim()) return p.trim();
+  } catch {
+    /* 没有真实配置就用模板 */
+  }
+  return 'patches/headless-model.yml';
+}
+const PATCH_REL = pickPatchRel();
+const PATCH_ABS = path.isAbsolute(PATCH_REL) ? PATCH_REL : path.join(PROJECT_ROOT, PATCH_REL);
 
 const SECRET = '7319';
 
