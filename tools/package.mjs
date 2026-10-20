@@ -68,28 +68,41 @@ const EXCLUDE = [
 
 const TEXT_EXT = new Set(['.js', '.mjs', '.cjs', '.json', '.md', '.yml', '.yaml', '.ps1', '.cmd', '.sh', '.txt', '.html', '.css']);
 
-/** 个人/私有信息 → 占位符（顺序敏感：长的先换） */
+/**
+ * 个人/私有信息 → 占位符（顺序敏感：长的先换）。
+ *
+ * 本机的用户目录、工程目录都在运行时由 os.homedir() / import.meta.url 算出来，
+ * 源码里不写死任何绝对路径，换机器也不用改这张表。
+ */
+const HOME = os.homedir();
+const WORK_ROOT = path.resolve(ROOT, '..');
+const VAULT_ROOT = path.join(HOME, 'Documents', 'Obsidian Vault');
+
+/** 同一个路径在文档里是单反斜杠、在 JS 源码里是双反斜杠，小写化还可能不同，全都要换 */
+function variants(from, to) {
+  const out = [[from, to]];
+  const escaped = from.replace(/\\/g, '\\\\');
+  const escapedTo = to.replace(/\\/g, '\\\\');
+  if (escaped !== from) out.push([escaped, escapedTo]);
+  const lower = from.toLowerCase();
+  if (lower !== from) out.push([lower, to]);
+  const lowerEscaped = escaped.toLowerCase();
+  if (lowerEscaped !== escaped) out.push([lowerEscaped, escapedTo]);
+  return out;
+}
+
 const REPLACEMENTS = [
-  ['C:\\D\\DSH\\qq-bridge', 'C:\\your\\path\\qq-bridge'],
-  ['C:\\D\\DSH', 'C:\\your\\path'],
-  // 源码里出现的转义写法（JS 字符串/正则是双反斜杠），以及小写化后的版本
-  ['C:\\\\D\\\\DSH\\\\qq-bridge', 'C:\\\\your\\\\path\\\\qq-bridge'],
-  ['C:\\\\D\\\\DSH', 'C:\\\\your\\\\path'],
-  ['C:\\\\Users\\\\admin', 'C:\\\\Users\\\\you'],
-  ['c:\\\\d\\\\dsh', 'c:\\\\your\\\\path'],
-  ['C:\\Users\\admin\\Documents\\Obsidian Vault\\大肥鱼', 'C:\\Users\\you\\Documents\\Obsidian Vault\\YourBot'],
-  ['C:\\Users\\admin', 'C:\\Users\\you'],
-  ['C:\\dev\\nodejs-24.20.0\\node.exe', 'node'],
-  ['C:\\dev\\nodejs\\node_modules', 'C:\\Program Files\\nodejs\\node_modules'],
-  ['C:\\dev\\nodejs', 'C:\\Program Files\\nodejs'],
-  ['C:\\D\\software\\QQ.exe', 'C:\\Program Files\\Tencent\\QQNT\\QQ.exe'],
+  ...variants(ROOT, 'C:\\your\\path\\qq-bridge'),
+  ...variants(WORK_ROOT, 'C:\\your\\path'),
+  ...variants(VAULT_ROOT, 'C:\\Users\\you\\Documents\\Obsidian Vault'),
+  ...variants(HOME, 'C:\\Users\\you'),
 ];
 
+/** 打包后绝不允许出现的片段：上面的明文 + 私有端点/密钥特征 */
 const FORBIDDEN = [
-  /Users[\\/]admin/,
-  /C:\\D\\DSH/i,
-  /xianapi\.cloud/,
-  /apikey\.fan/,
+  ...REPLACEMENTS.map(([from]) => new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')),
+  /xianapi\.cloud/i,
+  /apikey\.fan/i,
   /sk-[A-Za-z0-9]{16,}/,
 ];
 

@@ -68,7 +68,7 @@ const LAYER_SAMPLE = `# DSH 桌面端用户补丁层
   name: "@deepseek-ai/dsh-llm-pi-ai"
   config:
     providers:
-      xianapi-ds:
+      relay-a:
         baseURL: https://www.api.example.com/v1
         apiKeyEnv: XIANAPI_DS_API_KEY
         api: openai-completions
@@ -87,7 +87,7 @@ const LAYER_SAMPLE = `# DSH 桌面端用户补丁层
 - id: agent-default-model
   name: "@deepseek-ai/dsh-agent-default-model"
   config:
-    provider: xianapi-ds
+    provider: relay-a
     model: deepseek-v4.1-pro
     reasoningEffort: high
 - id: something-else
@@ -108,12 +108,12 @@ console.log('\n[1] 解析桌面端补丁层');
   ok(parsed.ok, '解析成功', parsed.reason);
   eq(parsed.providers.length, 2, '解析出 2 个供应商');
   const ids = parsed.providers.map((p) => p.id);
-  ok(ids.includes('xianapi-ds'), '包含 xianapi-ds');
+  ok(ids.includes('relay-a'), '包含 relay-a');
   ok(ids.includes('deepseek-official'), '包含 deepseek-official');
-  const xian = parsed.providers.find((p) => p.id === 'xianapi-ds');
-  eq(xian?.models.length, 2, 'xianapi-ds 有 2 个模型');
+  const xian = parsed.providers.find((p) => p.id === 'relay-a');
+  eq(xian?.models.length, 2, 'relay-a 有 2 个模型');
   ok(xian?.models.includes('deepseek-v4.1-flash'), '模型列表含 deepseek-v4.1-flash');
-  eq(parsed.model?.provider, 'xianapi-ds', '当前模型 provider 正确');
+  eq(parsed.model?.provider, 'relay-a', '当前模型 provider 正确');
   eq(parsed.model?.model, 'deepseek-v4.1-pro', '当前模型 model 正确');
   eq(parsed.model?.reasoningEffort, 'high', '当前模型 effort 正确');
   ok(parsed.providersBlock.length > 0, 'providers 原文块非空');
@@ -161,7 +161,7 @@ console.log('\n[3] 幂等：内容不变时不重写文件');
 console.log('\n[4] 桌面端换模型后自动跟随');
 {
   const nextLayer = LAYER_SAMPLE.replace('model: deepseek-v4.1-pro', 'model: deepseek-chat').replace(
-    'provider: xianapi-ds',
+    'provider: relay-a',
     'provider: deepseek-official',
   );
   writeFileDeep(desktopProfileLayerPath(followHome), nextLayer);
@@ -179,7 +179,7 @@ const manualState = tmpDir('state');
 {
   await writeModelState(manualState, {
     mode: 'manual',
-    manual: { provider: 'xianapi-ds', model: 'deepseek-v4.1-flash', reasoningEffort: 'max' },
+    manual: { provider: 'relay-a', model: 'deepseek-v4.1-flash', reasoningEffort: 'max' },
   });
   const store = readModelState(manualState);
   eq(store.mode, 'manual', '状态文件记录 manual');

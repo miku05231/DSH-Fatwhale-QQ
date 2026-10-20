@@ -150,7 +150,7 @@ node tools\stickers.mjs migrate D:\表情包
 ```powershell
 node tools\model.mjs show          # 当前模式、生效模型、桌面端模型
 node tools\model.mjs follow        # 切回跟随
-node tools\model.mjs manual xianapi-ds deepseek-v4.1-flash max   # 指定
+node tools\model.mjs manual relay-a deepseek-v4.1-flash max   # 指定
 ```
 
 ---

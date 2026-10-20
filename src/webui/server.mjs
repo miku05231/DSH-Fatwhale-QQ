@@ -71,8 +71,6 @@ const SELF_FILE = fileURLToPath(import.meta.url);
 const PROJECT_ROOT = path.resolve(HERE, '..', '..');
 const PUBLIC_DIR = path.join(HERE, 'public');
 
-/** 记忆库默认根目录（SPEC-2 §2）。config.memory.root 可以覆盖。 */
-const DEFAULT_MEMORY_ROOT = 'C:\\Users\\admin\\Documents\\Obsidian Vault\\大肥鱼';
 /** 默认端口与最多顺延次数（SPEC-2 §5.1） */
 const DEFAULT_PORT = 5830;
 const MAX_PORT_TRIES = 10;

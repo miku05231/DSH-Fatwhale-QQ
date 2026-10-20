@@ -214,7 +214,7 @@ export function createWebUiServer({ config, configRoot, log, port = 5830 }) → 
 要补：
 1. `@deepseek-ai/dsh-mcp-client` × 4（mempalace / duckduckgo / drawio / windows），配置照抄 desktop profile 的写法。
 2. `skill-filesystem` 的 `customSkillDirs` 指向 `D:\code\qq-bridge\skills`。
-3. 保留现有 `agent-default-model`（xianapi-ds）与 `llm-pi-ai` 注入，不能覆盖掉。
+3. 保留现有 `agent-default-model`（relay-a）与 `llm-pi-ai` 注入，不能覆盖掉。
 4. 改完必须验证：
    - `dsh --profile headless --dump-config` 能看到新条目
    - `dsh --profile headless --patch <我们的 patch> "一句话回答：你有哪些 MCP 工具？"` 能正常回答且不报错
@@ -294,14 +294,14 @@ export function createWebUiServer({ config, configRoot, log, port = 5830 }) → 
 
 ### 11.3 实测
 
-- `node tools\model.mjs manual modian glm-5.3 high` 之后跑 `dsh --profile headless --patch patches\headless-model.yml --patch state\model\runtime-model.yml --dump-config`，输出里是 `provider: modian` / `model: glm-5.3`，确认 patch 覆盖顺序正确
+- `node tools\model.mjs manual relay-a glm-5.3 high` 之后跑 `dsh --profile headless --patch patches\headless-model.yml --patch state\model\runtime-model.yml --dump-config`，输出里是 `provider: relay-a` / `model: glm-5.3`，确认 patch 覆盖顺序正确
 - `PUT /api/model {mode:"follow"}` → 立刻恢复 `apikey-deepseek05/deepseek-flash`
 - 测试：`tests\model-follow-test.mjs` 75 项（新增 `resolvePatchChain` 相关 7 项）、`tests\webui-test.mjs` 38 项（新增 5 项模型接口）、`tests\ui-cdp.mjs` 28 项（新增 8 项模型页）
 - `dsh.js` 抽出 `resolvePatchChain()` 纯函数：相对路径按项目根解析、额外 patch 缺失静默跳过、顺序保证基础在前，均可单测
 
 ### 11.4 补强：真正在跑的进程也验过（2026-10-20 13:18）
 
-- 控制台（PID 258564，5830）上直接打真接口：`GET /api/model` → `mode=follow`、`desktop=apikey-deepseek05/deepseek-flash`、6 个供应商；`PUT {mode:"manual", manual:{provider:"modian",model:"glm-5.3",reasoningEffort:"high"}}` → `state\model\runtime-model.yml` 末尾三行立刻变成 `modian / glm-5.3 / high`，再用**真的 dsh** `--profile headless --patch 基础 --patch runtime --dump-config` 看到 `provider: modian`、`model: glm-5.3`；`PUT {mode:"follow"}` → 全部回到 `apikey-deepseek05 / deepseek-flash / max`。即「控制台里操作 → 下一条消息生效」在真实环境闭环。
+- 控制台（PID 258564，5830）上直接打真接口：`GET /api/model` → `mode=follow`、`desktop=apikey-deepseek05/deepseek-flash`、6 个供应商；`PUT {mode:"manual", manual:{provider:"relay-a",model:"glm-5.3",reasoningEffort:"high"}}` → `state\model\runtime-model.yml` 末尾三行立刻变成 `relay-a / glm-5.3 / high`，再用**真的 dsh** `--profile headless --patch 基础 --patch runtime --dump-config` 看到 `provider: relay-a`、`model: glm-5.3`；`PUT {mode:"follow"}` → 全部回到 `apikey-deepseek05 / deepseek-flash / max`。即「控制台里操作 → 下一条消息生效」在真实环境闭环。
 - 托盘进程 PID 249068 启动于 12:48:31，晚于 `Launcher.ps1` 的修改时间 12:29:02 → **运行中的托盘已经是带左键处理器的新代码**；AST 语法检查无错。
 - 因为用户正在使用电脑（Windows MCP 返回 `USER_CONTROL`），没有真的用鼠标去点托盘，改用两层自动化代替：
   - 静态：`Add_MouseClick` 存在、处理器里有 `MouseButtons::Left` 判断、没有 `Add_DoubleClick`、处理器调用 `Open-WebUiConsole`（5 项）
@@ -445,7 +445,7 @@ if (isGroup && !isOwner && config?.security?.allowGroupMembers !== true) {
 | 生成 | `README.md`、`LICENSE`(MIT)、`.gitignore`、`.gitattributes`、`config.example.json`、`patches/example-headless-model.yml` |
 | 自检 | 扫产物全部文本文件，命中 `1000000001`/`1000000002`/`200000001`/`Users\you`/`api.example.com`/`api.example.com`/`sk-xxxx`/WebUI token 即报错，退出码 1 |
 
-替换表（关键几条）：`C:\Users\you` → `C:\Users\you`；`D:\code\qq-bridge` → `D:\code\qq-bridge`；机器人/主人/群号 → `1000000001`/`1000000002`/`200000001`；`api.example.com`、`api.example.com` → `api.example.com`；`modian` → `relay-a`。
+替换表在运行时生成，源码里不写死任何本机绝对路径：以 `os.homedir()`（个人目录）、`path.resolve(ROOT, '..')`（工程所在目录）、`<个人目录>\Documents\Obsidian Vault`（记忆库）为「源」，分别换成 `C:\Users\you`、`C:\your\path`、`D:\code\qq-bridge` 这类占位值；对外发布时 QQ 号/昵称换成 `1000000001`/`1000000002`/`200000001`。自检的正则同样由这些「源」自动推导，外加 API 密钥与私有中转域名的特征（见 `tools/export-public.mjs` 的 `FORBIDDEN`）。
 
 `.ps1` 保持 UTF-8 + BOM 原样（`.gitattributes` 里 `*.ps1 -text`，不做换行转换；本机 git 缺 iconv，`working-tree-encoding=UTF-8-BOM` 会报 `failed to encode`）。
 

@@ -48,7 +48,10 @@ function bad(name, detail = '') {
 function resolveDshBin() {
   const candidates = [
     path.join(path.dirname(process.execPath), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
-    'C:\\dev\\nodejs\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js',
+    ...String(process.env.DSH_HOME || '')
+      .split(path.delimiter)
+      .filter(Boolean)
+      .map((dir) => path.join(dir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')),
   ];
   for (const file of candidates) {
     if (fs.existsSync(file)) return file;
@@ -142,7 +145,7 @@ async function main() {
       else bad('生效 model 不是桌面端的', section.split('\n').slice(0, 6).join(' / '));
     }
 
-    // 基础 patch 里写的是 xianapi-ds / deepseek-v4.1-flash，被盖掉才说明顺序对
+    // 基础 patch 里写的是 relay-a / deepseek-v4.1-flash，被盖掉才说明顺序对
     const baseText = fs.readFileSync(BASE_PATCH, 'utf8');
     const baseProvider = baseText.match(/provider:\s*([A-Za-z0-9_.-]+)/)?.[1];
     if (baseProvider && section.includes(`provider: ${baseProvider}`) && baseProvider !== desktop.model?.provider) {

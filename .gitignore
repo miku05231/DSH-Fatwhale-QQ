@@ -10,6 +10,9 @@ qq-workspace/
 # 本机的模型路由补丁（含私有中转地址，仓库里只放 headless-model.yml 模板）
 patches/*.local.yml
 
+# DSH 技能文档：里面写着本机的记忆库/工程绝对路径，只在本机加载，不进仓库
+skills/
+
 # ── 第三方运行时 / 依赖 ──
 napcat/
 node_modules/

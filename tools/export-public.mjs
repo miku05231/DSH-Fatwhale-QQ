@@ -17,6 +17,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -52,18 +53,20 @@ const EXCLUDE = [/state[\\/]/, /logs[\\/]/, /napcat[\\/]/, /node_modules[\\/]/, 
 /** 文本文件后缀：参与脱敏 */
 const TEXT_EXT = new Set(['.js', '.mjs', '.cjs', '.ps1', '.cmd', '.sh', '.bat', '.css', '.html', '.md', '.json', '.yml', '.yaml', '.txt', '.example']);
 
-/** 替换表：越靠前越先替换（顺序要紧，长串在前） */
+/**
+ * 替换表：越靠前越先替换（顺序要紧，长串在前）。
+ *
+ * 本机的用户目录 / 工程目录 / Obsidian 库都在运行时由环境算出，
+ * 源码里不留任何个人绝对路径。
+ */
+const HOME = os.homedir();
+const WORK_ROOT = path.resolve(ROOT, '..');
+const VAULT_ROOT = path.join(HOME, 'Documents', 'Obsidian Vault');
 const BASE_REPLACEMENTS = [
-  ['C:\\Users\\admin\\Documents\\Obsidian Vault\\大肥鱼', 'C:\\Users\\you\\Documents\\Obsidian Vault\\YourBot'],
-  ['C:\\Users\\admin', 'C:\\Users\\you'],
-  ['Users\\admin', 'Users\\you'],
-  ['C:\\dev\\nodejs-24.20.0\\node.exe', 'node'],
-  ['C:\\dev\\nodejs\\node_modules', 'C:\\Program Files\\nodejs\\node_modules'],
-  ['C:\\dev\\nodejs', 'C:\\Program Files\\nodejs'],
-  ['C:\\D\\DSH\\qq-bridge', 'D:\\code\\qq-bridge'],
-  ['C:\\D\\DSH', 'C:\\DSH'],
-  ['C:\\D\\software\\QQ.exe', 'C:\\Program Files\\Tencent\\QQNT\\QQ.exe'],
-  ['modian', 'relay-a'],
+  [VAULT_ROOT, 'C:\\Users\\you\\Documents\\Obsidian Vault'],
+  [ROOT, 'D:\\code\\qq-bridge'],
+  [WORK_ROOT, 'C:\\DSH'],
+  [HOME, 'C:\\Users\\you'],
 ];
 
 /**
@@ -87,12 +90,11 @@ function expandReplacements(pairs) {
 
 const REPLACEMENTS = expandReplacements(BASE_REPLACEMENTS);
 
-/** 导出后绝不允许出现的片段（自检用） */
+/** 导出后绝不允许出现的片段（由替换表的明文自动推导，外加密钥/端点特征） */
 const FORBIDDEN = [
-  /Users[\\/]admin/,
-  /C:\\\\D\\\\DSH/i,
-  /xianapi\.cloud/,
-  /apikey\.fan/,
+  ...REPLACEMENTS.map(([from]) => new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')),
+  /xianapi\.cloud/i,
+  /apikey\.fan/i,
   /sk-[A-Za-z0-9]{16,}/,
 ];
 

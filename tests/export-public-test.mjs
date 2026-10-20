@@ -93,8 +93,9 @@ async function main() {
     if (!['.js', '.mjs', '.ps1', '.cmd', '.md', '.json', '.yml', '.html', '.css', '.txt'].includes(ext) && !file.endsWith('LICENSE')) continue;
     const text = await fsp.readFile(file, 'utf8');
     for (const [label, re] of [
-      ['个人路径', /Users[\\/]admin/],
-      ['私有端点', /xianapi\.cloud|apikey\.fan/],
+      ['个人路径', new RegExp(os.homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')],
+      ['本机工程路径', new RegExp(path.dirname(PROJECT_ROOT).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')],
+      ['私有端点', /xianapi\.cloud|apikey\.fan/i],
       ['疑似密钥', /sk-[A-Za-z0-9]{20,}/],
     ]) {
       if (re.test(text)) leaks.push(`${path.relative(out, file)} → ${label}`);

@@ -10,7 +10,7 @@
  *     `- id: llm-pi-ai` 供应商清单（provider / baseURL / apiKeyEnv / models）。
  *     用户在界面里换模型，这个文件就被改写 —— 所以它是「当前模型」的权威来源。
  *   - 桥接跑的是 headless profile，它的 dsh 进程默认读
- *       patches/headless-model.yml（固定 xianapi-ds/deepseek-v4.1-flash）。
+ *       patches/headless-model.yml（固定 relay-a/deepseek-v4.1-flash）。
  *   - headless 侧只要在基础 patch 之后再叠一个 `--patch`，里面的
  *     `agent-default-model` 会覆盖基础 patch 的值（补丁按顺序叠加）。
  *

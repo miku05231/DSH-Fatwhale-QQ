@@ -1,10 +1,17 @@
 // 一次性脚手架：创建 Obsidian 记忆库骨架（可重复执行，幂等）
 // 用法：node scripts\init-memory-vault.mjs
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
-const VAULT = 'C:\\Users\\admin\\Documents\\Obsidian Vault';
-const ROOT = path.join(VAULT, '大肥鱼');
+/**
+ * Obsidian 记忆库默认位置：<用户目录>\Documents\Obsidian Vault\<人格名>
+ * 换地方时设 QQ_MEMORY_VAULT（库根目录）或 QQ_MEMORY_BOT（人格子目录名）。
+ */
+const VAULT = process.env.QQ_MEMORY_VAULT
+  ? path.resolve(process.env.QQ_MEMORY_VAULT)
+  : path.join(os.homedir(), 'Documents', 'Obsidian Vault');
+const ROOT = path.join(VAULT, process.env.QQ_MEMORY_BOT || '大肥鱼');
 const TODAY = new Date().toISOString().slice(0, 10);
 
 const dirs = ['10-人物', '20-群聊', '30-日志', '40-知识', '50-反思', '.attachments'];

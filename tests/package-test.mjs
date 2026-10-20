@@ -80,10 +80,11 @@ const MUST_NOT_EXIST = [
 
 const FORBIDDEN = [
   // 账号/群号已统一换成占位值（config.example.json 里本来就有），这里只盯真正私有的痕迹
-  [/Users[\\/]admin/, '个人用户名'],
-  [/C:\\D\\DSH/i, '本机路径'],
-  [/xianapi\.cloud/, '私有 API 端点'],
-  [/apikey\.fan/, '私有 API 端点'],
+  // 本机目录不在源码里写死，按当前机器算出来再查
+  [new RegExp(path.dirname(ROOT).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '本机路径'],
+  [new RegExp(os.homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '个人用户名'],
+  [/xianapi\.cloud/i, '私有 API 端点'],
+  [/apikey\.fan/i, '私有 API 端点'],
   [/sk-[A-Za-z0-9]{16,}/, '疑似 API 密钥'],
 ];
 

@@ -2,7 +2,7 @@
 #
 # The stock headless profile points agent-default-model at deepseek-official,
 # which on this machine returns QUOTA: Insufficient Balance. This overlay wires
-# the xianapi relay (already configured for the desktop profile, key resolved
+# the relay (already configured for the desktop profile, key resolved
 # from ~/.dsh/.credentials.yaml via apiKeyEnv) and repoints the default model.
 #
 # Applied with:
@@ -12,7 +12,7 @@
   name: "@deepseek-ai/dsh-llm-pi-ai"
   config:
     providers:
-      xianapi-ds:
+      relay-a:
         apiKeyEnv: XIANAPI_DS_API_KEY
         api: openai-completions
         baseURL: https://www.api.example.com/v1
@@ -34,6 +34,6 @@
 - id: agent-default-model
   name: "@deepseek-ai/dsh-agent-default-model"
   config:
-    provider: xianapi-ds
+    provider: relay-a
     model: deepseek-v4.1-flash
     reasoningEffort: max
