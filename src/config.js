@@ -16,7 +16,18 @@ export const DEFAULTS = deepFreeze({
   },
   dsh: {
     command: 'dsh',
+    // auto = 本机有 desktop profile 就用桌面 profile（全部插件），否则 headless
+    mode: 'auto',
+    // headless 模式的 profile 名；desktop 模式固定使用 desktopProfile
     profile: 'headless',
+    // desktop profile 名，或绝对路径（测试/多 profile 时用）
+    desktopProfile: 'desktop',
+    // desktop host 启动最长时间；首次消息要等这么久，超时回退 headless
+    desktopBootTimeoutMs: 120000,
+    // desktop host 空闲多久后关闭（毫秒，0 = 不自动关）。关掉释放内存，下条消息再拉起
+    desktopIdleMs: 900000,
+    // desktop 启动失败时，本条消息是否回退 headless
+    fallbackToHeadless: true,
     patchPath: 'patches/headless-model.yml',
     // '.' = 配置文件所在目录（项目根）；换台电脑、搬目录、进容器都不用改。
     // 想固定一个自己的工作区就写绝对路径，或相对路径（按项目根解析）。
@@ -199,6 +210,8 @@ const REQUIRED_STRINGS = [
 
 const OPTIONAL_STRINGS = [
   'onebot.accessToken',
+  'dsh.mode',
+  'dsh.desktopProfile',
   'dsh.cwd', // 留空 = 进程当前目录；'.' = 配置文件所在目录
   'dsh.patchPath', // 留空 = 不套补丁（干净的机器、Docker 里默认就没补丁）
   'behavior.queuedNotice',
@@ -209,6 +222,7 @@ const OPTIONAL_STRINGS = [
 
 const POSITIVE_INTEGERS = [
   ['dsh.timeoutMs', '超时时间'],
+  ['dsh.desktopBootTimeoutMs', 'desktop host 启动超时'],
   ['security.maxChars', '单条消息最大字符数'],
   ['behavior.maxReplyChunk', '回复分片长度'],
 ];
@@ -226,6 +240,16 @@ function validateConfig(config) {
     if (typeof value !== 'string') {
       invalid(field, '必须是字符串（可以为空字符串）', value);
     }
+  }
+
+  const mode = getField(config, 'dsh.mode');
+  if (!['auto', 'desktop', 'headless'].includes(mode)) {
+    invalid('dsh.mode', '必须是 auto、desktop 或 headless 之一', mode);
+  }
+
+  const idleMs = getField(config, 'dsh.desktopIdleMs');
+  if (!Number.isInteger(idleMs) || idleMs < 0) {
+    invalid('dsh.desktopIdleMs', '必须是大于等于 0 的整数（0 表示不自动关闭）', idleMs);
   }
 
   // onebot.url：必须是合法的 ws:// 或 wss:// 地址
@@ -253,7 +277,7 @@ function validateConfig(config) {
     invalid('security.rateLimitPerMinute', '必须是数字（小于等于 0 表示不限流）', rate);
   }
 
-  for (const field of ['security.allowGroups', 'behavior.showErrors']) {
+  for (const field of ['security.allowGroups', 'behavior.showErrors', 'dsh.fallbackToHeadless']) {
     const value = getField(config, field);
     if (typeof value !== 'boolean') invalid(field, '必须是 true 或 false', value);
   }

@@ -6,6 +6,8 @@ data/
 memory/
 记忆库/
 qq-workspace/
+# thinking-effort 插件启动时写在 cwd 的小文件（桌面宿主会带出来）
+thinking-effort-loaded.json
 
 # 本机的模型路由补丁（含私有中转地址，仓库里只放 headless-model.yml 模板）
 patches/*.local.yml

@@ -153,7 +153,7 @@ function findShimScript(shimFile) {
  * 把配置里的命令解析成可直接 spawn 的 { file, fixedArgs }。
  * 解析失败返回 { error }
  */
-function resolveCommandPlan(command, cwd) {
+export function resolveCommandPlan(command, cwd) {
   const exe = findExecutable(command, cwd);
   if (!exe) return { error: `找不到命令「${command}」` };
 
@@ -189,7 +189,7 @@ function taskkillPath() {
   return 'taskkill';
 }
 
-function killProcessTree(child, log) {
+export function killProcessTree(child, log) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   const pid = child.pid;
   if (!pid) return;

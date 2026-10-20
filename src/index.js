@@ -15,7 +15,7 @@ import { loadConfig, resolvePath } from './config.js';
 import { isAllowed, isGroupWatched, isUserBlocked, isGroupBlocked, isAtSelf, RateLimiter, sanitizeText } from './security.js';
 import { SerialQueue } from './queue.js';
 import { OneBot } from './onebot.js';
-import { runDsh } from './dsh.js';
+import { runAgent, resolveAgentMode, shutdownAgentRuntime } from './agent-runner.js';
 import { SessionStore } from './sessions.js';
 import { GroupMemory } from './groupmem.js';
 import { resolveModelPlan } from './model-follow.js';
@@ -243,6 +243,16 @@ async function main() {
   );
   const dshCwd = resolvePath(configRoot, config?.dsh?.cwd ?? PROJECT_ROOT);
 
+  // desktop 模式会加载用户安装的 desktop profile（全部插件），会话与桌面端共用；
+  // headless 只加载 base，适合 Docker / 没装桌面端的机器。auto 看本机有没有 profile。
+  const dshMode = resolveAgentMode(config, { cwd: dshCwd, log });
+  if (dshMode.mode === 'desktop') {
+    const profile = dshMode.probe?.profileDir ?? config?.dsh?.desktopProfile ?? 'desktop';
+    log.info(`DSH 运行模式：desktop（profile：${profile}）—— 首次消息启动宿主，约需十几秒`);
+  } else {
+    log.info(`DSH 运行模式：headless（${dshMode.reason}）`);
+  }
+
   // 人格：默认就是工作区 AGENTS.md（DSH 自己会读，桥接不重复注入）；
   // 指到别处时每条消息前读出来，作为 `[人格设定]` 块拼进 prompt。
   // 多套人格：state/personas 里放多份 .md，active.json 选当前那套（可全局 / 按会话覆盖），
@@ -392,6 +402,7 @@ async function main() {
       lastError: lastErrorRef.value,
       model: modelLabel || null,
       modelMode: modelInfo?.mode ?? null,
+      dshMode: dshMode.mode,
       plugins: plugins ? plugins.registry.size : 0,
       pluginsFailed: plugins ? plugins.failures.length : 0,
     };
@@ -695,7 +706,7 @@ async function main() {
       heartbeat.unref?.();
 
       try {
-        const result = await runDsh(dshPrompt, {
+        const result = await runAgent(dshPrompt, {
           sessionId,
           cfg: config,
           cwd: dshCwd,
@@ -703,6 +714,7 @@ async function main() {
           patchPath,
           projectRoot: configRoot,
           extraPatchPaths: refreshModelPlan(),
+          model: modelInfo?.effective ?? null,
         });
         usedSession = result.sessionId;
         finalText = result.finalText;
@@ -927,6 +939,9 @@ async function main() {
     try {
       bot.close();
     } catch { /* 忽略 */ }
+    try {
+      shutdownAgentRuntime();
+    } catch { /* 忽略：宿主可能已退出 */ }
     const tmp = `${statusPath}.tmp`;
     try {
       const payload = {

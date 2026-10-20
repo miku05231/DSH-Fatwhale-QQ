@@ -201,7 +201,9 @@ check('左键单击托盘直达控制台', /Add_MouseClick/.test(launcherSrc) &&
 check('菜单含记忆库', /Open-MemoryFolder|记忆库/.test(launcherSrc));
 check('bootstrap 会拉起控制台', /Test-WebUiPortOpen|webui/i.test(bootSrc));
 const startupLnk = path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'QQDshLauncher.lnk');
-check('开机自启动快捷方式存在', fs.existsSync(startupLnk), startupLnk);
+// 开机自启是用户开关：关掉时快捷方式本来就不存在，不能算工程失败。
+if (fs.existsSync(startupLnk)) console.log(`  OK   开机自启动快捷方式已创建  — ${startupLnk}`);
+else console.log('  SKIP 开机自启动快捷方式未创建（当前没开自启，属正常状态）');
 check('托盘支持自启开关', /Test-AutostartEnabled|Enable-Autostart/.test(launcherSrc));
 
 console.log(`\n${'='.repeat(56)}`);
