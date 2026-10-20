@@ -7,7 +7,7 @@ whenToUse: 用户在问过去的事、提到某个人/某个群的背景、或�
 # 记忆使用
 
 你的长期记忆不是模型自带的，而是本机的一个 Obsidian 库 + 一个命令行工具。
-**记忆库根目录**：`C:\Users\you\Documents\Obsidian Vault\YourBot`
+**记忆库根目录**：`C:\Users\admin\Documents\Obsidian Vault\大肥鱼`
 
 目录约定：
 
@@ -23,14 +23,14 @@ whenToUse: 用户在问过去的事、提到某个人/某个群的背景、或�
 ## 工具
 
 ```
-node D:\code\qq-bridge\tools\memory.mjs search <关键词> [--limit 8] [--json]
-node D:\code\qq-bridge\tools\memory.mjs recent [--days 3] [--json]
-node D:\code\qq-bridge\tools\memory.mjs person <QQ号> [--name 昵称] [--fact "…"]… [--json]
-node D:\code\qq-bridge\tools\memory.mjs group <群号> [--name 群名] [--fact "…"]… [--json]
-node D:\code\qq-bridge\tools\memory.mjs note --title "标题" --body "正文" [--dir 40-知识] [--tag x]… [--json]
-node D:\code\qq-bridge\tools\memory.mjs daily "要记的内容" [--json]
-node D:\code\qq-bridge\tools\memory.mjs stats [--json]
-node D:\code\qq-bridge\tools\memory.mjs path
+node C:\D\DSH\qq-bridge\tools\memory.mjs search <关键词> [--limit 8] [--json]
+node C:\D\DSH\qq-bridge\tools\memory.mjs recent [--days 3] [--json]
+node C:\D\DSH\qq-bridge\tools\memory.mjs person <QQ号> [--name 昵称] [--fact "…"]… [--json]
+node C:\D\DSH\qq-bridge\tools\memory.mjs group <群号> [--name 群名] [--fact "…"]… [--json]
+node C:\D\DSH\qq-bridge\tools\memory.mjs note --title "标题" --body "正文" [--dir 40-知识] [--tag x]… [--json]
+node C:\D\DSH\qq-bridge\tools\memory.mjs daily "要记的内容" [--json]
+node C:\D\DSH\qq-bridge\tools\memory.mjs stats [--json]
+node C:\D\DSH\qq-bridge\tools\memory.mjs path
 ```
 
 - 默认输出中文人读格式；`--json` 输出机器可读 JSON（要在代码里解析时用）。
@@ -67,12 +67,12 @@ node D:\code\qq-bridge\tools\memory.mjs path
 写法建议：一条事实一行，短句，别写小说。例如：
 
 ```
-node D:\code\qq-bridge\tools\memory.mjs person 1000000002 --name 主人 --fact "喜欢短句，讨厌啰嗦" --fact "常用 xianapi 中转模型"
-node D:\code\qq-bridge\tools\memory.mjs daily "主人让我以后回答前先查记忆库"
+node C:\D\DSH\qq-bridge\tools\memory.mjs person 10001 --name 主人 --fact "喜欢短句，讨厌啰嗦" --fact "常用 xianapi 中转模型"
+node C:\D\DSH\qq-bridge\tools\memory.mjs daily "主人让我以后回答前先查记忆库"
 ```
 
 ## 边界
 
 - 记忆库工具挂了（报错、超时、找不到目录），**照常回答**，不要卡住、不要反复重试十几次；最多试一次，然后把失败如实说一句。
-- 不要去改 `C:\Users\you\Desktop\学习`（那是主人的学习笔记，禁写）。
+- 不要去改 `C:\Users\admin\Desktop\学习`（那是主人的学习笔记，禁写）。
 - 不要手写整套目录结构；`memory.mjs` 会自己建。要在细节上动手，直接编辑 md 文件也行，但必须保留 YAML frontmatter（`tags` / `updated` 至少两项）和 `[[相对路径|显示名]]` 链接风格。

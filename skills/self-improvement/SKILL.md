@@ -10,8 +10,8 @@ whenToUse: 被主人批评/纠正、发现自己重复同样的错误、或想�
 
 | 目标 | 路径 | 作用 |
 |---|---|---|
-| 人格 / 行为准则 | `D:\code\qq-bridge\qq-workspace\AGENTS.md` | DSH 按工作目录自动注入的系统提示，决定你是谁、怎么说话、守什么规矩 |
-| 长期记忆 | `C:\Users\you\Documents\Obsidian Vault\YourBot`（用 `tools/memory.mjs`） | 人物、群聊、日志、知识、反思 |
+| 人格 / 行为准则 | `C:\D\DSH\qq-bridge\qq-workspace\AGENTS.md` | DSH 按工作目录自动注入的系统提示，决定你是谁、怎么说话、守什么规矩 |
+| 长期记忆 | `C:\Users\admin\Documents\Obsidian Vault\大肥鱼`（用 `tools/memory.mjs`） | 人物、群聊、日志、知识、反思 |
 
 改动会在**下一次会话**生效（AGENTS.md 是按目录注入的）。
 
@@ -21,8 +21,8 @@ whenToUse: 被主人批评/纠正、发现自己重复同样的错误、或想�
 
 ```powershell
 $ts = Get-Date -Format yyyyMMdd-HHmmss
-New-Item -ItemType Directory -Force -Path D:\code\qq-bridge\state\persona-backup | Out-Null
-Copy-Item D:\code\qq-bridge\qq-workspace\AGENTS.md "D:\code\qq-bridge\state\persona-backup\AGENTS-$ts.md"
+New-Item -ItemType Directory -Force -Path C:\D\DSH\qq-bridge\state\persona-backup | Out-Null
+Copy-Item C:\D\DSH\qq-bridge\qq-workspace\AGENTS.md "C:\D\DSH\qq-bridge\state\persona-backup\AGENTS-$ts.md"
 ```
 
 或在 bash 里：
@@ -47,7 +47,7 @@ cp "C:/D/DSH/qq-bridge/qq-workspace/AGENTS.md" "C:/D/DSH/qq-bridge/state/persona
 ## 记忆也照同样规矩
 
 - 事实用 `person` / `group` / `note` **追加**，不要整篇覆盖；旧事实过时了，写一条新的（带日期），而不是删掉历史。
-- 阶段性总结写进 `50-反思/`，用 `node D:\code\qq-bridge\tools\reflect.mjs`（`--days 5` 看更久，`--force` 强制重跑；同一天默认只写一次）。
+- 阶段性总结写进 `50-反思/`，用 `node C:\D\DSH\qq-bridge\tools\reflect.mjs`（`--days 5` 看更久，`--force` 强制重跑；同一天默认只写一次）。
 - 反思笔记只写"我发现了什么 → 打算怎么改 → 下次怎么验证"，不要写空话。
 
 ## 改完必须做的三件事
@@ -57,13 +57,13 @@ cp "C:/D/DSH/qq-bridge/qq-workspace/AGENTS.md" "C:/D/DSH/qq-bridge/state/persona
 3. **留痕**：在当天日志里记一条，例如
 
    ```
-   node D:\code\qq-bridge\tools\memory.mjs daily "自我改进：AGENTS.md 第3节补充了'回答前先查记忆库'，原因：主人反馈我总是忘记上次说的事"
+   node C:\D\DSH\qq-bridge\tools\memory.mjs daily "自我改进：AGENTS.md 第3节补充了'回答前先查记忆库'，原因：主人反馈我总是忘记上次说的事"
    ```
 
 ## 出错了怎么回滚
 
 ```powershell
-Copy-Item "D:\code\qq-bridge\state\persona-backup\AGENTS-<时间戳>.md" D:\code\qq-bridge\qq-workspace\AGENTS.md -Force
+Copy-Item "C:\D\DSH\qq-bridge\state\persona-backup\AGENTS-<时间戳>.md" C:\D\DSH\qq-bridge\qq-workspace\AGENTS.md -Force
 ```
 
 回滚后要如实告诉主人"改坏了，已还原到某时间点的版本"。

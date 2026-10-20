@@ -7,47 +7,47 @@ whenToUse: 需要发图、撤回、翻记录、查成员/好友/群列表、发�
 # QQ工具
 
 你**本人就是这个 QQ 账号**（NapCat 机器人，OneBot v11）。聊天回复由桥接自动发出，
-但"额外动作"必须你自己动手：跑 `D:\code\qq-bridge\tools\qq.mjs`。
+但"额外动作"必须你自己动手：跑 `C:\D\DSH\qq-bridge\tools\qq.mjs`。
 
 ## 先看用法
 
 ```
-node D:\code\qq-bridge\tools\qq.mjs --help
-node D:\code\qq-bridge\tools\qq.mjs --list
-node D:\code\qq-bridge\tools\qq.mjs --help <action>
+node C:\D\DSH\qq-bridge\tools\qq.mjs --help
+node C:\D\DSH\qq-bridge\tools\qq.mjs --list
+node C:\D\DSH\qq-bridge\tools\qq.mjs --help <action>
 ```
 
 ## 快捷命令（真实可用）
 
 ```
-node D:\code\qq-bridge\tools\qq.mjs send <target> <文本>        # target = group:群号 或 QQ号
-node D:\code\qq-bridge\tools\qq.mjs image <target> <本地路径或URL>
-node D:\code\qq-bridge\tools\qq.mjs recall <message_id>
-node D:\code\qq-bridge\tools\qq.mjs me
-node D:\code\qq-bridge\tools\qq.mjs friends
-node D:\code\qq-bridge\tools\qq.mjs groups
-node D:\code\qq-bridge\tools\qq.mjs members <group_id>
-node D:\code\qq-bridge\tools\qq.mjs history <QQ号或群号> [条数]   # 默认 20 条，自动区分群聊/私聊
-node D:\code\qq-bridge\tools\qq.mjs qzone <正文> [--image <路径>]... [--right <1|4|16|64|128>] [--to <QQ号,QQ号>]
-node D:\code\qq-bridge\tools\qq.mjs qzone-public <正文> [--image <路径>]...
-node D:\code\qq-bridge\tools\qq.mjs qzone-del <tid>
-node D:\code\qq-bridge\tools\qq.mjs nick <昵称> | nick <QQ号> <备注> | nick <群号> <QQ号> <名片>
-node D:\code\qq-bridge\tools\qq.mjs ban <group_id> <user_id> [秒数]   # 默认 600，0 = 解除
-node D:\code\qq-bridge\tools\qq.mjs kick <群号> <QQ号> [true|false]
-node D:\code\qq-bridge\tools\qq.mjs poke <QQ号> | poke group:<群号> <QQ号>
+node C:\D\DSH\qq-bridge\tools\qq.mjs send <target> <文本>        # target = group:群号 或 QQ号
+node C:\D\DSH\qq-bridge\tools\qq.mjs image <target> <本地路径或URL>
+node C:\D\DSH\qq-bridge\tools\qq.mjs recall <message_id>
+node C:\D\DSH\qq-bridge\tools\qq.mjs me
+node C:\D\DSH\qq-bridge\tools\qq.mjs friends
+node C:\D\DSH\qq-bridge\tools\qq.mjs groups
+node C:\D\DSH\qq-bridge\tools\qq.mjs members <group_id>
+node C:\D\DSH\qq-bridge\tools\qq.mjs history <QQ号或群号> [条数]   # 默认 20 条，自动区分群聊/私聊
+node C:\D\DSH\qq-bridge\tools\qq.mjs qzone <正文> [--image <路径>]... [--right <1|4|16|64|128>] [--to <QQ号,QQ号>]
+node C:\D\DSH\qq-bridge\tools\qq.mjs qzone-public <正文> [--image <路径>]...
+node C:\D\DSH\qq-bridge\tools\qq.mjs qzone-del <tid>
+node C:\D\DSH\qq-bridge\tools\qq.mjs nick <昵称> | nick <QQ号> <备注> | nick <群号> <QQ号> <名片>
+node C:\D\DSH\qq-bridge\tools\qq.mjs ban <group_id> <user_id> [秒数]   # 默认 600，0 = 解除
+node C:\D\DSH\qq-bridge\tools\qq.mjs kick <群号> <QQ号> [true|false]
+node C:\D\DSH\qq-bridge\tools\qq.mjs poke <QQ号> | poke group:<群号> <QQ号>
 ```
 
 ## 常用 OneBot action（同样能透传）
 
 ```
-node D:\code\qq-bridge\tools\qq.mjs get_group_member_list '{"group_id":200000001}'
-node D:\code\qq-bridge\tools\qq.mjs get_group_msg_history '{"group_id":200000001,"count":20}'
-node D:\code\qq-bridge\tools\qq.mjs get_stranger_info '{"user_id":123456}'
-node D:\code\qq-bridge\tools\qq.mjs delete_msg '{"message_id":123}'
-node D:\code\qq-bridge\tools\qq.mjs send_group_forward_msg '{"group_id":200000001,"messages":[...]}'
-node D:\code\qq-bridge\tools\qq.mjs set_group_card '{"group_id":200000001,"user_id":123456,"card":"新名片"}'
-node D:\code\qq-bridge\tools\qq.mjs send_qzone_msg '{"content":"今天天气不错","ugc_right":64}'
-node D:\code\qq-bridge\tools\qq.mjs get_status
+node C:\D\DSH\qq-bridge\tools\qq.mjs get_group_member_list '{"group_id":20001}'
+node C:\D\DSH\qq-bridge\tools\qq.mjs get_group_msg_history '{"group_id":20001,"count":20}'
+node C:\D\DSH\qq-bridge\tools\qq.mjs get_stranger_info '{"user_id":123456}'
+node C:\D\DSH\qq-bridge\tools\qq.mjs delete_msg '{"message_id":123}'
+node C:\D\DSH\qq-bridge\tools\qq.mjs send_group_forward_msg '{"group_id":20001,"messages":[...]}'
+node C:\D\DSH\qq-bridge\tools\qq.mjs set_group_card '{"group_id":20001,"user_id":123456,"card":"新名片"}'
+node C:\D\DSH\qq-bridge\tools\qq.mjs send_qzone_msg '{"content":"今天天气不错","ugc_right":64}'
+node C:\D\DSH\qq-bridge\tools\qq.mjs get_status
 ```
 
 `send_qzone_msg` 参数：`content` 正文；`images` 图片数组（`file://` / `http(s)://` / `base64://`）；
@@ -70,5 +70,5 @@ node D:\code\qq-bridge\tools\qq.mjs get_status
 ## 排错
 
 - 连不上：NapCat 的 OneBot 端口是 **3001**，WebUI 是 **6099**；机器人没登录时所有 action 都会失败。
-- 先 `node D:\code\qq-bridge\tools\qq.mjs get_status` 自检，再决定要不要报错给主人。
+- 先 `node C:\D\DSH\qq-bridge\tools\qq.mjs get_status` 自检，再决定要不要报错给主人。
 - 发图失败：本地路径要存在，含空格的路径整体用双引号包住。
