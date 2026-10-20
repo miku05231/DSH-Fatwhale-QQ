@@ -54,6 +54,20 @@ const REQUIRED = [
   'launcher/bootstrap.ps1',
   'launcher/lib/ProcessControl.ps1',
   'launcher/lib/UiWindows.ps1',
+  'launcher/lib/TrayAppearance.ps1',
+  'assets/app-icon.ico',
+  'assets/app-icon.png',
+  'deepseek-waitou.png',
+  'docs/screenshots/console-overview-light.png',
+  'docs/screenshots/console-overview-dark.png',
+  'docs/screenshots/tray-menu-light.png',
+  'docs/screenshots/tray-menu-dark.png',
+  'docs/screenshots/tray-dialog-light.png',
+  'docs/screenshots/tray-dialog-dark.png',
+  'scripts/build-exe.ps1',
+  'tests/tray-appearance.ps1',
+  'tests/tray-appearance-test.mjs',
+  'tests/exe-host-test.mjs',
   'tools/qq.mjs',
   'tools/memory.mjs',
   'tests/blacklist-test.mjs',
@@ -92,6 +106,14 @@ function readText(file) {
   return fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
 }
 
+function localReadmeImages(text) {
+  const markdown = [...text.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map((match) => match[1]);
+  const html = [...text.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["']/gi)].map((match) => match[1]);
+  return [...new Set([...markdown, ...html])]
+    .filter((src) => !/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(src))
+    .map((src) => decodeURIComponent(src.split(/[?#]/)[0]));
+}
+
 function walk(dir, base = '') {
   const out = [];
   let entries = [];
@@ -122,24 +144,40 @@ async function main() {
   const outDir = path.join(tmpRoot, 'app');
 
   try {
-    section('1/6 打包器能跑通');
+    section('1/7 打包器能跑通');
     const build = run([PACKAGER, '--out', outDir, '--no-zip', '--force']);
     check(build.status === 0, '打包器退出码为 0', String(build.status));
     const buildOut = `${build.stdout ?? ''}${build.stderr ?? ''}`;
     check(buildOut.includes('脱敏自检通过'), '打包器自检通过');
     check(fs.existsSync(path.join(outDir, '打包信息.json')), '生成了 打包信息.json');
 
-    section('2/6 该有的文件都在');
+    section('2/7 该有的文件都在');
     for (const rel of REQUIRED) {
       check(fs.existsSync(path.join(outDir, rel)), `存在 ${rel}`);
     }
 
-    section('3/6 不该进包的东西不在');
+    section('3/7 展示图片和原始图标完整');
+    const readme = readText(path.join(outDir, 'README.md'));
+    const imageRefs = localReadmeImages(readme);
+    check(imageRefs.length >= 7, 'README 含应用图标与界面截图');
+    const missingImages = imageRefs.filter((rel) => !fs.existsSync(path.join(outDir, rel)));
+    check(missingImages.length === 0, 'README 的本地图片引用都能在产物中打开', missingImages.join('；'));
+    const sourceIcon = fs.readFileSync(path.join(ROOT, 'deepseek-waitou.png'));
+    const packagedIcon = fs.readFileSync(path.join(outDir, 'deepseek-waitou.png'));
+    check(packagedIcon.equals(sourceIcon), '根目录图标源文件按原始字节打包');
+    check(packagedIcon.equals(fs.readFileSync(path.join(outDir, 'assets', 'app-icon.png'))), '图标源文件与应用 PNG 图标一致');
+    const screenshots = walk(path.join(ROOT, 'docs', 'screenshots'));
+    const changedImages = screenshots.filter((rel) =>
+      !fs.readFileSync(path.join(ROOT, 'docs', 'screenshots', rel))
+        .equals(fs.readFileSync(path.join(outDir, 'docs', 'screenshots', rel))));
+    check(changedImages.length === 0, '展示截图按原始字节打包', changedImages.join('；'));
+
+    section('4/7 不该进包的东西不在');
     for (const rel of MUST_NOT_EXIST) {
       check(!fs.existsSync(path.join(outDir, rel)), `不存在 ${rel}`);
     }
 
-    section('4/6 产物里没有个人信息');
+    section('5/7 产物里没有个人信息');
     const files = walk(outDir);
     const hits = [];
     for (const rel of files) {
@@ -161,7 +199,7 @@ async function main() {
     const allow = example?.security?.allowFrom ?? [];
     check(Array.isArray(allow) && allow.length > 0 && allow.every((n) => String(n).length === 10), '示例配置里是占位 QQ 号', JSON.stringify(allow));
 
-    section('5/6 拷过去的代码是活的（真跑产物里的测试）');
+    section('6/7 拷过去的代码是活的（真跑产物里的测试）');
     const checkJs = run(['--check', path.join(outDir, 'src', 'index.js')]);
     check(checkJs.status === 0, '产物 src/index.js 语法正确');
     const checkSec = run(['--check', path.join(outDir, 'src', 'security.js')]);
@@ -178,7 +216,7 @@ async function main() {
     check(!/C:\\D\\DSH/i.test(processControl), 'ProcessControl 里没有写死本机路径');
     check(processControl.includes('$PSScriptRoot'), 'ProcessControl 靠 $PSScriptRoot 定位项目根目录');
 
-    section('6/6 默认会打 zip');
+    section('7/7 默认会打 zip');
     const zipDir = path.join(tmpRoot, 'app-zip');
     const zipped = run([PACKAGER, '--out', zipDir, '--force']);
     check(zipped.status === 0, '带 zip 打包退出码为 0', String(zipped.status));

@@ -1,6 +1,58 @@
+<!-- showcase:start -->
+<p align="center">
+  <a href="deepseek-waitou.png"><img src="deepseek-waitou.png" width="112" height="112" alt="QQ-DSH 应用图标"></a>
+</p>
+
 # QQ-DSH · 在 QQ 里和 DeepSeek Harness 聊天
 
 你在手机或电脑 QQ 里发消息，本机 DSH 执行并回复。
+
+应用图标源文件：[deepseek-waitou.png](deepseek-waitou.png)（保留原始 PNG）。
+
+## 项目展示
+
+控制台截图来自实际页面，状态、消息数、人格与记忆内容均为隔离的演示数据。托盘菜单和退出确认框使用 Windows 原生控件实际渲染，以下展示 150% 缩放效果。
+
+**控制台 · 概览**
+
+![控制台浅色概览：服务状态、消息统计与最近日志](docs/screenshots/console-overview-light.png)
+
+**托盘 · 右键退出**
+
+| 浅色 | 深色 |
+| :---: | :---: |
+| <img src="docs/screenshots/tray-menu-light.png" width="280" alt="浅色托盘右键退出菜单"> | <img src="docs/screenshots/tray-menu-dark.png" width="280" alt="深色托盘右键退出菜单"> |
+| <img src="docs/screenshots/tray-dialog-light.png" width="440" alt="浅色退出确认框"> | <img src="docs/screenshots/tray-dialog-dark.png" width="440" alt="深色退出确认框"> |
+
+菜单和确认框跟随 Windows 应用主题；退出时停止桥接与 NapCat，DSH 继续运行。
+
+<details>
+<summary>更多控制台页面：深色概览、记忆、人格、模型与移动端</summary>
+
+**深色概览**
+
+![控制台深色概览](docs/screenshots/console-overview-dark.png)
+
+**记忆 · 检索与定时反思**
+
+![记忆库、反思设置与检索结果](docs/screenshots/console-memory.png)
+
+**人格 · 多套人格管理**
+
+![人格库与人格编辑](docs/screenshots/console-personas.png)
+
+**模型 · 跟随桌面端或手动指定**
+
+![模型选择与思考强度设置](docs/screenshots/console-model.png)
+
+**移动端**
+
+<img src="docs/screenshots/console-mobile.png" width="390" alt="移动端控制台概览">
+
+</details>
+<!-- showcase:end -->
+
+## 工作方式
 
 ```
  手机/电脑 QQ  ←→  腾讯服务器
@@ -58,6 +110,8 @@
 图标文件放在 `assets\`：`app-icon.png` 给托盘和两个设置窗口用，`app-icon.ico` 给开机自启快捷方式用。**.ico 和 .png 都丢了也不会崩**，会退回旧版「彩色实心圆 + 字母 Q」。换图标只要替换这两个文件再重启托盘。
 
 右键菜单只有一个 **退出**（停止桥接与 NapCat，QQ 机器人下线；DSH 不受影响）。启动、停止、日志、重启、扫码、人格、会话、记忆库、开机自启这些操作全部搬到了控制台里，托盘只负责「在后台安静运行」和「退出」。
+
+菜单与退出确认框沿用控制台的 Material 3 配色，跟随 Windows 应用深浅色；菜单每次打开时重新读取主题。开启高对比度时使用系统颜色。确认框默认聚焦「取消」，回车、Esc 或关闭窗口都不会停服；确认「退出」后才按原有顺序停止桥接和 NapCat。
 
 > 纯 Shell 模式下 NapCat 就是本机的 QQ（`napcat\node.exe`），没有单独的 `QQ.exe`；「退出 NTQQ」等于停掉 NapCat 进程，退出时会一起结束。
 
@@ -293,7 +347,7 @@ node tools\package.mjs --force              # 覆盖已有目录
 | 方式 | 适合 | 怎么起 | 有没有界面 |
 | --- | --- | --- | --- |
 | 托盘启动器 | 自己电脑长期挂着 | 双击 `一键启动.cmd`（见「一、日常使用」） | 托盘 + 网页控制台 |
-| **本地 exe** | 想双击就跑、又不想开托盘 | 双击 `dist\qq-bridge.exe` | 一个黑窗口 + 网页控制台 |
+| **本地 exe** | 自己电脑长期挂着、直接双击启动 | 双击 `dist\qq-bridge.exe` | 托盘 + 网页控制台 |
 | **命令行 cmd** | 服务器 / 计划任务 / 远程 SSH | `qq-bridge.cmd start` 或 `node tools\cli.mjs start` | 只有网页控制台 |
 | **Docker** | NAS / 云主机 / 想隔离环境 | `docker compose up -d` | 网页控制台 |
 
@@ -303,11 +357,21 @@ node tools\package.mjs --force              # 覆盖已有目录
 powershell -ExecutionPolicy Bypass -File scripts\build-exe.ps1
 ```
 
-用 Windows 自带的 .NET Framework `csc.exe` 编译，**不联网、不需要 dotnet SDK、不需要 npm**，产物是 `dist\qq-bridge.exe`（96 KB 左右，带图标）。
+用 Windows 自带的 .NET Framework `csc.exe` 编译，**不联网、不需要 dotnet SDK、不需要 npm**，产物是 `dist\qq-bridge.exe`，内嵌应用图标及 `package.json` 中的产品版本。
 
-- 双击：起控制台 + 桥接，然后自动打开控制台网页；窗口可以直接关，服务在后台。
+- 双击：隐藏启动窗口，复用 `launcher\bootstrap.ps1` 依次启动 NapCat、桥接、控制台、DSH 和托盘，再打开控制台；需要先配置 Node.js 18+、NapCat 与 DSH。
 - 带参数：原样转给命令行（`qq-bridge.exe status`、`qq-bridge.exe stop`、`qq-bridge.exe logs bridge --lines 100`）。
 - exe 会自动往上找 `tools\cli.mjs`，所以放在工程根目录或 `dist\` 里都能用；找不到 Node 会明确提示。
+- `powershell -ExecutionPolicy Bypass -File scripts\make-release.ps1` 会生成带 exe 的便携包、源码包、单独启动器和 SHA-256 校验文件。exe 需要与工程文件一起分发。
+
+托盘与封装的隔离回归测试：
+
+```powershell
+node tests\tray-appearance-test.mjs --preview
+node tests\exe-host-test.mjs
+```
+
+第一条会把深浅色及 100% / 150% 缩放的实际渲染图保存在 `state\ui-preview\`。两条测试均使用临时目录和假服务，不会登录 QQ。
 
 ### 13.2 命令行
 

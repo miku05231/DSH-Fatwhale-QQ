@@ -121,6 +121,20 @@ const SUITE = [
     note: '左键单击绑定 + Open-WebUiConsole 拼出的 Edge 参数（不真的点鼠标）',
   },
   {
+    name: '托盘外观与退出',
+    file: 'tests/tray-appearance-test.mjs',
+    expect: ['失败 0 项'],
+    timeoutMs: 180_000,
+    note: '隔离渲染深浅色 / 100% 与 150% 缩放 / 键盘取消 / 退出顺序，不启动真实 QQ',
+  },
+  {
+    name: 'exe 启动器封装',
+    file: 'tests/exe-host-test.mjs',
+    expect: ['失败 0 项'],
+    timeoutMs: 180_000,
+    note: '真实编译 / 图标与版本 / 参数引用与退出码 / 隐藏引导，全部使用隔离桩',
+  },
+  {
     name: '记忆库（Obsidian）',
     file: 'tests/memory-test.mjs',
     expect: ['通过'],

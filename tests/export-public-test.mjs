@@ -32,6 +32,14 @@ function ok(cond, name, detail = '') {
   }
 }
 
+function localReadmeImages(text) {
+  const markdown = [...text.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map((match) => match[1]);
+  const html = [...text.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["']/gi)].map((match) => match[1]);
+  return [...new Set([...markdown, ...html])]
+    .filter((src) => !/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(src))
+    .map((src) => decodeURIComponent(src.split(/[?#]/)[0]));
+}
+
 /** 递归找出所有文件 */
 async function walk(dir, out = []) {
   const entries = await fsp.readdir(dir, { withFileTypes: true });
@@ -50,7 +58,7 @@ async function walk(dir, out = []) {
 async function main() {
   const out = path.join(await fsp.mkdtemp(path.join(os.tmpdir(), 'qq-public-')), 'repo');
 
-  console.log('[1/4 跑导出脚本]');
+  console.log('[1/5 跑导出脚本]');
   const run = spawnSync(process.execPath, [TOOL, '--out', out, '--force'], {
     cwd: PROJECT_ROOT,
     encoding: 'utf8',
@@ -60,7 +68,7 @@ async function main() {
   ok(String(run.stdout).includes('脱敏自检通过'), '脚本自检通过');
   const files = await walk(out);
 
-  console.log('\n[2/4 该有的文件都在]');
+  console.log('\n[2/5 该有的文件都在]');
   const required = [
     'README.md',
     'LICENSE',
@@ -76,13 +84,43 @@ async function main() {
     'launcher/Launcher.ps1',
     'tests/run-all.mjs',
     'docs/控制台架构.md',
+    'deepseek-waitou.png',
+    'assets/app-icon.png',
+    'docs/screenshots/console-overview-light.png',
+    'docs/screenshots/console-overview-dark.png',
+    'docs/screenshots/tray-menu-light.png',
+    'docs/screenshots/tray-menu-dark.png',
+    'docs/screenshots/tray-dialog-light.png',
+    'docs/screenshots/tray-dialog-dark.png',
   ];
   for (const rel of required) {
     const full = path.join(out, rel.split('/').join(path.sep));
     ok(fs.existsSync(full), `产物含 ${rel}`);
   }
 
-  console.log('\n[3/4 不该出的东西一个都没有]');
+  console.log('\n[3/5 项目展示完整保留]');
+  const readme = await fsp.readFile(path.join(out, 'README.md'), 'utf8');
+  const sourceReadme = await fsp.readFile(path.join(PROJECT_ROOT, 'README.md'), 'utf8');
+  const showcasePattern = /<!-- showcase:start -->[\s\S]*?<!-- showcase:end -->/;
+  const sourceShowcase = sourceReadme.match(showcasePattern)?.[0];
+  const exportedShowcase = readme.match(showcasePattern)?.[0];
+  ok(Boolean(sourceShowcase) && exportedShowcase === sourceShowcase, '公开 README 复用源 README 的图标与展示区');
+  ok((readme.match(/<!-- showcase:start -->/g) ?? []).length === 1, '展示区只生成一次');
+  const imageRefs = localReadmeImages(readme);
+  ok(imageRefs.length >= 7, '公开 README 含应用图标与界面截图');
+  const missingImages = imageRefs.filter((rel) => !fs.existsSync(path.join(out, rel)));
+  ok(missingImages.length === 0, '公开 README 的本地图片引用都能打开', missingImages.join('; '));
+  const sourceIcon = fs.readFileSync(path.join(PROJECT_ROOT, 'deepseek-waitou.png'));
+  const exportedIcon = fs.readFileSync(path.join(out, 'deepseek-waitou.png'));
+  ok(exportedIcon.equals(sourceIcon), '根目录图标源文件按原始字节导出');
+  ok(exportedIcon.equals(fs.readFileSync(path.join(out, 'assets', 'app-icon.png'))), '图标源文件与应用 PNG 图标一致');
+  const screenshotRoot = path.join(PROJECT_ROOT, 'docs', 'screenshots');
+  const screenshots = await walk(screenshotRoot);
+  const changedImages = screenshots.filter((file) =>
+    !fs.readFileSync(file).equals(fs.readFileSync(path.join(out, 'docs', 'screenshots', path.relative(screenshotRoot, file)))));
+  ok(changedImages.length === 0, '展示截图按原始字节导出', changedImages.map((file) => path.relative(screenshotRoot, file)).join('; '));
+
+  console.log('\n[4/5 不该出的东西一个都没有]');
   const forbiddenDirs = ['config.json', 'state', 'logs', 'napcat', 'node_modules', '.env', 'qq-workspace'];
   for (const rel of forbiddenDirs) {
     ok(!fs.existsSync(path.join(out, rel)), `没有 ${rel}`);
@@ -103,14 +141,13 @@ async function main() {
   }
   ok(leaks.length === 0, '产物里没有 QQ 号/个人路径/私有端点/密钥', leaks.slice(0, 5).join('; '));
 
-  console.log('\n[4/4 产物自身可跑]');
+  console.log('\n[5/5 产物自身可跑]');
   const check = spawnSync(process.execPath, ['--check', path.join(out, 'src', 'plugins.js')], { encoding: 'utf8', timeout: 30000 });
   ok(check.status === 0, '产物里的 src/plugins.js 语法正确');
   const pkg = path.join(out, 'package.json');
   ok(!fs.existsSync(pkg), '没有 package.json（零依赖，不需要 npm install）');
 
-  const readme = await fsp.readFile(path.join(out, 'README.md'), 'utf8');
-  ok(/qq-dsh-bridge/.test(readme) && /MIT/.test(readme), 'README 有项目名与许可说明');
+  ok(/QQ-DSH/.test(readme) && /MIT/.test(readme), 'README 有项目名与许可说明');
   ok(/NapCat/.test(readme) && /封号风险|服务条款/.test(readme), 'README 写清了 NapCat 与风险提示');
 
   await fsp.rm(path.dirname(out), { recursive: true, force: true }).catch(() => {});

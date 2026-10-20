@@ -34,6 +34,7 @@ const ROOT = path.resolve(HERE, '..');
 const INCLUDE_DIRS = ['src', 'launcher', 'tools', 'tests', 'docs', 'patches', 'assets', 'scripts', 'docker'];
 const INCLUDE_FILES = [
   'README.md',
+  'deepseek-waitou.png',
   'LICENSE',
   'config.example.json',
   'package.json',

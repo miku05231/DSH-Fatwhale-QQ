@@ -39,6 +39,7 @@
 |---|---|
 | `launcher\lib\ProcessControl.ps1` | 进程探测、启动、停止；NapCat 登录态判定；日志读取 |
 | `launcher\lib\UiWindows.ps1` | 人格编辑窗口、会话管理窗口（两个 WinForms Form） |
+| `launcher\lib\TrayAppearance.ps1` | 托盘菜单和退出确认框的外观，只定义函数；可选，失败时回退原生控件 |
 | `launcher\Launcher.ps1` | 托盘图标、右键菜单、定时刷新、把所有功能接起来 |
 | `一键启动.cmd` | 一键启动入口（lead 负责） |
 
@@ -137,6 +138,8 @@ function Show-SessionWindow
 - 左键单击托盘 → `Open-WebUiConsole`（Edge `--app=` 打开控制台）；不绑双击，避免弹出两个窗口
 - 退出时必须先 `Stop-Bridge`、`Stop-NapCat`，再销毁图标退出；**不再** `Stop-Dsh`
 - 纯 Shell 模式下 NapCat 就是本机的 QQ，没有独立的 `QQ.exe`，停 NapCat 即等于退出 NTQQ
+
+外观由 `TrayAppearance.ps1` 统一实现：菜单和退出确认框使用控制台 `app.css` 的 Material 3 色值，读取 `AppsUseLightTheme` 跟随 Windows 应用主题，菜单打开时刷新主题，高对比度使用系统渲染。菜单保留完整的退出项文字与无障碍名称，以两行显示「退出」和「停止桥接与 NapCat」。确认框默认焦点、回车和 Esc 均为取消；同一时刻只允许一个退出确认框。外观失败时保留原生菜单和默认选择「否」的系统确认框。
 
 **刷新**：每 3 秒刷新图标颜色与状态文字（用 `System.Windows.Forms.Timer`）。
 **日志**：写 `D:\code\qq-bridge\state\launcher.log`，保留最近 500 行。

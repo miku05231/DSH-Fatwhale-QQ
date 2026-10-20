@@ -7,9 +7,10 @@
     System.Windows.Forms / System.Drawing。托盘图标与窗口图标用 assets\app-icon.png
     （快捷方式用 assets\app-icon.ico），状态用右下角的小圆点表示，头像本身不变。
 
-    本脚本只负责「托盘、右键菜单、定时刷新、把功能接起来」，具体能力来自两个同级模块：
+    本脚本只负责「托盘、右键菜单、定时刷新、把功能接起来」，具体能力来自同级模块：
         lib\ProcessControl.ps1   进程探测 / 启动 / 停止 / 登录态 / 日志
         lib\UiWindows.ps1        人格设置窗口 / 会话管理窗口
+        lib\TrayAppearance.ps1   托盘菜单 / 退出确认框外观（可选）
 
     图标状态（头像右下角的小点；正常时不画点）：
         无点      NapCat 已登录 且 DSH 运行中（绿色 #2ECC71）
@@ -80,6 +81,7 @@ $script:ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $script:LauncherD
 $script:LibDir = Join-Path $script:LauncherDir 'lib'
 $script:ProcessControlPath = Join-Path $script:LibDir 'ProcessControl.ps1'
 $script:UiWindowsPath = Join-Path $script:LibDir 'UiWindows.ps1'
+$script:TrayAppearancePath = Join-Path $script:LibDir 'TrayAppearance.ps1'
 
 $script:StateDir = Join-Path $script:ProjectRoot 'state'
 $script:LogPath = Join-Path $script:StateDir 'launcher.log'
@@ -128,6 +130,7 @@ $script:RequireDsh = $true
 
 # 运行期状态
 $script:Exiting = $false
+$script:ExitPromptOpen = $false
 $script:LastLevel = ''
 $script:LastSummary = ''
 $script:LastProblem = ''
@@ -192,6 +195,13 @@ try {
     }
     exit 1
 }
+
+# 外观是可选模块，缺失时仍可使用原生菜单与确认框。
+try {
+    if (Test-Path -LiteralPath $script:TrayAppearancePath -PathType Leaf) {
+        . $script:TrayAppearancePath
+    }
+} catch { }
 
 # ---------------------------------------------------------------- 单实例互斥体
 
@@ -1404,7 +1414,7 @@ function Open-WebUiConsole {
     # 没起来就给一句人话，别让用户对着空窗口发呆
     if (-not (Test-ConsoleListening $port)) {
         Write-LauncherLog ('控制台未监听端口 ' + $port + '，已提示用户') 'WARN'
-        Show-Balloon '控制台还没启动' ('端口 ' + $port + ' 上没有服务在跑。请先在菜单里点「一键启动全部」，控制台会随启动流程一起起来。') ([System.Windows.Forms.ToolTipIcon]::Warning)
+        Show-Balloon '控制台还没启动' ('端口 ' + $port + ' 上没有服务在跑。请先双击 qq-bridge.exe 或「一键启动.cmd」，控制台会随启动流程一起起来。') ([System.Windows.Forms.ToolTipIcon]::Warning)
         return
     }
 
@@ -1561,16 +1571,25 @@ function Show-SessionManager {
 
 # ---------------------------------------------------------------- 退出
 
-# 退出流程：确认 → Stop-NapCat → Stop-Dsh → 销毁托盘图标 → 退出
+# 退出流程：确认 → Stop-Bridge → Stop-NapCat → 销毁托盘图标 → 退出
 function Invoke-LauncherExit {
-    if ($script:Exiting) { return }
+    if ($script:Exiting -or $script:ExitPromptOpen) { return }
 
-    $answer = [System.Windows.Forms.MessageBox]::Show(
-        ('确定要退出「QQ-DSH 启动器」吗？' + "`r`n`r`n" + '退出前会停止桥接和 NapCat，QQ 机器人下线；DSH 继续运行。'),
-        '退出 QQ-DSH 启动器',
-        [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Question,
-        [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+    $script:ExitPromptOpen = $true
+    try {
+        try {
+            $answer = Show-LauncherExitConfirmation -Icon $script:IconGreen
+        } catch {
+            $answer = [System.Windows.Forms.MessageBox]::Show(
+                ('确定要退出「QQ-DSH 启动器」吗？' + "`r`n`r`n" + '退出前会停止桥接和 NapCat，QQ 机器人下线；DSH 继续运行。'),
+                '退出 QQ-DSH 启动器',
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Question,
+                [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+        }
+    } finally {
+        $script:ExitPromptOpen = $false
+    }
 
     if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) {
         Write-LauncherLog '用户取消了退出'
@@ -1688,9 +1707,16 @@ try {
     # 用户要求（2026-10-20）：菜单太杂，其余操作全部搬进控制台。
     # 托盘本身只负责「在后台运行」和「退出」；左键单击仍然直达控制台。
     # 退出会停掉桥接和 NapCat（纯 Shell 模式下 NapCat 就是本机的 QQ，没有单独的 QQ.exe）。
-    $script:Menu = [System.Windows.Forms.ContextMenuStrip]::new()
-    $script:Menu.ShowImageMargin = $false
-    $null = Add-LauncherMenuItem -Collection $script:Menu.Items -Text '退出（停止桥接与 NapCat）' -OnClick { Invoke-MenuAction '退出' { Invoke-LauncherExit } }
+    try {
+        $script:Menu = New-LauncherTrayMenu
+        $script:Menu.Items[0].Add_Click({ Invoke-MenuAction '退出' { Invoke-LauncherExit } })
+    } catch {
+        Write-LauncherLog ('托盘外观加载失败，使用原生菜单：' + $_.Exception.Message) 'WARN'
+        if ($null -ne $script:Menu) { $script:Menu.Dispose() }
+        $script:Menu = [System.Windows.Forms.ContextMenuStrip]::new()
+        $script:Menu.ShowImageMargin = $false
+        $null = Add-LauncherMenuItem -Collection $script:Menu.Items -Text '退出（停止桥接与 NapCat）' -OnClick { Invoke-MenuAction '退出' { Invoke-LauncherExit } }
+    }
     # --- 托盘图标
     $script:TrayIcon = [System.Windows.Forms.NotifyIcon]::new()
     $script:TrayIcon.Icon = $script:IconRed

@@ -35,7 +35,9 @@ const INCLUDE = [
   'docs/控制台架构.md',
   'docs/测试清单.md',
   'docs/Docker部署.md',
+  'docs/screenshots',
   'README.md',
+  'deepseek-waitou.png',
   'AGENTS.md',
   'scripts',
   'docker',
@@ -98,11 +100,7 @@ const FORBIDDEN = [
   /sk-[A-Za-z0-9]{16,}/,
 ];
 
-const PUBLIC_README = `# qq-dsh-bridge
-
-把 [DeepSeek Harness](https://github.com/deepseek-ai)（DSH）接到 QQ 上的桥接程序：私聊、群聊、@ 唤醒、长期记忆、人格设定、模型跟随，外加一个 Material You 风格的本机控制台和一套插件系统。
-
-> 非官方项目。QQ 侧通过第三方协议端 [NapCat](https://github.com/NapNeko/NapCatQQ)（OneBot 11）连接，**不符合腾讯服务条款，有封号风险**。请使用小号，并自行评估。
+const PUBLIC_README = `> 非官方项目。QQ 侧通过第三方协议端 [NapCat](https://github.com/NapNeko/NapCatQQ)（OneBot 11）连接，**不符合腾讯服务条款，有封号风险**。请使用小号，并自行评估。
 
 ## 它能做什么
 
@@ -361,6 +359,17 @@ function redact(text) {
   return out;
 }
 
+async function publicReadme() {
+  const source = await fsp.readFile(path.join(ROOT, 'README.md'), 'utf8');
+  const startMarker = '<!-- showcase:start -->';
+  const endMarker = '<!-- showcase:end -->';
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  if (start < 0 || end < 0) throw new Error('README.md 缺少完整的 showcase 展示区标记');
+  const showcase = source.slice(start, end + endMarker.length);
+  return `${redact(showcase)}\n\n${PUBLIC_README}`;
+}
+
 /** 复制一个文件；文本文件顺便脱敏，.ps1 保持 BOM */
 async function copyOne(srcPath, destPath) {
   const ext = path.extname(srcPath).toLowerCase();
@@ -410,6 +419,7 @@ async function walk(dir, visit) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const out = args.out;
+  const readme = await publicReadme();
 
   if (fs.existsSync(out)) {
     if (!args.force) {
@@ -444,7 +454,7 @@ async function main() {
 
   // 生成公开文档与模板
   const generated = [
-    ['README.md', PUBLIC_README],
+    ['README.md', readme],
     ['LICENSE', LICENSE],
     ['.gitignore', GITIGNORE],
     ['.gitattributes', GITATTRIBUTES],
