@@ -570,13 +570,17 @@ textarea {
 
 /* --------------------------------------------------------------- 统计行 */
 .stat-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
-  gap: var(--sp-2);
-  margin-top: var(--sp-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin-top: var(--sp-4);
+  margin-bottom: var(--sp-4);
 }
 
 .stat {
+  flex: 1 1 128px;
+  max-width: 200px;
+  min-width: 112px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -584,6 +588,24 @@ textarea {
   padding: var(--sp-3) var(--sp-2);
   border-radius: var(--r-md);
   background: var(--surface-container-high);
+  border: 1px solid var(--outline-variant);
+}
+
+/* 卡片里相邻的块之间留出呼吸，不要贴在一起 */
+.card > .search-field,
+.card > .chips,
+.card > .empty,
+.card > .result-list,
+.card > form + .chips {
+  margin-top: var(--sp-3);
+}
+
+.card > .search-field {
+  margin-top: var(--sp-4);
+}
+
+.card > .stat-row + .search-field {
+  margin-top: var(--sp-4);
 }
 
 .stat__value {
