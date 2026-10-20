@@ -11,8 +11,30 @@ const SCRIPT = path.join(ROOT, 'scripts', 'install-update.ps1');
 const PS = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const VERSION = '0.2.0';
 const TEMP = fs.mkdtempSync(path.join(os.tmpdir(), "qq-update-中文 space's-"));
+const TEMP_PARENT = fs.realpathSync.native(path.dirname(TEMP));
+const onlyIndex = process.argv.indexOf('--only');
+const only = onlyIndex < 0 ? '' : String(process.argv[onlyIndex + 1] ?? '');
 let passed = 0;
 let failed = 0;
+
+function cleanupTempDirectory(root, expectedParent) {
+  const entry = fs.lstatSync(root);
+  assert.ok(entry.isDirectory() && !entry.isSymbolicLink(), 'Cleanup root must be a real directory.');
+  const canonical = fs.realpathSync.native(root);
+  assert.equal(path.dirname(canonical), expectedParent, 'Cleanup must stay within the original temporary parent.');
+  assert.equal(path.basename(canonical), path.basename(root), 'Cleanup directory name must match the original fixture.');
+  assert.ok(path.basename(canonical).startsWith('qq-update-'), 'Cleanup requires the test fixture prefix.');
+  const delay = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.rmSync(canonical, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt >= 10 || !['EPERM', 'EBUSY', 'ENOTEMPTY', 'EACCES'].includes(error.code)) throw error;
+      Atomics.wait(delay, 0, 0, (attempt + 1) * 100);
+    }
+  }
+}
 
 function crc32(buffer) {
   let crc = 0xffffffff;
@@ -71,6 +93,21 @@ function write(root, rel, body) {
   fs.writeFileSync(target, body);
 }
 
+function shortPath(target) {
+  const code = [
+    `Add-Type -Namespace QQUpdateTest -Name NativePath -MemberDefinition '[System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint="GetShortPathNameW", CharSet=System.Runtime.InteropServices.CharSet.Unicode, ExactSpelling=true, SetLastError=true)] public static extern uint GetShortPathName(string path, System.Text.StringBuilder result, uint length);'`,
+    '$buffer = New-Object Text.StringBuilder 32768',
+    `$length = [QQUpdateTest.NativePath]::GetShortPathName('${target.replaceAll("'", "''")}', $buffer, 32768)`,
+    "if ($length -eq 0 -or $length -ge 32768) { throw 'Cannot obtain short path for the regression fixture.' }",
+    '[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($buffer.ToString())))',
+  ].join('\r\n');
+  const result = spawnSync(PS, ['-NoProfile', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')], {
+    encoding: 'utf8', windowsHide: true, timeout: 15_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return Buffer.from(result.stdout.trim(), 'base64').toString('utf8');
+}
+
 const application = {
   'package.json': JSON.stringify({ name: 'qq-bridge', version: VERSION }),
   'qq-bridge.exe': 'new launcher',
@@ -111,13 +148,14 @@ function fixture(name, { config = {}, entries = [], alter = (items) => items, pa
 
 function run(f, extra = [], { skipProcesses = true, skipRestart = true } = {}) {
   const result = spawnSync(PS, [
-    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(f.jobDir, 'install-update.ps1'),
-    '-JobPath', f.jobPath, ...(skipProcesses ? ['-SkipProcessActions'] : []), ...(skipRestart ? ['-SkipRestart'] : []), ...extra,
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(f.executionJobDir ?? f.jobDir, 'install-update.ps1'),
+    '-JobPath', f.executionJobPath ?? f.jobPath, ...(skipProcesses ? ['-SkipProcessActions'] : []), ...(skipRestart ? ['-SkipRestart'] : []), ...extra,
   ], { encoding: 'utf8', windowsHide: true, timeout: 90_000 });
   if (result.error) throw result.error;
   let state;
   if (fs.existsSync(f.resultPath)) state = JSON.parse(fs.readFileSync(f.resultPath, 'utf8').replace(/^\uFEFF/, ''));
-  return { code: result.status, state, output: `${result.stdout}${result.stderr}` };
+  const stateDiagnostic = state ? `\nUpdate result: ${JSON.stringify(state)}` : '\nNo update result was written.';
+  return { code: result.status, state, output: `${result.stdout}${result.stderr}${stateDiagnostic}` };
 }
 
 function unchanged(f) {
@@ -126,6 +164,7 @@ function unchanged(f) {
 }
 
 function test(name, callback) {
+  if (only && !name.includes(only)) return;
   try { callback(); passed++; console.log(`PASS ${name}`); }
   catch (error) { failed++; console.error(`FAIL ${name}: ${error.stack ?? error}`); }
 }
@@ -462,7 +501,7 @@ if (process.platform !== 'win32') {
     });
     test('another installation mutex rejects the job without overwriting its result or lock', () => {
       const f = fixture('mutex');
-      const mutexName = `Local\\QQBridgeUpdater-${createHash('sha256').update(f.root.toLowerCase()).digest('hex').toUpperCase()}`;
+      const mutexName = `Local\\QQBridgeUpdater-${createHash('sha256').update(fs.realpathSync.native(f.root).toLowerCase()).digest('hex').toUpperCase()}`;
       const ready = path.join(f.jobDir, 'mutex-ready');
       const release = path.join(f.jobDir, 'mutex-release');
       const psQuote = (value) => `'${value.replaceAll("'", "''")}'`;
@@ -523,6 +562,56 @@ if (process.platform !== 'win32') {
         for (const child of children) child.kill();
       }
     });
+    test('8.3 installer arguments and process paths resolve to the same verified installation', () => {
+      const f = fixture('short-path-alias');
+      const canonicalRoot = fs.realpathSync.native(f.root);
+      const aliasRoot = shortPath(canonicalRoot);
+      const children = [];
+      const launch = (file) => {
+        write(path.dirname(file), path.basename(file), 'setInterval(() => {}, 1000);');
+        const child = spawn(process.execPath, [file], { stdio: 'ignore', windowsHide: true });
+        children.push(child);
+        assert.ok(child.pid);
+        return child.pid;
+      };
+      try {
+        const bridgePid = launch(path.join(aliasRoot, 'src/index.js'));
+        const consolePid = launch(path.join(aliasRoot, 'src/webui/server.mjs'));
+        const otherPid = launch(path.join(TEMP, 'alias-other-project/src/index.js'));
+        Object.assign(f.job, {
+          projectRoot: canonicalRoot,
+          packagePath: fs.realpathSync.native(f.job.packagePath),
+          resultPath: path.join(canonicalRoot, 'state/updates/result.json'),
+          consolePid,
+        });
+        fs.writeFileSync(f.jobPath, JSON.stringify(f.job));
+        f.executionJobDir = path.join(aliasRoot, 'state/updates', f.job.jobId);
+        f.executionJobPath = path.join(f.executionJobDir, 'job.json');
+        const result = run(f, [], { skipProcesses: false });
+        assert.equal(result.code, 0, result.output);
+        assert.equal(result.state.phase, 'complete');
+        assert.throws(() => process.kill(bridgePid, 0));
+        assert.throws(() => process.kill(consolePid, 0));
+        assert.doesNotThrow(() => process.kill(otherPid, 0));
+      } finally {
+        for (const child of children) child.kill();
+      }
+    });
+    test('another application mentioning this installation in a data argument is not stopped', () => {
+      const f = fixture('argument-owner');
+      const otherScript = path.join(TEMP, 'argument-other-project/worker.js');
+      write(path.dirname(otherScript), path.basename(otherScript), 'setInterval(() => {}, 1000);');
+      const child = spawn(process.execPath, [otherScript, '--data', path.join(f.root, 'src/index.js')], {
+        stdio: 'ignore', windowsHide: true,
+      });
+      assert.ok(child.pid);
+      try {
+        const result = run(f, [], { skipProcesses: false });
+        assert.equal(result.code, 0, result.output);
+        assert.equal(result.state.phase, 'complete');
+        assert.doesNotThrow(() => process.kill(child.pid, 0));
+      } finally { child.kill(); }
+    });
     test('an unverified console PID is refused without killing that process', () => {
       const f = fixture('process-owner', { patchJob: { consolePid: process.pid } });
       const result = run(f, [], { skipProcesses: false });
@@ -541,7 +630,7 @@ if (process.platform !== 'win32') {
       unchanged(f);
     });
   } finally {
-    fs.rmSync(TEMP, { recursive: true, force: true });
+    cleanupTempDirectory(TEMP, TEMP_PARENT);
   }
 }
 

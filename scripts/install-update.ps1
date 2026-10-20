@@ -55,6 +55,53 @@ function Assert-NoReparse([string]$Path) {
     }
 }
 
+function Initialize-NativePaths {
+    if ($null -ne ('QQBridgeUpdater.NativePaths' -as [type])) { return }
+    Add-Type -Namespace QQBridgeUpdater -Name NativePaths -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint = "GetLongPathNameW", CharSet = System.Runtime.InteropServices.CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+public static extern uint GetLongPathName(string path, System.Text.StringBuilder result, uint capacity);
+[System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+private static extern System.IntPtr CommandLineToArgvW(string commandLine, out int argumentCount);
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+private static extern System.IntPtr LocalFree(System.IntPtr value);
+public static string[] ParseCommandLine(string commandLine) {
+    int count;
+    System.IntPtr arguments = CommandLineToArgvW(commandLine, out count);
+    if (arguments == System.IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+    try {
+        string[] result = new string[count];
+        for (int i = 0; i < count; i++) {
+            result[i] = System.Runtime.InteropServices.Marshal.PtrToStringUni(
+                System.Runtime.InteropServices.Marshal.ReadIntPtr(arguments, i * System.IntPtr.Size));
+        }
+        return result;
+    } finally { LocalFree(arguments); }
+}
+'@
+}
+
+function Get-CanonicalLocalPath([string]$Value) {
+    $fullPath = Get-FullLocalPath $Value
+    Assert-NoReparse $fullPath
+    Initialize-NativePaths
+    $probe = $fullPath
+    $tail = New-Object 'System.Collections.Generic.Stack[string]'
+    while (-not (Test-Path -LiteralPath $probe)) {
+        $tail.Push([IO.Path]::GetFileName($probe))
+        $parent = [IO.Path]::GetDirectoryName($probe)
+        if (-not $parent -or (Test-SamePath $parent $probe)) { throw 'Cannot resolve the update path.' }
+        $probe = $parent
+    }
+    $buffer = New-Object Text.StringBuilder 32768
+    $length = [QQBridgeUpdater.NativePaths]::GetLongPathName($probe, $buffer, 32768)
+    if ($length -eq 0 -or $length -ge 32768) { throw 'Cannot resolve the long form of the update path.' }
+    $canonical = $buffer.ToString()
+    while ($tail.Count -gt 0) { $canonical = [IO.Path]::Combine($canonical, $tail.Pop()) }
+    $canonical = Get-FullLocalPath $canonical
+    Assert-NoReparse $canonical
+    return $canonical
+}
+
 function Assert-NotGitCheckout([string]$Root) {
     $probe = $Root
     while ($probe) {
@@ -186,6 +233,7 @@ function Resolve-DataPath([string]$Value) {
         throw 'A configured data path contains an unresolved environment variable.'
     }
     if (-not [IO.Path]::IsPathRooted($expanded)) { $expanded = Join-Path $script:ProjectRoot $expanded }
+    if ($expanded -match '^[A-Za-z]:[\\/]') { return Get-CanonicalLocalPath $expanded }
     return [IO.Path]::GetFullPath($expanded).TrimEnd('\', '/')
 }
 
@@ -245,7 +293,7 @@ function Assert-ManagedName([string]$Relative, [bool]$IsDirectory) {
 }
 
 function Get-TargetPath([string]$Relative) {
-    $target = Get-FullLocalPath (Join-Path $script:ProjectRoot $Relative.Replace('/', '\'))
+    $target = Get-CanonicalLocalPath (Join-Path $script:ProjectRoot $Relative.Replace('/', '\'))
     if (-not (Test-Within $target $script:ProjectRoot) -or (Test-SamePath $target $script:ProjectRoot)) {
         throw 'Archive destination escaped the application directory.'
     }
@@ -255,9 +303,27 @@ function Get-TargetPath([string]$Relative) {
 
 function Test-ProcessScript($Process, [string]$ScriptPath, [string[]]$Names) {
     if ($null -eq $Process -or $Names -notcontains [string]$Process.Name) { return $false }
-    $line = ([string]$Process.CommandLine).Replace('/', '\')
-    $pattern = '(?i)(?:^|[\s"])' + [regex]::Escape($ScriptPath) + '(?=$|[\s"])'
-    return [regex]::IsMatch($line, $pattern)
+    $line = [string]$Process.CommandLine
+    if ([string]::IsNullOrWhiteSpace($line)) { return $false }
+    try {
+        $expected = Get-CanonicalLocalPath $ScriptPath
+        $arguments = [QQBridgeUpdater.NativePaths]::ParseCommandLine($line)
+        $entry = ''
+        if ([string]$Process.Name -ieq 'node.exe') {
+            if ($arguments.Length -gt 1) { $entry = $arguments[1] }
+        } else {
+            for ($index = 1; $index -lt $arguments.Length; $index++) {
+                if ($arguments[$index] -ieq '-Command' -or $arguments[$index] -ieq '-EncodedCommand') { return $false }
+                if ($arguments[$index] -ieq '-File') {
+                    if ($index + 1 -lt $arguments.Length) { $entry = $arguments[$index + 1] }
+                    break
+                }
+            }
+        }
+        if ($entry -notmatch '^[A-Za-z]:[\\/]' -or $entry -notmatch '\.(?:js|mjs|ps1)$') { return $false }
+        return Test-SamePath (Get-CanonicalLocalPath $entry) $expected
+    } catch { }
+    return $false
 }
 
 function Get-AppProcesses {
@@ -430,7 +496,7 @@ try {
     if ($TestFailAfterFiles -ge 0 -and -not ($SkipProcessActions -and $SkipRestart)) {
         throw 'The failure injection hook requires both isolated-test switches.'
     }
-    $jobFile = Get-FullLocalPath $JobPath
+    $jobFile = Get-CanonicalLocalPath $JobPath
     Assert-NoReparse $jobFile
     $script:Job = Read-JsonFile $jobFile 65536
     if ((Get-Field $script:Job 'schemaVersion') -ne 1) { throw 'Unsupported update job schema.' }
@@ -439,7 +505,7 @@ try {
     if ($jobId -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{7,79}$' -or $version -notmatch $script:VersionPattern) {
         throw 'Invalid update job identifier or version.'
     }
-    $script:ProjectRoot = Get-FullLocalPath ([string](Get-Field $script:Job 'projectRoot'))
+    $script:ProjectRoot = Get-CanonicalLocalPath ([string](Get-Field $script:Job 'projectRoot'))
     if ($script:ProjectRoot.Length -le 3 -or -not [IO.Directory]::Exists($script:ProjectRoot)) {
         throw 'Invalid application directory.'
     }
@@ -449,9 +515,9 @@ try {
     $jobDirectory = Join-Path $updates $jobId
     $expectedJob = Join-Path $jobDirectory 'job.json'
     $expectedScript = Join-Path $jobDirectory 'install-update.ps1'
-    $package = Get-FullLocalPath ([string](Get-Field $script:Job 'packagePath'))
-    $result = Get-FullLocalPath ([string](Get-Field $script:Job 'resultPath'))
-    if (-not (Test-SamePath $jobFile $expectedJob) -or -not (Test-SamePath $PSCommandPath $expectedScript) -or
+    $package = Get-CanonicalLocalPath ([string](Get-Field $script:Job 'packagePath'))
+    $result = Get-CanonicalLocalPath ([string](Get-Field $script:Job 'resultPath'))
+    if (-not (Test-SamePath $jobFile $expectedJob) -or -not (Test-SamePath (Get-CanonicalLocalPath $PSCommandPath) $expectedScript) -or
         -not (Test-SamePath ([IO.Path]::GetDirectoryName($package)) $jobDirectory) -or
         [IO.Path]::GetExtension($package) -ne '.zip' -or
         -not (Test-SamePath $result (Join-Path $updates 'result.json'))) {

@@ -159,7 +159,7 @@ const SUITE = [
     name: '应用更新（安装与回滚）',
     file: 'tests/install-update-test.mjs',
     expect: ['失败 0 项'],
-    timeoutMs: 180_000,
+    timeoutMs: 300_000,
     note: '临时目录真实解包、保留用户数据、拒绝危险路径、失败回滚，不启动真实服务',
   },
   {
@@ -375,6 +375,7 @@ async function main() {
       ms: result.ms,
       missing,
       tail: tail(combined),
+      ...(!pass ? { output: combined.trimEnd() } : {}),
     });
 
     const icon = pass ? '通过' : '失败';
@@ -383,7 +384,7 @@ async function main() {
       if (result.code !== 0) console.log(`    退出码 ${result.code}`);
       if (missing.length > 0) console.log(`    缺少字样：${missing.join(' / ')}`);
       console.log(
-        tail(combined, 8)
+        combined.trimEnd()
           .split('\n')
           .map((line) => `      ${line}`)
           .join('\n'),
@@ -420,7 +421,7 @@ async function main() {
       md.push('');
       md.push(`### ${r.name}（退出码 ${r.code}）`);
       md.push('```');
-      md.push(r.tail);
+      md.push(r.output || r.tail);
       md.push('```');
     }
   }

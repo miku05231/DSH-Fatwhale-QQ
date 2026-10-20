@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing stable version tag, for example v0.2.0
+        description: Existing stable version tag, for example v0.2.1
         required: true
         type: string
 
@@ -28,11 +28,11 @@ jobs:
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - name: Validate the stable version and tag
@@ -74,3 +74,13 @@ jobs:
           if ($taskAssets.Count -ne 4) { throw 'Expected three packages and SHA256SUMS.txt.' }
           gh release create $env:RELEASE_TAG @taskAssets --verify-tag --title "QQ-DSH $env:RELEASE_TAG" --generate-notes --latest
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed; existing releases are never overwritten.' }
+      - name: Save isolated test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-test-reports
+          path: |
+            state/test-log/
+            state/updates-ui/
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createUpdateManager, compareVersions } from '../src/updates.mjs';
@@ -76,7 +77,8 @@ function responses({ data = release(), manifest = SUMS, zip = ZIP, apiResponse =
 }
 
 async function fixture(options = {}, action) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'qq update with space-'));
+  const temporary = await realpath(os.tmpdir());
+  const root = await mkdtemp(path.join(temporary, 'qq update with space-'));
   const managers = [];
   try {
     await mkdir(path.join(root, 'scripts'));
@@ -102,7 +104,7 @@ async function fixture(options = {}, action) {
   } finally {
     for (const manager of managers) manager.stop();
     const absolute = path.resolve(root);
-    assert.ok(path.dirname(absolute) === path.resolve(os.tmpdir()) && path.basename(absolute).startsWith('qq update with space-'));
+    assert.ok(path.dirname(absolute) === temporary && path.basename(absolute).startsWith('qq update with space-'));
     await rm(absolute, { recursive: true, force: true });
   }
 }
@@ -115,6 +117,32 @@ async function test(name, action) {
     failures += 1;
     console.error(`FAIL ${name}: ${error.stack || error}`);
   }
+}
+
+function windowsShortPath(value) {
+  const script = `
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class UpdateShortPath {
+  [DllImport("kernel32.dll", EntryPoint = "GetShortPathNameW", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern uint GetShortPathName(string path, StringBuilder output, uint size);
+}
+'@
+$output = New-Object Text.StringBuilder 32768
+$length = [UpdateShortPath]::GetShortPathName($env:QQ_UPDATE_TEST_PATH, $output, 32768)
+if ($length -eq 0 -or $length -ge 32768) { throw 'GetShortPathNameW failed.' }
+[Console]::Write($output.ToString())
+`;
+  const shell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const result = spawnSync(shell, [
+    '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64'),
+  ], { encoding: 'utf8', windowsHide: true, timeout: 30_000, env: { ...process.env, QQ_UPDATE_TEST_PATH: value } });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  return result.stdout.trim();
 }
 
 await test('strict SemVer ordering and invalid versions', async () => {
@@ -274,6 +302,78 @@ await test('source, custom config/state, Docker and other platforms stay manual'
     equal(state.canInstall, false);
     truthy(state.installReason.includes('git pull'));
   });
+});
+
+await test('Windows 8.3 aliases allow checks, settings and a verified mocked installation', async () => {
+  if (process.platform !== 'win32') {
+    console.log('SKIP native 8.3 alias regression requires Windows.');
+    return;
+  }
+  await fixture({}, async ({ root, factory, jobs }) => {
+    const canonical = await realpath(root);
+    const short = windowsShortPath(canonical);
+    equal((await realpath(short)).toLowerCase(), canonical.toLowerCase());
+    if (short.toLowerCase() === canonical.toLowerCase()) {
+      console.log('SKIP this volume does not provide an 8.3 alias for the fixture.');
+      return;
+    }
+    truthy(/~\d/.test(short), 'GetShortPathNameW returned an actual 8.3 alias.');
+    const manager = factory({
+      projectRoot: short,
+      stateDir: path.join(canonical, 'state'),
+      configFile: path.join(canonical, 'config.json'),
+    });
+    equal((await manager.check()).canInstall, true);
+    equal((await manager.setAutomatic(false)).automatic, false);
+    await manager.install({ version: VERSION });
+    await until(async () => (await manager.status()).phase === 'installing');
+    equal(jobs.length, 1);
+    equal(jobs[0].job.projectRoot, canonical);
+    equal(path.dirname(jobs[0].job.packagePath), path.join(canonical, 'state', 'updates', jobs[0].job.jobId));
+    equal(await readFile(jobs[0].job.packagePath), ZIP);
+    equal(JSON.parse(await readFile(path.join(canonical, 'state', 'updates', 'settings.json'), 'utf8')).automatic, false);
+    const restored = factory({ projectRoot: short });
+    equal((await restored.status()).automatic, false);
+    equal((await restored.status()).canInstall, false);
+  });
+});
+
+await test('junctions at the root, ancestor or update directory remain forbidden', async () => {
+  for (const location of ['root', 'ancestor', 'state', 'updates', 'helper-parent']) {
+    await fixture({}, async ({ root, factory, jobs }) => {
+      const target = path.join(root, 'unlinked-target');
+      await mkdir(target);
+      await writeFile(path.join(target, 'keep.txt'), 'untouched');
+      const overrides = {};
+      if (location === 'root' || location === 'ancestor') {
+        const portable = location === 'root' ? target : path.join(target, 'app');
+        await mkdir(path.join(portable, 'scripts'), { recursive: true });
+        await writeFile(path.join(portable, 'package.json'), '{"version":"0.2.0"}');
+        await writeFile(path.join(portable, 'qq-bridge.exe'), 'mock exe');
+        await writeFile(path.join(portable, 'scripts', 'install-update.ps1'), HELPER);
+        const alias = path.join(root, 'linked-root');
+        await symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+        overrides.projectRoot = location === 'root' ? alias : path.join(alias, 'app');
+      } else if (location === 'state' || location === 'updates') {
+        const link = path.join(root, 'state', ...(location === 'updates' ? ['updates'] : []));
+        if (location === 'updates') await mkdir(path.dirname(link));
+        await symlink(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+      } else {
+        await rm(path.join(root, 'scripts', 'install-update.ps1'));
+        await rmdir(path.join(root, 'scripts'));
+        await writeFile(path.join(target, 'install-update.ps1'), HELPER);
+        await symlink(target, path.join(root, 'scripts'), process.platform === 'win32' ? 'junction' : 'dir');
+      }
+      const manager = factory(overrides);
+      const status = await manager.check();
+      equal(status.canInstall, false, location);
+      await rejectsCode(() => manager.install({ version: VERSION }), 'UPDATE_MANUAL_ONLY');
+      if (location !== 'helper-parent') await rejectsCode(() => manager.setAutomatic(false), 'UPDATE_UNSAFE_PATH');
+      equal(await readFile(path.join(target, 'keep.txt'), 'utf8'), 'untouched', location);
+      equal(jobs.length, 0, location);
+      truthy(!(await readdir(target)).includes('settings.json'), location);
+    });
+  }
 });
 
 await test('release asset names and URLs are never accepted from arbitrary sources', async () => {

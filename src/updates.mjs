@@ -123,12 +123,13 @@ export function createUpdateManager({
   clearTimeoutImpl = clearTimeout,
 } = {}) {
   if (typeof projectRoot !== 'string' || !projectRoot) throw new TypeError('projectRoot is required.');
-  const root = path.resolve(projectRoot);
-  const dataRoot = path.resolve(stateDir);
-  const updatesRoot = path.join(dataRoot, 'updates');
-  const settingsFile = path.join(updatesRoot, 'settings.json');
-  const resultFile = path.join(updatesRoot, 'result.json');
-  const lockFile = path.join(updatesRoot, 'install.lock');
+  let root = path.resolve(projectRoot);
+  let dataRoot = path.resolve(stateDir);
+  let configurationPath = path.resolve(configFile);
+  let updatesRoot = path.join(dataRoot, 'updates');
+  let settingsFile = path.join(updatesRoot, 'settings.json');
+  let resultFile = path.join(updatesRoot, 'result.json');
+  let lockFile = path.join(updatesRoot, 'install.lock');
   const normalized = (value) => platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
   let initialization;
   let currentVersion = 'unknown';
@@ -157,6 +158,38 @@ export function createUpdateManager({
     progress: null,
     error: null,
   };
+
+  async function assertUnlinkedPath(value) {
+    for (let probe = path.resolve(value); ; probe = path.dirname(probe)) {
+      try {
+        if ((await lstat(probe)).isSymbolicLink()) {
+          throw failure('UPDATE_UNSAFE_PATH', '更新路径包含符号链接或 junction，请手动更新。');
+        }
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+      if (path.dirname(probe) === probe) return;
+    }
+  }
+
+  // Windows realpath expands ordinary 8.3 names as well as resolving links.
+  // Reject links explicitly before comparing canonical path identities.
+  async function canonicalPath(value) {
+    await assertUnlinkedPath(value);
+    const missing = [];
+    for (let probe = path.resolve(value); ; probe = path.dirname(probe)) {
+      try {
+        return path.join(await realpath(probe), ...missing);
+      } catch (error) {
+        if (error.code !== 'ENOENT' || path.dirname(probe) === probe) throw error;
+        missing.unshift(path.basename(probe));
+      }
+    }
+  }
+
+  async function pathIdentity(value) {
+    return normalized(await canonicalPath(value));
+  }
 
   function report(message) {
     try {
@@ -191,11 +224,15 @@ export function createUpdateManager({
   async function inspectEnvironment() {
     if (platform !== 'win32' || isDocker) return { allowed: false, reason: '此环境请前往 GitHub 发布页手动更新。' };
     if (!parseVersion(currentVersion)) return { allowed: false, reason: '当前版本号无效，请手动安装完整便携包。' };
-    if (normalized(dataRoot) !== normalized(path.join(root, 'state'))) {
-      return { allowed: false, reason: '自定义状态目录请手动更新，保留现有配置和数据。' };
-    }
-    if (normalized(configFile) !== normalized(path.join(root, 'config.json'))) {
-      return { allowed: false, reason: '自定义配置路径请手动更新，保留现有配置和数据。' };
+    try {
+      if (await pathIdentity(dataRoot) !== await pathIdentity(path.join(root, 'state'))) {
+        return { allowed: false, reason: '自定义状态目录请手动更新，保留现有配置和数据。' };
+      }
+      if (await pathIdentity(configurationPath) !== await pathIdentity(path.join(root, 'config.json'))) {
+        return { allowed: false, reason: '自定义配置路径请手动更新，保留现有配置和数据。' };
+      }
+    } catch {
+      return { allowed: false, reason: '安装路径包含链接或无法确认，请手动更新。' };
     }
     for (let directory = root; ; directory = path.dirname(directory)) {
       try {
@@ -212,11 +249,12 @@ export function createUpdateManager({
         lstat(path.join(root, 'scripts', 'install-update.ps1')),
       ]);
       if (!launcher.isFile() || launcher.isSymbolicLink() || !helper.isFile() || helper.isSymbolicLink()) throw new Error('Not a portable package.');
-      if (normalized(await realpath(root)) !== normalized(root)) throw new Error('Linked application directory.');
+      await assertUnlinkedPath(path.join(root, 'scripts', 'install-update.ps1'));
       for (const dir of [dataRoot, updatesRoot]) {
         try {
           const info = await lstat(dir);
-          if (!info.isDirectory() || info.isSymbolicLink() || normalized(await realpath(dir)) !== normalized(dir)) throw new Error('Linked update directory.');
+          if (!info.isDirectory()) throw new Error('Not an update directory.');
+          await assertUnlinkedPath(dir);
         } catch (error) {
           if (error.code !== 'ENOENT') throw error;
         }
@@ -268,8 +306,7 @@ export function createUpdateManager({
 
   async function releaseLock(jobId) {
     try {
-      const info = await lstat(lockFile);
-      if (info.isSymbolicLink() || normalized(await realpath(lockFile)) !== normalized(lockFile)) return;
+      await assertUnlinkedPath(lockFile);
       const lock = await readSmallJson(lockFile);
       if (lock.jobId !== jobId) return;
       await rm(lockFile);
@@ -283,6 +320,14 @@ export function createUpdateManager({
   async function initialize() {
     if (!initialization) {
       initialization = (async () => {
+        try {
+          const paths = await Promise.all([canonicalPath(root), canonicalPath(dataRoot), canonicalPath(configurationPath)]);
+          [root, dataRoot, configurationPath] = paths;
+          updatesRoot = path.join(dataRoot, 'updates');
+          settingsFile = path.join(updatesRoot, 'settings.json');
+          resultFile = path.join(updatesRoot, 'result.json');
+          lockFile = path.join(updatesRoot, 'install.lock');
+        } catch { /* Eligibility and write operations independently reject unsafe paths. */ }
         try {
           const pkg = await readSmallJson(path.join(root, 'package.json'));
           if (parseVersion(pkg.version)) currentVersion = pkg.version;
@@ -301,7 +346,7 @@ export function createUpdateManager({
             if (lock.schemaVersion === 1 && /^[A-Za-z0-9][A-Za-z0-9_-]{7,79}$/.test(lock.jobId ?? '')
               && parseVersion(lock.version) && parseVersion(currentVersion)
               && compareVersions(lock.version, currentVersion) >= 0
-              && typeof lock.projectRoot === 'string' && normalized(lock.projectRoot) === normalized(root)) {
+              && typeof lock.projectRoot === 'string' && await pathIdentity(lock.projectRoot) === await pathIdentity(root)) {
               pendingRestartJob = { jobId: lock.jobId, version: lock.version };
             }
           } catch { /* An unreadable lock still prevents a second installer. */ }
@@ -477,12 +522,12 @@ export function createUpdateManager({
   }
 
   async function ensureUpdatesDirectory() {
+    await assertUnlinkedPath(updatesRoot);
     await mkdir(updatesRoot, { recursive: true, mode: 0o700 });
     for (const dir of [dataRoot, updatesRoot]) {
       const info = await lstat(dir);
-      if (!info.isDirectory() || info.isSymbolicLink() || normalized(await realpath(dir)) !== normalized(dir)) {
-        throw failure('UPDATE_UNSAFE_PATH', '更新目录包含链接，请手动更新。');
-      }
+      if (!info.isDirectory()) throw failure('UPDATE_UNSAFE_PATH', '更新路径不是目录，请手动更新。');
+      await assertUnlinkedPath(dir);
     }
   }
 
