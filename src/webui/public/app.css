@@ -974,6 +974,34 @@ textarea {
   flex: 1 1 auto;
 }
 
+.sticker-probability {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--outline-variant);
+}
+
+.sticker-probability .field-label {
+  margin: 0;
+}
+
+.sticker-probability__value {
+  min-width: 4ch;
+  text-align: right;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: var(--on-surface-variant);
+}
+
+.sticker-probability__range {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
 .switch {
   appearance: none;
   -webkit-appearance: none;

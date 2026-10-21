@@ -123,6 +123,7 @@ async function main() {
     dsh: {
       command: 'dsh',
       mode: 'headless',
+      companion: false,
       profile: 'headless',
       patchPath: path.join(PROJECT_ROOT, 'patches', 'headless-model.yml'),
       cwd: path.join(PROJECT_ROOT, 'qq-workspace'),
@@ -130,6 +131,7 @@ async function main() {
     },
     security: {
       allowFrom: [ALLOWED_USER],
+      adminUserIds: [ALLOWED_USER],
       allowGroups: false,
       rateLimitPerMinute: 60,
       maxChars: 4000,

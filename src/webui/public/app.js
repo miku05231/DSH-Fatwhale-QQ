@@ -822,12 +822,23 @@ function fillStickerSettings(s) {
   if (autoCollect) autoCollect.checked = settings.autoCollect !== false;
   const autoTag = $('#stickerAutoTag');
   if (autoTag) autoTag.checked = settings.autoTag !== false;
+  const probability = $('#stickerSendProbability');
+  if (probability && document.activeElement !== probability) {
+    probability.value = String(settings.sendProbability ?? 1);
+  }
+  updateStickerSendProbability();
   const perMinute = $('#stickerPerMinute');
   if (perMinute && document.activeElement !== perMinute) perMinute.value = String(settings.perMinute ?? 20);
   const maxPerMessage = $('#stickerMaxPerMessage');
   if (maxPerMessage && document.activeElement !== maxPerMessage) {
     maxPerMessage.value = String(settings.maxPerMessage ?? 3);
   }
+}
+
+function updateStickerSendProbability() {
+  const probability = $('#stickerSendProbability')?.valueAsNumber;
+  const output = $('#stickerSendProbabilityValue');
+  if (output && Number.isFinite(probability)) output.textContent = probability.toFixed(2);
 }
 
 function stickerTile(item) {
@@ -1046,6 +1057,10 @@ async function migrateStickers() {
 async function saveStickerSettings() {
   const perMinute = Number($('#stickerPerMinute')?.value);
   const maxPerMessage = Number($('#stickerMaxPerMessage')?.value);
+  const sendProbability = $('#stickerSendProbability')?.valueAsNumber;
+  if (!Number.isFinite(sendProbability) || sendProbability < 0 || sendProbability > 1) {
+    return snackbar('表情发送概率要在 0–1 之间');
+  }
   if (!Number.isInteger(perMinute) || perMinute < 1 || perMinute > 200) {
     return snackbar('每分钟上限要填 1–200 的整数');
   }
@@ -1065,6 +1080,7 @@ async function saveStickerSettings() {
           root: String($('#stickerRoot')?.value ?? '').trim(),
           autoCollect: Boolean($('#stickerAutoCollect')?.checked),
           autoTag: Boolean($('#stickerAutoTag')?.checked),
+          sendProbability,
           perMinute,
           maxPerMessage,
         },
@@ -1959,6 +1975,7 @@ async function loadSettings() {
     if (allowMembers) allowMembers.checked = Boolean(security.allowGroupMembers);
     if (allowGroups) allowGroups.checked = Boolean(security.allowGroups);
     if (privatePolicy) privatePolicy.value = String(security.privatePolicy ?? 'allowlist') === 'blacklist' ? 'blacklist' : 'allowlist';
+    fillIdList($('#setAdminUserIds'), security.adminUserIds);
     fillIdList($('#setAllowFrom'), security.allowFrom);
     fillIdList($('#setDenyFrom'), security.denyFrom);
     fillIdList($('#setAllowGroupIds'), security.allowGroupIds);
@@ -1971,6 +1988,12 @@ async function loadSettings() {
 async function saveSettings() {
   const btn = $('#settingsSave');
   if (!btn) return;
+  const adminUserIds = String($('#setAdminUserIds')?.value ?? '')
+    .split(/[\s,，;；]+/).filter(Boolean);
+  if (!adminUserIds.every((id) => /^[1-9]\d*$/.test(id))) {
+    snackbar('电脑操作管理员只能填写完整的纯数字 QQ 号');
+    return;
+  }
   const payload = {
     behavior: {
       showErrors: Boolean($('#setShowErrors')?.checked),
@@ -1979,6 +2002,7 @@ async function saveSettings() {
       wakeWordMatch: $('#setWakeAnywhere')?.checked ? 'contains' : 'prefix',
     },
     security: {
+      adminUserIds,
       allowGroupMembers: Boolean($('#setAllowGroupMembers')?.checked),
       allowGroups: Boolean($('#setAllowGroups')?.checked),
       privatePolicy: String($('#setPrivatePolicy')?.value ?? 'allowlist'),
@@ -1994,7 +2018,7 @@ async function saveSettings() {
   try {
     const data = await api('/api/settings', { method: 'PUT', body: JSON.stringify(payload) });
     const count = Object.keys(data?.applied || {}).length;
-    snackbar(count > 0 ? `已保存 ${count} 项设置（重启桥接后生效）` : '没有改动');
+    snackbar(count > 0 ? `已保存 ${count} 项设置（管理员权限立即生效，其余设置重启桥接后生效）` : '没有改动');
   } catch (err) {
     snackbar(`保存失败：${err.message}`, { duration: 5200 });
   } finally {
@@ -2273,6 +2297,7 @@ function initEvents() {
   $('#stickerRebuild')?.addEventListener('click', rebuildStickers);
   $('#stickerMigrate')?.addEventListener('click', migrateStickers);
   $('#stickerSave')?.addEventListener('click', saveStickerSettings);
+  $('#stickerSendProbability')?.addEventListener('input', updateStickerSendProbability);
   $('#stickerOpen')?.addEventListener('click', openStickersDir);
   $('#stickerDetailClose')?.addEventListener('click', closeStickerDetail);
   $('#stickerDetailTags')?.addEventListener('click', (event) => {

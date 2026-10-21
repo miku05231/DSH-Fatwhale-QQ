@@ -216,6 +216,10 @@ export class PluginHost {
   async runSequential(hook, ctx) {
     let text = asText(ctx?.text);
     for (const entry of this.registry.values()) {
+      ctx?.signal?.throwIfAborted();
+      if (typeof ctx?.canExecute === 'function' && !ctx.canExecute()) {
+        throw new Error('管理员权限已变更，已停止执行插件');
+      }
       const { name } = entry.meta;
       if (!this.isEnabled(name)) continue;
       const fn = entry.hooks[hook];

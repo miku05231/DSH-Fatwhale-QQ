@@ -79,6 +79,11 @@ try {
   check(movedPrompt.includes('共 2 张') && movedPrompt.includes('常用标签：开心'), '非空库保留数量与标签提示');
   const quoted = buildStickerPrompt({ projectRoot: path.join(tmp, "a'b"), configPath: cfgFile, root: store, platform: 'win32' });
   check(quoted.includes("a''b"), 'PowerShell 路径中的单引号得到转义');
+  for (const probability of [0, 0.35, 1]) {
+    const controlled = buildStickerPrompt({ projectRoot, configPath: cfgFile, root: store, sendProbability: probability });
+    check(controlled.includes(`发送概率为 ${probability}`) && controlled.includes('skipped:true') && controlled.includes('不要重试'),
+      `发送概率 ${probability} 传给 Agent 且跳过时不得重新抽签`);
+  }
 
   console.log('[2] 外置配置相对库与命令优先级');
   const stats = await runCli(['stats', '--json']);

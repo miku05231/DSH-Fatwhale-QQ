@@ -8,7 +8,7 @@
 // api-session/added，桌面端立即出现。本文件只负责读 discovery 文件、发
 // HTTP 请求，以及在失败时区分「请求没发出去」和「会话已经建立」。
 //
-// 协议（见 companion/lib/index.js）：
+// 协议（见 src/companion/lib/index.js）：
 //   GET  /health   -> {ok,pid,...}
 //   POST /prompt   -> {ok,sessionId,text,reason,elapsedMs}
 //   POST /cancel   -> {ok,cancelled}
@@ -24,6 +24,11 @@ import { resolveDshHome } from './dsh-desktop.js';
 const DEFAULT_DISCOVERY_NAME = 'qq-bridge-companion.json';
 const DEFAULT_TIMEOUT_MS = 300_000;
 const HEALTH_TIMEOUT_MS = 1_500;
+const PERMISSION_ERROR_CODE = 'companion/permission-unsupported';
+
+function requestedPermissionMode(cfg) {
+  return String(cfg?.dsh?.permissionMode ?? 'workspace-write').trim();
+}
 
 /** companion discovery 文件路径；配置可写绝对路径。 */
 export function resolveCompanionDiscoveryPath(cfg) {
@@ -68,9 +73,17 @@ function requestJson(info, method, pathname, body, { timeoutMs, signal } = {}) {
     }
     let settled = false;
     let response = null;
+    let connected = false;
+    let timer;
+    let onAbort;
+    const cleanup = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+    };
     const fail = (error, channelError = false) => {
       if (settled) return;
       settled = true;
+      cleanup();
       if (channelError && error && typeof error === 'object') error.channelError = true;
       reject(error);
     };
@@ -90,6 +103,7 @@ function requestJson(info, method, pathname, body, { timeoutMs, signal } = {}) {
         res.on('end', () => {
           if (settled) return;
           settled = true;
+          cleanup();
           const text = Buffer.concat(chunks).toString('utf8');
           let parsed = null;
           try {
@@ -99,16 +113,31 @@ function requestJson(info, method, pathname, body, { timeoutMs, signal } = {}) {
           }
           resolve({ status: res.statusCode ?? 0, body: parsed, text });
         });
+        res.on('aborted', () => fail(new Error('companion 响应传输中断')));
+        res.on('error', (error) => fail(error));
+        res.on('close', () => {
+          if (!res.complete) fail(new Error('companion 响应未接收完整'));
+        });
       },
     );
-    req.on('error', (error) => {
-      if (response !== null) fail(error, false);
-      else fail(error, true);
+    req.on('socket', (socket) => {
+      if (!socket.connecting) connected = true;
+      else socket.once('connect', () => { connected = true; });
     });
-    const timer = setTimeout(() => {
+    req.on('error', (error) => {
+      // 没收到响应并不代表宿主没执行。仅确定 TCP 尚未连接的错误允许重跑。
+      const connectFailed =
+        !connected &&
+        response === null &&
+        ['ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'EADDRNOTAVAIL', 'ENOTFOUND', 'EAI_AGAIN']
+          .includes(error?.code) &&
+        ['connect', 'getaddrinfo'].includes(error?.syscall);
+      fail(error, connectFailed);
+    });
+    timer = setTimeout(() => {
       req.destroy(new Error(`companion 请求超时（${timeoutMs}ms）`));
     }, timeoutMs);
-    const onAbort = () => {
+    onAbort = () => {
       req.destroy(Object.assign(new Error('请求已取消'), { name: 'AbortError' }));
     };
     if (signal) {
@@ -116,8 +145,7 @@ function requestJson(info, method, pathname, body, { timeoutMs, signal } = {}) {
       else signal.addEventListener('abort', onAbort, { once: true });
     }
     req.on('close', () => {
-      clearTimeout(timer);
-      if (signal) signal.removeEventListener('abort', onAbort);
+      if (response === null) fail(new Error('companion 在返回响应前关闭连接'));
     });
     if (payload !== null) req.write(payload);
     req.end();
@@ -138,6 +166,12 @@ export async function probeCompanion(cfg, { timeoutMs = HEALTH_TIMEOUT_MS } = {}
     const result = await requestJson(info, 'GET', '/health', undefined, { timeoutMs });
     if (result.status !== 200 || result.body?.ok !== true) {
       return { available: false, reason: `health 返回 ${result.status}`, info };
+    }
+    const permissionMode = requestedPermissionMode(cfg);
+    if (result.body.permissionProtocol !== 1 ||
+        !Array.isArray(result.body.permissionModes) ||
+        !result.body.permissionModes.includes(permissionMode)) {
+      return { available: false, reason: `companion 不能保证请求的权限：${permissionMode}`, info };
     }
     return { available: true, info, health: result.body };
   } catch (error) {
@@ -168,22 +202,30 @@ export async function runCompanionDsh(text, options = {}) {
   if (!info) {
     const error = new Error('companion 未安装或 discovery 文件缺失');
     error.code = 'companion/missing';
+    error.companion = true;
+    error.channelError = true;
+    error.sessionAccepted = false;
     throw error;
   }
   if (!isPidAlive(info.pid)) {
     const error = new Error(`companion 进程 ${info.pid} 已退出`);
     error.code = 'companion/stale';
+    error.companion = true;
+    error.channelError = true;
+    error.sessionAccepted = false;
     throw error;
   }
 
   const workspacePath = options.workspacePath ?? options.cwd;
+  const requestedTimeoutMs = timeoutMs ?? cfg?.dsh?.timeoutMs;
   const request = {
     text,
     ...(requestedSessionId ? { sessionId: requestedSessionId } : {}),
     ...(options.cwd ? { cwd: options.cwd } : {}),
     ...(workspacePath ? { workspacePath } : {}),
     ...(model ? { model } : {}),
-    timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : DEFAULT_TIMEOUT_MS,
+    permissionMode: requestedPermissionMode(cfg),
+    timeoutMs: Number.isFinite(requestedTimeoutMs) ? requestedTimeoutMs : DEFAULT_TIMEOUT_MS,
   };
   const started = Date.now();
   log?.info?.(`DSH(companion)：会话 ${requestedSessionId ?? '新会话'} 已提交，等待宿主回复`);
@@ -213,7 +255,12 @@ export async function runCompanionDsh(text, options = {}) {
     const error = new Error(`companion 对话失败：${detail}`);
     error.companion = true;
     error.sessionId = body?.sessionId ?? requestedSessionId ?? null;
-    error.sessionAccepted = true;
+    const permissionRejected = body?.code === PERMISSION_ERROR_CODE && body?.sessionAccepted === false;
+    error.sessionAccepted = !permissionRejected;
+    if (permissionRejected) {
+      error.code = PERMISSION_ERROR_CODE;
+      error.channelError = true;
+    }
     throw error;
   }
   const elapsedMs = Number.isFinite(body.elapsedMs) ? body.elapsedMs : Date.now() - started;

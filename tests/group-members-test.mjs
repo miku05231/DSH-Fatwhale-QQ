@@ -96,9 +96,10 @@ async function startBridge({ allowGroupMembers, wakeWordMatch }) {
     configPath,
     `${JSON.stringify({
       onebot: { url: `ws://127.0.0.1:${port}`, accessToken: '' },
-      dsh: { command: fakeDsh, profile: 'headless', patchPath: basePatch, cwd: tmpRoot, timeoutMs: 60000 },
+      dsh: { command: fakeDsh, mode: 'headless', companion: false, profile: 'headless', patchPath: basePatch, cwd: tmpRoot, timeoutMs: 60000 },
       security: {
         allowFrom: [OWNER],
+        adminUserIds: [OWNER, MEMBER],
         allowGroups: true,
         allowGroupMembers,
         allowGroupIds: [GROUP],

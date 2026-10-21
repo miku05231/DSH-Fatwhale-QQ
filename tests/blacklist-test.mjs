@@ -85,7 +85,7 @@ async function startBridge({ security, behavior = {}, allowGroups = true } = {})
   const configPath = path.join(dir, 'config.json');
   const config = {
     onebot: { url: `ws://127.0.0.1:${port}`, accessToken: '' },
-    dsh: { command: fakeDsh, profile: 'headless', patchPath, cwd: dir, timeoutMs: 30000 },
+    dsh: { command: fakeDsh, mode: 'headless', companion: false, profile: 'headless', patchPath, cwd: dir, timeoutMs: 30000 },
     security: { allowGroups, allowGroupMembers: true, rateLimitPerMinute: 0, maxChars: 4000, ...security },
     behavior: { queuedNotice: '', maxReplyChunk: 1200, showErrors: true, wakeWord: '', ...behavior },
     logDir,
@@ -168,7 +168,7 @@ async function main() {
   section('B1. 私聊 blacklist：黑名单不回，别人照常');
   {
     const app = await startBridge({
-      security: { privatePolicy: 'blacklist', allowFrom: [], denyFrom: [333], allowGroups: false },
+      security: { privatePolicy: 'blacklist', allowFrom: [], adminUserIds: [444], denyFrom: [333], allowGroups: false },
     });
     try {
       const before = app.napcat.state.calls.length;
@@ -219,7 +219,7 @@ async function main() {
   section('B3. allowlist 模式下 denyFrom 依旧压过 allowFrom');
   {
     const app = await startBridge({
-      security: { privatePolicy: 'allowlist', allowFrom: [333, 444], denyFrom: [333], allowGroups: false },
+      security: { privatePolicy: 'allowlist', allowFrom: [333, 444], adminUserIds: [444], denyFrom: [333], allowGroups: false },
     });
     try {
       const before = app.napcat.state.calls.length;

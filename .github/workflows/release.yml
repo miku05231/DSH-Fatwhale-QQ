@@ -19,10 +19,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  linux-compatibility:
+    if: github.repository == 'miku05231/DSH-Fatwhale-QQ'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install the pinned Linux DSH kernel
+        run: npm install --prefix state/test-dsh --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.0-rc.2
+      - name: Verify DSH Web and the no-tools boundary
+        env:
+          QQ_TEST_DSH_COMMAND: ${{ github.workspace }}/state/test-dsh/node_modules/@deepseek-ai/dsh/lib/bin.js
+          QQ_TEST_REQUIRE_DSH: '1'
+        run: |
+          node tests/dsh-web-test.mjs
+          node tests/admin-tool-policy-test.mjs
+          node tests/sticker-send-policy-test.mjs
+          node tests/sticker-probability-settings-test.mjs
   release:
     if: github.repository == 'miku05231/DSH-Fatwhale-QQ'
+    needs: linux-compatibility
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: write
     env:
@@ -50,10 +74,21 @@ jobs:
       - name: Test updates, packaging and the executable
         shell: pwsh
         run: |
-          foreach ($taskGroup in @('表情', '打开本地', '更新', 'exe', '封装应用', '公开导出')) {
+          foreach ($taskGroup in @('表情', '打开本地', '更新', 'exe', '封装应用', '公开导出', '桌面连伴')) {
             node tests/run-all.mjs --only $taskGroup
             if ($LASTEXITCODE -ne 0) { throw "Tests failed: $taskGroup" }
           }
+      - name: Test administrator boundaries with the pinned DSH kernel
+        shell: pwsh
+        run: |
+          npm install --prefix state/test-dsh --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.0-rc.2
+          if ($LASTEXITCODE -ne 0) { throw 'The pinned DSH test runtime could not be installed.' }
+          $env:QQ_TEST_DSH_COMMAND = Join-Path (Get-Location).Path 'state/test-dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'
+          $env:QQ_TEST_REQUIRE_DSH = '1'
+          node tests/run-all.mjs --only 管理员权限
+          if ($LASTEXITCODE -ne 0) { throw 'Administrator boundary tests failed.' }
+          node tests/dsh-web-test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'DSH Web compatibility checks failed.' }
       - name: Build portable files and checksums
         shell: powershell
         run: |

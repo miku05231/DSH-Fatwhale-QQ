@@ -78,6 +78,12 @@ export function isUserBlocked(userId, cfg) {
   return inList(denyListOf(cfg), userId);
 }
 
+/** 聊天白名单、群头衔、消息正文都不能授予电脑权限。 */
+export function isAdministrator(userId, cfg) {
+  const list = cfg?.security?.adminUserIds ?? cfg?.adminUserIds;
+  return Array.isArray(list) && !isUserBlocked(userId, cfg) && inList(list, userId);
+}
+
 /** 这个群是否在群黑名单里 */
 export function isGroupBlocked(groupId, cfg) {
   return inList(denyGroupIdsOf(cfg), groupId);

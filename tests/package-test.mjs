@@ -47,10 +47,16 @@ function check(cond, name, detail = '') {
 const REQUIRED = [
   'src/index.js',
   'src/security.js',
+  'src/computer-access.js',
+  'src/chat-only.js',
+  'src/chat-only-host.js',
+    'src/sticker-send-policy.js',
   'src/plugins.js',
   'src/model-follow.js',
   'src/webui/server.mjs',
   'src/updates.mjs',
+  'src/companion/lib/index.js',
+  'src/companion/package.json',
   'launcher/Launcher.ps1',
   'launcher/bootstrap.ps1',
   'launcher/lib/ProcessControl.ps1',
@@ -90,6 +96,7 @@ const MUST_NOT_EXIST = [
   'napcat',
   'node_modules',
   'qq-workspace',
+  'companion',
   '.git',
   'dist',
   'tools/export-public.mjs',
@@ -207,6 +214,8 @@ async function main() {
     check(checkJs.status === 0, '产物 src/index.js 语法正确');
     const checkSec = run(['--check', path.join(outDir, 'src', 'security.js')]);
     check(checkSec.status === 0, '产物 src/security.js 语法正确');
+    const checkChatHost = run(['--check', path.join(outDir, 'src', 'chat-only-host.js')]);
+    check(checkChatHost.status === 0, '产物 src/chat-only-host.js 语法正确');
 
     const blacklist = run([path.join(outDir, 'tests', 'blacklist-test.mjs')], { cwd: outDir });
     const blacklistOut = `${blacklist.stdout ?? ''}${blacklist.stderr ?? ''}`;

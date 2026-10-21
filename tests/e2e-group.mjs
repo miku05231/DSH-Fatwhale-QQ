@@ -59,6 +59,7 @@ const config = {
   dsh: {
     command: 'dsh',
     mode: 'headless',
+    companion: false,
     profile: 'headless',
     patchPath: path.join(PROJECT_ROOT, 'patches', 'headless-model.yml'),
     cwd: path.join(PROJECT_ROOT, 'qq-workspace'),
@@ -67,6 +68,7 @@ const config = {
   },
   security: {
     allowFrom: [OWNER],
+    adminUserIds: [OWNER],
     allowGroups: true,
     allowGroupIds: [TARGET_GROUP],
     allowGroupMembers: false,

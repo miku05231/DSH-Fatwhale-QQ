@@ -77,10 +77,16 @@ async function main() {
     'config.example.json',
     'patches/example-headless-model.yml',
     'src/index.js',
+    'src/computer-access.js',
+    'src/chat-only.js',
+    'src/chat-only-host.js',
+    'src/sticker-send-policy.js',
     'src/plugins.js',
     'src/plugins/ping.js',
     'src/webui/server.mjs',
     'src/updates.mjs',
+    'src/companion/lib/index.js',
+    'src/companion/package.json',
     'src/webui/public/index.html',
     'launcher/Launcher.ps1',
     'tests/run-all.mjs',
@@ -101,6 +107,7 @@ async function main() {
     const full = path.join(out, rel.split('/').join(path.sep));
     ok(fs.existsSync(full), `产物含 ${rel}`);
   }
+  ok(!fs.existsSync(path.join(out, 'companion')), '公开源码不带顶级 companion 目录');
 
   console.log('\n[3/5 项目展示完整保留]');
   const readme = await fsp.readFile(path.join(out, 'README.md'), 'utf8');
@@ -148,6 +155,8 @@ async function main() {
   console.log('\n[5/5 产物自身可跑]');
   const check = spawnSync(process.execPath, ['--check', path.join(out, 'src', 'plugins.js')], { encoding: 'utf8', timeout: 30000 });
   ok(check.status === 0, '产物里的 src/plugins.js 语法正确');
+  const checkChatHost = spawnSync(process.execPath, ['--check', path.join(out, 'src', 'chat-only-host.js')], { encoding: 'utf8', timeout: 30000 });
+  ok(checkChatHost.status === 0, '产物里的 src/chat-only-host.js 语法正确');
   const pkg = path.join(out, 'package.json');
   const publicPackage = JSON.parse(await fsp.readFile(pkg, 'utf8'));
   const projectPackage = JSON.parse(await fsp.readFile(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));

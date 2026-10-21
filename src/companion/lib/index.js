@@ -1,4 +1,4 @@
-// companion/lib/index.js —— 在 DSH Desktop 宿主进程内运行的桥接连伴插件
+// src/companion/lib/index.js —— 在 DSH Desktop 宿主进程内运行的桥接连伴插件
 //
 // 为什么需要它：
 //   - 桥接之前用独立子进程加载 desktop profile。会话确实写在同一个
@@ -41,6 +41,8 @@ export const inject = [
 const DEFAULT_TIMEOUT_MS = 300_000;
 const MAX_BODY_BYTES = 256 * 1024;
 const ATTACH_HISTORY_MS = 7 * 24 * 60 * 60 * 1000;
+const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access'];
+const PERMISSION_ERROR_CODE = 'companion/permission-unsupported';
 
 /** DSH home：优先 $DSH_HOME，否则 ~/.dsh（和桥接 src/dsh-desktop.js 保持一致） */
 function resolveDshHome() {
@@ -100,7 +102,7 @@ async function readJsonBody(req) {
 }
 
 function sendJson(res, status, value) {
-  if (res.writableEnded) return;
+  if (res.writableEnded || res.destroyed) return;
   const body = JSON.stringify(value);
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -108,6 +110,72 @@ function sendJson(res, status, value) {
     'content-length': Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+/** 宿主 cancel 有同步和异步实现；取消失败不能逃出 AbortSignal 回调。 */
+function cancelSession(controller, sessionId, log) {
+  try {
+    Promise.resolve(controller.cancel({ sessionId })).catch((error) => {
+      log.warn(`companion: 取消会话 ${sessionId} 失败：${String(error)}`);
+    });
+  } catch (error) {
+    log.warn(`companion: 取消会话 ${sessionId} 失败：${String(error)}`);
+  }
+}
+
+function permissionError(message) {
+  return Object.assign(new Error(message), {
+    code: PERMISSION_ERROR_CODE,
+    sessionAccepted: false,
+  });
+}
+
+/** 预设名字可自定义；核对沙箱与审批实际取值，不能只信同名预设。 */
+function permissionPlan(ctx, mode) {
+  if (!PERMISSION_MODES.includes(mode)) throw permissionError('必须明确有效的 permissionMode');
+  let service;
+  try {
+    service = ctx.get('permissionPresets');
+  } catch {
+    throw permissionError('宿主没有可用的逐会话权限服务');
+  }
+  if (!service || !['set', 'current', 'resolve'].every((key) => typeof service[key] === 'function')) {
+    throw permissionError('宿主没有可用的逐会话权限服务');
+  }
+  const approval = mode === 'danger-full-access' ? 'never' : 'ask';
+  const names = new Set([mode, ...(Array.isArray(service.names) ? service.names : [])]);
+  for (const name of names) {
+    try {
+      const spec = service.resolve(name);
+      if (spec?.sandbox === mode && spec?.approval === approval) return { service, name, mode, approval };
+    } catch {
+      /* 预设不受支持，继续检查配置中的其它名字。 */
+    }
+  }
+  throw permissionError(`宿主不能保证请求的权限：${mode}`);
+}
+
+function supportedPermissionModes(ctx) {
+  return PERMISSION_MODES.filter((mode) => {
+    try {
+      permissionPlan(ctx, mode);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function applyPermission(plan, session) {
+  try {
+    await plan.service.set(session, plan.name);
+    const effective = plan.service.resolve(plan.service.current(session));
+    if (effective?.sandbox !== plan.mode || effective?.approval !== plan.approval) {
+      throw new Error('应用后权限与请求不匹配');
+    }
+  } catch (error) {
+    throw permissionError(`不能应用请求的会话权限：${String(error?.message ?? error)}`);
+  }
 }
 
 /** 从会话事件里取最后一条 assistant 文本和 turn/end 原因。 */
@@ -154,7 +222,7 @@ async function attachKnownSessions(ctx, workspace, sessionMapPath, log) {
   const now = Date.now();
   const attached = [];
   for (const sessionId of new Set(Object.values(mapping ?? {}))) {
-    if (typeof sessionId !== 'string' || sessionId.length === 0) continue;
+    if (typeof sessionId !== 'string' || sessionId.length === 0 || /^qq-chat-/i.test(sessionId)) continue;
     try {
       if (workspace.sessionIds.includes(sessionId)) continue;
       let header;
@@ -162,9 +230,9 @@ async function attachKnownSessions(ctx, workspace, sessionMapPath, log) {
         const observation = await ctx.get('sessionQuery').observeSession(sessionId);
         header = observation?.header;
       } catch {
-        header = undefined;
+        continue;
       }
-      if (header && !samePath(header.cwd, workspace.path)) continue;
+      if (!header || !samePath(header.cwd, workspace.path)) continue;
       if (header && Number.isFinite(header.createdAt) && now - header.createdAt > ATTACH_HISTORY_MS) continue;
       await workspace.attachSession(sessionId);
       attached.push(sessionId);
@@ -240,6 +308,7 @@ export async function apply(ctx, rawConfig) {
     const agents = ctx.get('agents');
     const sessions = ctx.get('sessions');
     if (!controller || !agents || !sessions) throw new Error('DSH 会话服务尚未就绪');
+    const permission = permissionPlan(ctx, body.permissionMode);
 
     const workspace = findWorkspace(registry, workspacePath);
     let created;
@@ -285,34 +354,52 @@ export async function apply(ctx, rawConfig) {
       else requestAbort.signal.addEventListener('abort', onRequestAbort, { once: true });
     }
 
-    const model = body.model && typeof body.model === 'object' ? body.model : null;
-    if (model?.provider && model?.model) {
-      try {
-        const selected = await ctx.get('llm').resolveCallConfig({
-          provider: model.provider,
-          model: model.model,
-          ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}),
-        });
-        agents.selectForNextRequest(agent, {
-          provider: selected.provider,
-          model: selected.model,
-          ...(selected.reasoningEffort ? { reasoningEffort: selected.reasoningEffort } : {}),
-        });
-      } catch (error) {
-        log.warn(`companion: 应用模型选择失败，按默认模型继续：${String(error)}`);
-      }
-    }
-
     const firstSeq = agent.session.seq;
     let timer;
     let timedOut = false;
+    let promptSubmitted = false;
+    let rejectAborted;
+    const abortedPromise = new Promise((_, reject) => { rejectAborted = reject; });
+    void abortedPromise.catch(() => {});
     const onAbort = () => {
-      if (abort.signal.aborted) {
-        controller.cancel({ sessionId }).catch(() => {});
-      }
+      if (promptSubmitted) cancelSession(controller, sessionId, log);
+      rejectAborted(Object.assign(new Error('请求已取消'), { name: 'AbortError' }));
     };
     abort.signal.addEventListener('abort', onAbort, { once: true });
     try {
+      timer = setTimeout(() => {
+        timedOut = true;
+        abort.abort();
+      }, timeoutMs);
+      if (abort.signal.aborted) {
+        onAbort();
+        await abortedPromise;
+      }
+      const model = body.model && typeof body.model === 'object' ? body.model : null;
+      if (model?.provider && model?.model) {
+        try {
+          const selected = await Promise.race([
+            ctx.get('llm').resolveCallConfig({
+              provider: model.provider,
+              model: model.model,
+              ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}),
+            }, abort.signal),
+            abortedPromise,
+          ]);
+          if (abort.signal.aborted) await abortedPromise;
+          agents.selectForNextRequest(agent, {
+            provider: selected.provider,
+            model: selected.model,
+            ...(selected.reasoningEffort ? { reasoningEffort: selected.reasoningEffort } : {}),
+          });
+        } catch (error) {
+          if (abort.signal.aborted) throw error;
+          log.warn(`companion: 应用模型选择失败，按默认模型继续：${String(error)}`);
+        }
+      }
+      await Promise.race([applyPermission(permission, agent.session), abortedPromise]);
+      if (abort.signal.aborted) await abortedPromise;
+      promptSubmitted = true;
       const promptPromise = controller.prompt(
         {
           requestId: randomUUID(),
@@ -323,15 +410,8 @@ export async function apply(ctx, rawConfig) {
         },
         abort.signal,
       );
-      const timeoutPromise = new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          timedOut = true;
-          abort.abort();
-          reject(new Error(`对话超时（${timeoutMs}ms）`));
-        }, timeoutMs);
-      });
-      await Promise.race([promptPromise, timeoutPromise]);
-      await agent.whenIdle();
+      await Promise.race([promptPromise, abortedPromise]);
+      await Promise.race([agent.whenIdle(), abortedPromise]);
       if (timedOut) throw new Error(`对话超时（${timeoutMs}ms）`);
       const { text: finalText, reason } = readTurnResult(agent.session, firstSeq);
       if (finalText.trim().length === 0) {
@@ -341,6 +421,7 @@ export async function apply(ctx, rawConfig) {
       }
       return { sessionId, text: finalText, reason, workspaceId: workspace?.id ?? null };
     } catch (error) {
+      if (timedOut) error = new Error(`对话超时（${timeoutMs}ms）`);
       if (error && typeof error === 'object' && !error.sessionId) error.sessionId = sessionId;
       throw error;
     } finally {
@@ -384,6 +465,8 @@ export async function apply(ctx, rawConfig) {
         startedAt,
         workspace: config.workspacePath ?? null,
         running: [...running.keys()],
+        permissionProtocol: 1,
+        permissionModes: supportedPermissionModes(ctx),
       });
       return;
     }
@@ -435,7 +518,14 @@ export async function apply(ctx, rawConfig) {
       sessionId = sessionId ?? error?.sessionId ?? null;
       const message = String(error?.message ?? error);
       log.warn(`companion: 对话失败：${message}`);
-      sendJson(res, 500, { ok: false, error: message, sessionId });
+      sendJson(res, 500, {
+        ok: false,
+        error: message,
+        sessionId,
+        ...(error?.code === PERMISSION_ERROR_CODE && error?.sessionAccepted === false
+          ? { code: PERMISSION_ERROR_CODE, sessionAccepted: false }
+          : {}),
+      });
     }
   }
 

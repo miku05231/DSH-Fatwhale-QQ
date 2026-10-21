@@ -139,7 +139,7 @@ export class PersonaLoader {
   }
 
   /** 返回 { text, body, path, name, source, bytes, updatedAt, missing, skipped, truncated } */
-  async load({ chatKey } = {}) {
+  async load({ chatKey, forceInject = false } = {}) {
     const state = await this.refreshState();
     const resolution = this.resolutionFor(chatKey);
     this.resolution = resolution;
@@ -163,7 +163,7 @@ export class PersonaLoader {
       this.last = result;
       return result;
     }
-    if (this.isDshAutoLoaded(resolution.file)) {
+    if (!forceInject && this.isDshAutoLoaded(resolution.file)) {
       result.skipped = 'dsh-auto';
       this.last = result;
       return result;
@@ -200,7 +200,7 @@ export class PersonaLoader {
   }
 
   /** 直接拿「塞进 prompt 的那段文本」 */
-  async loadBlock({ chatKey } = {}) {
-    return (await this.load({ chatKey })).text;
+  async loadBlock({ chatKey, forceInject = false } = {}) {
+    return (await this.load({ chatKey, forceInject })).text;
   }
 }

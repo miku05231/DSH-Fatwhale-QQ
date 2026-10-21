@@ -200,10 +200,10 @@ async function main() {
       configPath,
       `${JSON.stringify({
         onebot: { url: `ws://127.0.0.1:${port}`, accessToken: '' },
-        dsh: { command: fakeDsh, profile: 'headless', patchPath: basePatch, cwd: ws, timeoutMs: 60000 },
+        dsh: { command: fakeDsh, mode: 'headless', companion: false, profile: 'headless', patchPath: basePatch, cwd: ws, timeoutMs: 60000 },
         persona: { enabled: true, path: personaFile, maxChars: 8000 },
         memory: { enabled: true, root: memoryRoot },
-        security: { allowFrom: [OWNER], allowGroups: false, rateLimitPerMinute: 0, maxChars: 4000 },
+        security: { allowFrom: [OWNER], adminUserIds: [OWNER], allowGroups: false, rateLimitPerMinute: 0, maxChars: 4000 },
         behavior: { queuedNotice: '', maxReplyChunk: 1200, showErrors: true, wakeWord: '' },
         logDir,
         stateDir,

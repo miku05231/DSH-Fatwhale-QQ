@@ -126,8 +126,8 @@ async function main() {
     `${JSON.stringify(
       {
         onebot: { url: `ws://127.0.0.1:${port}`, accessToken: '' },
-        dsh: { command: fakeDsh, profile: 'headless', cwd: tmpRoot, timeoutMs: 60000 },
-        security: { allowFrom: [ALLOWED_USER], allowGroups: false, rateLimitPerMinute: 60, maxChars: 4000 },
+        dsh: { command: fakeDsh, mode: 'headless', companion: false, profile: 'headless', cwd: tmpRoot, timeoutMs: 60000 },
+        security: { allowFrom: [ALLOWED_USER], adminUserIds: [ALLOWED_USER], allowGroups: false, rateLimitPerMinute: 60, maxChars: 4000 },
         behavior: { queuedNotice: '', maxReplyChunk: 1200, showErrors: true, wakeWord: '' },
         plugins: { enabled: true, dir: pluginDir },
         logDir,

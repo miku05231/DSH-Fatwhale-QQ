@@ -20,7 +20,13 @@ const baseStatus = () => ({
   releaseNotes: '保留配置、人格与记忆。\n<img src=x onerror="window.releaseInjection=true">',
   publishedAt: new Date().toISOString(), canInstall: true, installReason: '', progress: null, error: '',
 });
-const fixture = { status: baseStatus(), offline: false, missing: false, writes: [], token: 0, reads: 0 };
+const fixture = {
+  status: baseStatus(), offline: false, missing: false, writes: [], token: 0, reads: 0,
+  adminWrites: [], stickerWrites: [], settings: {
+    behavior: {}, security: { adminUserIds: [] },
+    stickers: { root: 'state/stickers', autoCollect: true, autoTag: true, perMinute: 20, maxPerMessage: 3, sendProbability: 1 },
+  },
+};
 const report = { at: new Date().toISOString(), isolated: true, checks: [], screenshots: [], layouts: [], errors: [] };
 function check(name, condition) {
   assert.ok(condition, name);
@@ -45,7 +51,7 @@ async function startServer() {
   const fixed = new Map([
     ['/api/overview', overview],
     ['/api/logs', { lines: ['[demo] 隔离测试，不连接真实账号'] }],
-    ['/api/settings', { behavior: {}, security: {} }],
+    ['/api/settings', fixture.settings],
     ['/api/autostart', { available: false, enabled: false }],
     ['/api/paths', {
       persona: { raw: 'qq-workspace/AGENTS.md', resolved: 'demo/persona.md', exists: true },
@@ -80,6 +86,26 @@ async function startServer() {
       if (pathname === '/api/updates/install') fixture.status = { ...fixture.status, phase: 'downloading', progress: 42 };
       return json(200, { ...fixture.status, updateToken: `fixture-${fixture.token}` });
     }
+    if (pathname === '/api/settings' && req.method === 'PUT') {
+      let raw = '';
+      for await (const chunk of req) raw += chunk;
+      const body = JSON.parse(raw);
+      if (body.security) {
+        fixture.adminWrites.push(body);
+        Object.assign(fixture.settings.security, body.security);
+      }
+      if (body.stickers) {
+        fixture.stickerWrites.push(body);
+        Object.assign(fixture.settings.stickers, body.stickers);
+      }
+      const applied = Object.fromEntries(Object.entries(body).flatMap(([section, fields]) =>
+        Object.entries(fields).map(([key, value]) => [`${section}.${key}`, value])));
+      return json(200, { applied });
+    }
+    if (pathname === '/api/stickers') return json(200, {
+      settings: fixture.settings.stickers, root: 'demo/state/stickers', rootExists: true,
+      count: 0, bytes: 0, animated: 0, staticCount: 0, tags: [], total: 0, items: [],
+    });
     const file = files.get(pathname);
     if (file) {
       res.writeHead(200, { 'Content-Type': `${file.type}; charset=utf-8`, 'Cache-Control': 'no-store' });
@@ -350,9 +376,100 @@ async function main() {
     await refresh();
     check('Repeated failed status reads do not produce failure toasts', await evaluate('!document.querySelector("#snackbar").classList.contains("is-visible")'));
     check('Background reads never trigger a release check', fixture.writes.filter((write) => write.path.endsWith('/check')).length === 1);
+    const setAdminInput = (value) => evaluate(`document.querySelector("#setAdminUserIds").value=${JSON.stringify(value)}`);
+    check('Administrator field has an associated label', await evaluate('document.querySelector("label[for=setAdminUserIds]").textContent.includes("管理员")'));
+    for (const invalid of ['123.9', '1e3', '-123', 'administrator']) {
+      const before = fixture.adminWrites.length;
+      await setAdminInput(invalid);
+      await click('#settingsSave');
+      await waitText('#snackbarText', '纯数字');
+      await sleep(70);
+      check(`Invalid administrator input does not silently grant another account: ${invalid}`, fixture.adminWrites.length === before);
+    }
+    await setAdminInput('1000000002，1000000003');
+    await click('#settingsSave');
+    await waitFor(async () => fixture.adminWrites.length === 1, 'administrator settings save');
+    check('Administrator identifiers are submitted exactly as digit strings',
+      JSON.stringify(fixture.adminWrites[0].security.adminUserIds) === '["1000000002","1000000003"]');
+    await waitFor(async () => await evaluate('!document.querySelector("#snackbar").classList.contains("is-visible")'), 'settings confirmation dismissed');
+    for (const width of [375, 768, 1440]) {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: width < 600 ? 844 : 1000, mobile: width < 600, deviceScaleFactor: 1 });
+      await evaluate(`(() => {
+        const section = document.querySelector("#setAdminUserIds").closest("section");
+        window.scrollTo({top:Math.max(0,scrollY+section.getBoundingClientRect().top-80),behavior:"instant"});
+      })()`);
+      await sleep(80);
+      const layout = await evaluate(`(() => {
+        const field=document.querySelector("#setAdminUserIds"), r=field.getBoundingClientRect();
+        return {width:innerWidth,scrollWidth:document.documentElement.scrollWidth,
+          left:r.left,right:r.right,top:r.top,height:r.height};
+      })()`);
+      check(`Administrator controls fit ${width}px`, layout.scrollWidth <= width + 1 && layout.left >= 0 && layout.right <= width + 1 && layout.top >= 80 && layout.height > 40);
+      const image = await cdp.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false });
+      const filename = path.join(OUTPUT, `admin-settings-${width}.png`);
+      await writeFile(filename, Buffer.from(image.data, 'base64'));
+      report.screenshots.push(path.relative(ROOT, filename).replaceAll('\\', '/'));
+    }
+    await setAdminInput('');
+    await click('#settingsSave');
+    await waitFor(async () => fixture.adminWrites.length === 2, 'administrator list cleared');
+    check('Clearing administrators sends an empty list without promoting chat allowlists',
+      fixture.adminWrites[1].security.adminUserIds.length === 0);
+    await click('.nav-item[data-page="stickers"]');
+    await waitFor(async () => await evaluate('document.querySelector("#stickerSendProbability")?.value === "1"'), 'sticker probability settings loaded');
+    check('Sticker probability slider has its associated label',
+      await evaluate('Boolean(document.querySelector("label[for=stickerSendProbability]"))'));
+    const inputProbability = async (value) => {
+      await evaluate(`(() => {
+        const range=document.querySelector("#stickerSendProbability");
+        range.value=${JSON.stringify(String(value))};
+        range.dispatchEvent(new Event("input",{bubbles:true}));
+      })()`);
+    };
+    await inputProbability(0.35);
+    check('Slider displays fractional probability without rounding',
+      (await text('#stickerSendProbabilityValue')).includes('0.35'));
+    await evaluate('document.querySelector("#stickerSendProbability").focus()');
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowRight', code: 'ArrowRight' });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowRight', code: 'ArrowRight' });
+    check('Probability slider supports keyboard adjustment',
+      await evaluate('Math.abs(document.querySelector("#stickerSendProbability").valueAsNumber-.36)<.00001'));
+    for (const probability of [0, 0.35, 1]) {
+      await waitFor(async () => await evaluate('!document.querySelector("#stickerSave").disabled'), 'sticker save ready');
+      const before = fixture.stickerWrites.length;
+      await inputProbability(probability);
+      await click('#stickerSave');
+      await waitFor(async () => fixture.stickerWrites.length === before + 1, `save probability ${probability}`);
+      await waitFor(async () => await evaluate('!document.querySelector("#stickerSave").disabled'), 'sticker save and reload complete');
+      check(`Probability ${probability} is saved as the exact numeric value`,
+        fixture.stickerWrites.at(-1).stickers.sendProbability === probability);
+    }
+    await inputProbability(0.35);
+    await click('#stickerSave');
+    await waitFor(async () => await evaluate('!document.querySelector("#stickerSave").disabled')
+      && fixture.settings.stickers.sendProbability === 0.35, 'showcase probability saved');
+    await waitFor(async () => await evaluate('!document.querySelector("#snackbar").classList.contains("is-visible")'), 'sticker confirmation dismissed');
+    for (const width of [375, 768, 1440]) {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: width < 600 ? 844 : 1000, mobile: width < 600, deviceScaleFactor: 1 });
+      await evaluate(`(() => {
+        const range=document.querySelector("#stickerSendProbability");
+        window.scrollTo({top:Math.max(0,scrollY+range.getBoundingClientRect().top-220),behavior:"instant"});
+      })()`);
+      await sleep(80);
+      const geometry = await evaluate(`(() => {
+        const r=document.querySelector("#stickerSendProbability").getBoundingClientRect();
+        return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:innerWidth,overflow:document.documentElement.scrollWidth>innerWidth+1};
+      })()`);
+      check(`Probability controls fit ${width}px`,
+        !geometry.overflow && geometry.left >= 0 && geometry.right <= width + 1 && geometry.top >= 80 && geometry.bottom < 700);
+      const image = await cdp.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false });
+      const filename = path.join(OUTPUT, `sticker-probability-${width}.png`);
+      await writeFile(filename, Buffer.from(image.data, 'base64'));
+      report.screenshots.push(path.relative(ROOT, filename).replaceAll('\\', '/'));
+    }
     check('Browser has no unhandled JavaScript errors', report.errors.length === 0);
     report.passed = true;
-    report.visualRegression = 'INCONCLUSIVE: no baseline for the new region; six screenshots and geometry checks recorded.';
+    report.visualRegression = 'INCONCLUSIVE: no baseline for the new settings; screenshots and geometry checks recorded.';
     await writeFile(path.join(OUTPUT, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
     console.log(`通过 ${report.checks.length} 项；失败 0 项；布局 ${report.layouts.length} 个；JS 错误 ${report.errors.length} 个。`);
     console.log('截图与报告：state/updates-ui/');

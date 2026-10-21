@@ -19,6 +19,8 @@
 import process from 'node:process';
 
 import { runDsh } from './dsh.js';
+import { runChatOnlyDsh } from './chat-only.js';
+import { isAdministrator } from './security.js';
 import { probeCompanion, runCompanionDsh } from './dsh-companion.js';
 import { detectDesktopProfile, runDesktopDsh, shutdownDesktopHost } from './dsh-desktop.js';
 import { redactSecrets } from './redact.js';
@@ -60,10 +62,16 @@ export function resolveAgentMode(cfg, options = {}) {
  */
 export async function runAgent(text, options = {}) {
   const { cfg, cwd, log } = options;
+  if (!isAdministrator(options.requesterId, cfg)) {
+    return runChatOnlyDsh(text, options);
+  }
   const resolved = resolveAgentMode(cfg, { cwd, log });
+  // CLI 恢复会话会保留旧的 sandbox 覆盖；受限模式用新会话确保配置生效。
+  const headlessOptions = cfg?.dsh?.permissionMode === 'danger-full-access'
+    ? options : { ...options, sessionId: null };
 
   if (resolved.mode === 'headless') {
-    return runDsh(text, options);
+    return runDsh(text, headlessOptions);
   }
 
   if (cfg?.dsh?.companion !== false) {
@@ -105,7 +113,7 @@ export async function runAgent(text, options = {}) {
     }
     log?.warn?.(`DSH desktop 模式失败，本次回退 headless：${detail}`);
     try {
-      return await runDsh(text, options);
+      return await runDsh(text, headlessOptions);
     } catch (headlessError) {
       const headlessDetail = redactSecrets(
         headlessError instanceof Error ? headlessError.message : String(headlessError),

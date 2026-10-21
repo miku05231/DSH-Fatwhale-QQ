@@ -31,7 +31,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 
 /** 只复制这些（目录递归、文件单个） */
-const INCLUDE_DIRS = ['src', 'launcher', 'companion', 'tools', 'tests', 'docs', 'patches', 'assets', 'scripts', 'docker'];
+const INCLUDE_DIRS = ['src', 'launcher', 'tools', 'tests', 'docs', 'patches', 'assets', 'scripts', 'docker'];
 const INCLUDE_FILES = [
   'README.md',
   'deepseek-waitou.png',

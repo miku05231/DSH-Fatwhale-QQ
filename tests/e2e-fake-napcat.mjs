@@ -18,6 +18,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { createFakeNapCat } from './ws-harness.mjs';
+import { computerSessionKey } from '../src/computer-access.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(HERE, '..');
@@ -77,7 +78,7 @@ async function main() {
     dsh: {
       command: 'dsh',
       mode: 'headless',
-
+      companion: false,
       profile: 'headless',
       patchPath: path.join(PROJECT_ROOT, 'patches', 'headless-model.yml'),
       cwd: PROJECT_ROOT,
@@ -85,6 +86,7 @@ async function main() {
     },
     security: {
       allowFrom: [ALLOWED_USER],
+      adminUserIds: [ALLOWED_USER],
       allowGroups: false,
       rateLimitPerMinute: 60,
       maxChars: 4000,
@@ -172,14 +174,15 @@ async function main() {
     const sessionsPath = path.join(stateDir, 'sessions.json');
     await waitFor(() => fs.existsSync(sessionsPath), { timeout: 8000, label: 'sessions.json 生成' });
     const sessions = JSON.parse(await fsp.readFile(sessionsPath, 'utf8'));
-    // 会话键形如 `p:<QQ号>`（私聊）/ `g:<群号>`（群聊），见 src/index.js 的 sessionKey。
-    const bound = sessions[`p:${ALLOWED_USER}`] ?? sessions[String(ALLOWED_USER)];
+    const allowedSessionKey = computerSessionKey({ messageType: 'private', userId: ALLOWED_USER }, config);
+    const strangerSessionKey = computerSessionKey({ messageType: 'private', userId: STRANGER_USER }, config);
+    const bound = sessions[allowedSessionKey];
     if (bound && String(bound).startsWith('session-')) {
       ok('会话 id 已落盘', bound);
     } else {
       bad('会话 id 未落盘', JSON.stringify(sessions).slice(0, 200));
     }
-    if (!sessions[`p:${STRANGER_USER}`] && !sessions[String(STRANGER_USER)]) {
+    if (!sessions[strangerSessionKey] && Object.keys(sessions).every((key) => key === allowedSessionKey)) {
       ok('陌生用户没有产生会话');
     } else {
       bad('陌生用户竟产生了会话');

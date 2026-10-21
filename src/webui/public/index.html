@@ -158,6 +158,14 @@
           <span class="switch-row__text">自动打标签（来源 / 群 / 谁发的 / 关键词 / 动图还是静态 / 尺寸）</span>
           <input class="switch" type="checkbox" id="stickerAutoTag" />
         </label>
+        <div class="sticker-probability">
+          <div class="row-between">
+            <label class="field-label" for="stickerSendProbability">表情发送概率</label>
+            <output class="sticker-probability__value" id="stickerSendProbabilityValue" for="stickerSendProbability">1.00</output>
+          </div>
+          <input class="sticker-probability__range" type="range" id="stickerSendProbability" min="0" max="1" step="0.01" value="1" aria-describedby="stickerSendProbabilityHint" />
+          <p class="card__hint" id="stickerSendProbabilityHint">0 关闭表情发送，1 保留原发送频率。</p>
+        </div>
         <label class="switch-row">
           <span class="switch-row__text">每分钟最多收几张</span>
           <input class="text-field text-field--num" type="number" id="stickerPerMinute" min="1" max="200" step="1" />
@@ -367,6 +375,9 @@
       <section class="card card--pad">
         <h2 class="card__title">黑白名单</h2>
         <p class="card__hint">QQ 号 / 群号用逗号、空格或换行分隔。黑名单优先级最高：同时在两份名单里时按拉黑处理。</p>
+        <label class="field-label" for="setAdminUserIds">电脑操作管理员（adminUserIds）</label>
+        <textarea class="text-field text-field--list" id="setAdminUserIds" rows="2" placeholder="留空时所有账号只能聊天"></textarea>
+        <p class="card__hint">仅这些 QQ 账号可读取、发送电脑文件和使用电脑工具。群主及群管理员不会自动获得此权限；保存后立即生效。</p>
         <label class="field-label" for="setPrivatePolicy">私聊策略</label>
         <select class="select-field" id="setPrivatePolicy">
           <option value="allowlist">白名单：只有名单里的号能私聊</option>

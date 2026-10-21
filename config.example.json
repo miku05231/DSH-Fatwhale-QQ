@@ -19,6 +19,7 @@
     "permissionMode": "danger-full-access"
   },
   "security": {
+    "adminUserIds": [],
     "allowFrom": [
       "1000000002"
     ],
@@ -69,6 +70,7 @@
     "root": "state/stickers",
     "autoCollect": true,
     "autoTag": true,
+    "sendProbability": 1,
     "maxBytes": 5242880,
     "minBytes": 200,
     "maxPerMessage": 3,

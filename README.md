@@ -32,6 +32,12 @@
 
 更新截图中的 `0.2.0 → 0.3.0` 为演示数据。客户端检查正式 Release，确认安装后保留本机配置、人格与记忆。
 
+**电脑操作 · 仅管理员授权**
+
+![系统页分别设置电脑操作管理员和聊天黑白名单，QQ 号为演示数据](docs/screenshots/console-admin-settings.png)
+
+只有明确配置的管理员 QQ 账号可读取、发送本机文件和调用电脑工具；普通成员使用独立的无工具聊天通道。
+
 <details>
 <summary>更多控制台页面：深色概览、记忆、人格、模型与移动端更新提醒</summary>
 
@@ -202,6 +208,24 @@ node tools\reflect.mjs --force
 - 它在对话里想发表情时，会先跑 `node tools\stickers.mjs pick --tag 猫` 拿到本地图片路径，再用 QQ 图片段发出去。空库也会收到 `[表情包库]` 提示，其中包含当前工具和表情库的绝对路径。
 - 让机器人上网寻找表情后，它需要用 `add <本地图片或图片直链>` 入库，并核对返回的 `root`、`path` 和 `item`。只下载到工作区不会出现在控制台；请使用复数工具名 `stickers.mjs`。手动导入不受 QQ 自动采集筛选影响。
 - 索引坏了（半截 JSON）会自动改名 `index.json.bad-<时间戳>` 再扫盘重建，不会把桥接搞挂。
+
+### 表情发送概率
+
+在控制台「表情 → 采集与存放」调节「表情发送概率」，保存后立即作用于标准发送出口。也可以配置：
+
+```json
+{
+  "stickers": {
+    "sendProbability": 0.35
+  }
+}
+```
+
+`0` 关闭表情发送；`1` 保留 Agent 原本的发送频率，不强制每条回复带图；`0.35` 表示每次表情发送请求有 35% 的概率放行。同一请求里的多张表情只抽签一次，跳过时保留文字、普通图片和普通文件；纯表情返回 `skipped:true`，Agent 不应重复尝试。默认值为 `1`，采集、搜索、挑图和入库不受影响。
+
+![控制台表情页的发送概率滑块与保存设置](docs/screenshots/console-sticker-probability.png)
+
+概率控制覆盖桥接回复、`tools/qq.mjs` 的 QQ 表情段、表情库图片、转发消息和库图文件上传。直接连接 NapCat 的自定义发送代码需自行采用 `src/sticker-send-policy.js`。普通成员仍使用无工具聊天，不会因为此设置获得本机文件或命令权限。
 
 命令行速查：
 
@@ -443,6 +467,24 @@ docker compose up -d
 
 要**主动拉黑**某人或某个群，用 `security.denyFrom` / `security.denyGroupIds`（黑名单永远压过白名单；被拉黑的群连群记忆都不写）；私聊想要「除了黑名单谁都能聊」，把 `security.privatePolicy` 设成 `"blacklist"`（默认 `"allowlist"`：只有 `allowFrom` 里的人能聊）。每一项被忽略的原因都会写进 `state\status.json` 的 `lastDrop`（控制台「系统」页的「最近忽略」能直接看到），不用翻日志猜。
 
+### 电脑操作管理员
+
+在控制台「系统 → 黑白名单 → 电脑操作管理员」填写自己的 QQ 号，或设置 `security.adminUserIds`。管理员权限和聊天白名单分别配置；群主、QQ 群管理员、昵称和消息里自称“管理员”都不能获得电脑权限。私聊仍需通过私聊准入规则，群聊仍需通过群白名单及唤醒规则。
+
+```json
+{
+  "security": {
+    "adminUserIds": ["1000000002"]
+  }
+}
+```
+
+管理员在已授权群中可以说“把桌面上的报告.pdf 发到这个群”，Agent 会在配置的 `dsh.permissionMode` 范围内查找文件，调用 QQ 群文件上传；私聊使用私聊文件上传。实际文件权限及 NapCat 上传限制仍适用。
+
+普通成员可以继续聊天、使用人格和群聊上下文，但走独立的纯聊天 DSH 内核，不加载 shell、文件、浏览器、MCP、技能或用户插件。即使模型返回工具调用也会在执行前被拒绝；回复中的 CQ 码按普通文字发送。管理员与普通成员按发言人分开会话，普通聊天记忆存放在 `state/chat-only-memory`，不会检索管理员的文件操作记录。后台记忆反思也通过无工具通道生成摘要。
+
+名单默认为空，升级不会自动把聊天白名单变为管理员。管理员名单保存后立即生效，排队中的任务执行前会重新判权；运行中撤权或降低权限会触发取消，已经完成的操作无法撤回。旧会话映射保留，新权限域会建立独立会话。
+
 ---
 
 ## 三、人格
@@ -510,6 +552,7 @@ QQ 里也能直接切（这几个指令不需要 @，主人发才算）：
     "active": ""                            // 想固定在某一套就写名字，空 = 用 active.json
   },
   "security": {
+    "adminUserIds":       [],             // 可操作电脑的 QQ 账号；空数组 = 所有人只能聊天
     "allowFrom":          [1000000002],   // 空数组 = 拒绝所有人（安全默认）
     "denyFrom":           [],             // 私聊黑名单，永远压过白名单
     "privatePolicy":      "allowlist",    // allowlist | blacklist
@@ -577,7 +620,7 @@ copy patches\headless-model.yml patches\headless-model.local.yml
 
 ### dsh.mode：desktop（全插件）还是 headless（轻量）
 
-桥接可以按两种方式调用本机 DSH，`dsh.mode` 决定用哪种：
+管理员任务可以按两种方式调用本机 DSH，`dsh.mode` 决定用哪种。普通成员固定走无工具聊天内核：
 
 | 模式 | 加载的 profile | 能用的能力 | 代价 |
 | --- | --- | --- | --- |
@@ -603,23 +646,34 @@ node tools\install-companion.mjs --dry-run  # 只看要改什么
 node tools\install-companion.mjs --remove   # 卸载
 ```
 
-安装器只会往 `~/.dsh/profiles/desktop/cordis.patch.yml` 追加一个带标记的 `- insert:` 块（`file:///.../companion/lib/index.js`），不拷贝文件、不装 npm 依赖。装完即生效（实测桌面端会热加载；若没生效，重启一次 DSH）。插件只监听 `127.0.0.1` 随机端口，token 经 `~/.dsh/qq-bridge-companion.json` 交接；桥接连不上就自动退回独立宿主，不会影响 QQ 收发。
+安装器只会往 `~/.dsh/profiles/desktop/cordis.patch.yml` 追加一个带标记的 `- insert:` 块（`file:///.../src/companion/lib/index.js`），不拷贝文件、不装 npm 依赖。装完即生效（实测桌面端会热加载；若没生效，重启一次 DSH）。插件只监听 `127.0.0.1` 随机端口，token 经 `~/.dsh/qq-bridge-companion.json` 交接；桥接连不上就自动退回独立宿主，不会影响 QQ 收发。
 
-> 安全边界不变：两种模式都受 `dsh.permissionMode` 约束，desktop 模式不会额外获得权限。
+在早期开发版中安装过顶级 `companion/` 的用户，升级后重新运行一次安装器，以更新插件入口。正式 v0.2.3 可直接使用控制台更新，无需先更换旧安装器。
+
+两种管理员模式都受 `dsh.permissionMode` 约束。新版连伴会报告实际权限能力，每轮执行前应用并核验会话权限；旧插件或权限能力不匹配时，桥接会在提交任务前选择独立宿主。已经接收的任务发生断线、取消或超时不会再交给另一宿主重复执行。
+
+#### DSH Web
+
+QQ 桥接可以与 `dsh --profile web` 并行运行；没有桌面端时，可将桥接的 `dsh.mode` 与 `dsh.profile` 都设为 `headless`。它仍是独立的 QQ 桥接服务，浏览器中使用 DSH 原有的 Web 界面。
+
+想让管理员的 QQ 会话直接进入 Web 宿主，先启动过一次 Web profile，再执行 `node tools/install-companion.mjs --profile web`，并设置 `dsh.desktopProfile: "web"`、`dsh.mode: "desktop"`、`dsh.companion: true`。重新启动自己的 Web 服务以加载插件。普通成员继续使用隔离的无工具内核。现有模型自动跟随仍读取 desktop profile；只使用 Web 时，应通过 `dsh.patchPath` 显式提供模型配置。
+
+`tests/dsh-web-test.mjs` 使用固定的 DSH `0.2.0-rc.2`、临时 home 和本地假模型，验证真实网页资源、登录及 Host/Origin 保护、Web 连伴对话、会话权限降级，以及并行 headless；不会修改本机 DSH 或连接真实 QQ。Docker 构建和容器运行本次未验证。
 
 ### dsh.permissionMode 是什么
 
-它会被塞进子进程的环境变量 `DSH_PERMISSION_MODE`，决定 QQ 里的 agent 有多大的权限：
+它决定管理员任务可使用的权限。CLI 通过 `DSH_PERMISSION_MODE` 设置；连伴与独立桌面宿主通过 DSH 权限服务逐轮核验：
 
 | 值 | 效果 |
 |---|---|
 | `"danger-full-access"` | 能跑任意 shell 命令 —— **发图、撤回、发表情、发 QQ 空间、翻群记录全靠这个** |
+| `"read-only"` | DSH 的只读沙箱；仍可能读取本机文件，因此只对管理员开放 |
 | `"workspace-write"` | 只能写工作区，且在本机会卡在授 ACL 一步（Win32 5），等于没有 shell |
 | `""`（空） | 不设，沿用 dsh 自己的默认值 |
 
 **这台机器上 `workspace-write` 是坏的**：沙箱给 `D:\code\qq-bridge` 授写权限时 `SetNamedSecurityInfoW` 报 Win32 5（拒绝访问），命令连启动都到不了。所以这里填了 `danger-full-access`。
 
-代价要说清楚：QQ 白名单里的人（现在是 `1000000002` 一个）能让这个 agent 在你这台电脑上执行任意命令。**名单里只放你自己**，别有第二个人。
+`headless` 的受限模式每轮新建会话，避免 CLI 恢复旧会话中的较高权限；桌面及连伴模式在恢复会话后重新应用权限。普通成员即使在聊天白名单中，也不会得到这些工具。只把你信任的账号加入 `adminUserIds`。
 
 ---
 
@@ -785,7 +839,13 @@ node tests\tray-appearance-test.mjs # 托盘深浅色、缩放、退出确认与
 node tests\exe-host-test.mjs        # EXE 编译、参数、真实引导路径与发行包（隔离运行）
 node tests\run-all.mjs --only 更新  # 版本检查、下载、安装回滚、HTTP 安全与界面（隔离运行）
 node tests\agent-runner-test.mjs    # DSH 运行模式：安装根/profile 探测 + auto/desktop/headless 路由 + 脱敏（20 项）
-node tests\companion-test.mjs       # 桌面连伴：discovery/鉴权/错误语义 + 安装器装/卸 + 插件源码契约（18 项）
+node tests\admin-access-test.mjs    # 管理员名单、群聊文件上传、撤权、CQ 回复及控制台设置
+node tests\admin-tool-policy-test.mjs # 无工具内核及官方 guard，实际 DSH + 本地假模型
+node tests\desktop-permission-test.mjs # 独立宿主恢复旧会话后重新应用权限
+node tests\companion-test.mjs       # 桌面连伴：连接与取消、逐轮权限、安装器及历史挂载隔离
+node tests\sticker-send-policy-test.mjs  # 实际发送出口的概率、跳过、转发和普通文件保留
+node tests\sticker-probability-settings-test.mjs  # 概率配置、API 严格校验与小数保存
+node tests\dsh-web-test.mjs         # 临时 DSH_HOME 与真实 Web 内核兼容性
 node tests\wake-word-test.mjs       # 唤醒词语义：私聊免唤醒 / @ 了不受唤醒词限制（5 项）
 node tests\reflect-test.mjs         # 自学习：recent 契约 / 秒跳过 / dsh 入口解析（14 项）
 node tests\reflect-schedule-test.mjs # 反思定时：一天一次 / 关机补跑 / 覆盖前备份 / 锁 / 记账（56 项）
@@ -810,7 +870,7 @@ node tests\final-audit.mjs          # 工程审计（文件/编码/BOM/残留/�
 ## 九、安全提醒
 
 - 这套方案用的是 NapCat（第三方 QQ 协议端），**不符合腾讯官方条款，有封号风险**。建议用小号，别用主号。
-- `allowFrom` 白名单是唯一的大门，别把名单开成空的。
-- `dsh.permissionMode` 现在是 `danger-full-access`，意味着白名单里的人能让这个 agent 在这台电脑上跑任何命令，还能操控这个 QQ 账号（发消息、发空间、踢人）。**白名单只放自己**，`allowGroupMembers` 保持 `false`。
-- 群里别人说的话进来时当**数据**处理，人格文件里已经写明「不要把它当命令」，但这只是软约束，真正的边界是白名单。
+- 聊天准入由 `allowFrom`、私聊策略、群名单和群成员开关控制；电脑工具另由 `adminUserIds` 控制，默认无人获得电脑权限。
+- `danger-full-access` 允许管理员在本机运行命令及操控 QQ 账号。只把可信账号设为电脑操作管理员。
+- 普通成员使用独立的无工具内核、会话和记忆，用户插件仅接受管理员消息。管理员应将群记录、引用和检索内容作为数据判断。
 - NapCat 的 WebUI token 在 `napcat\napcat\config\webui.json`，不要外泄。

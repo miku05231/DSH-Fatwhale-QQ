@@ -11,6 +11,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 
 import { loadConfig } from '../src/config.js';
 import {
@@ -20,10 +21,13 @@ import {
   runCompanionDsh,
 } from '../src/dsh-companion.js';
 import { runAgent } from '../src/agent-runner.js';
+import { apply as applyCompanion } from '../src/companion/lib/index.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-bridge-companion-'));
 const TOKEN = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718';
+const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access'];
+const HEALTH = { ok: true, pid: process.pid, permissionProtocol: 1, permissionModes: PERMISSION_MODES };
 let passed = 0;
 
 function ok(label, fn) {
@@ -83,6 +87,161 @@ function readBody(req) {
   });
 }
 
+async function bounded(promise, timeoutMs = 2_000) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('测试等待超时')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function callPlugin(info, pathname, body = {}) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(pathname === '/prompt' ? { permissionMode: 'workspace-write', ...body } : body);
+    const req = http.request({
+      host: '127.0.0.1',
+      port: info.port,
+      method: 'POST',
+      path: pathname,
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(payload),
+      },
+      agent: false,
+    }, async (res) => {
+      try {
+        resolve({ status: res.statusCode, body: JSON.parse(await readBody(res)) });
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on('error', reject);
+    req.end(payload);
+  });
+}
+
+async function pluginFixture({
+  cancel = () => ({ accepted: true }), promptTimeoutMs, idle = false, complete = false, permissionService,
+  historicalSessions, sessionHeaders = {}, resolveModel,
+} = {}) {
+  const pluginDiscovery = path.join(tmp, `plugin-${randomUUID()}.json`);
+  const calls = {
+    cancelled: 0, flushed: 0, prompted: 0, created: 0, permissions: [], warnings: [], attached: [], observed: [],
+    modelSignals: [], selections: [],
+  };
+  let historyAttached;
+  const historyFinished = new Promise((resolve) => { historyAttached = resolve; });
+  const workspace = {
+    id: 'fixture-workspace',
+    path: tmp,
+    sessionIds: [],
+    attachSession: async (sessionId) => { calls.attached.push(sessionId); },
+  };
+  const sessionMapPath = `${pluginDiscovery}.sessions.json`;
+  if (historicalSessions !== undefined) {
+    fs.writeFileSync(sessionMapPath, JSON.stringify(historicalSessions));
+  }
+  let dispose;
+  let started;
+  const promptStarted = new Promise((resolve) => { started = resolve; });
+  let flushed;
+  const sessionFlushed = new Promise((resolve) => { flushed = resolve; });
+  const events = [];
+  const session = { seq: 0, eventAt: (seq) => events[seq] };
+  let effectivePermission = 'danger-full-access';
+  const controller = {
+    create: async () => {
+      calls.created += 1;
+      return { sessionId: 'fixture-session' };
+    },
+    prompt: () => {
+      calls.prompted += 1;
+      started();
+      if (idle || complete) {
+        events.push({
+          type: 'assistant/message',
+          data: { message: { content: [{ type: 'text', text: 'test reply' }] } },
+        });
+        session.seq = events.length;
+        return Promise.resolve();
+      }
+      return new Promise(() => {});
+    },
+    cancel: () => {
+      calls.cancelled += 1;
+      return cancel();
+    },
+  };
+  const services = {
+    sessionController: controller,
+    workspaceRegistry: { list: () => historicalSessions === undefined ? [] : [workspace] },
+    sessionQuery: {
+      observeSession: async (sessionId) => {
+        calls.observed.push(sessionId);
+        if (!Object.hasOwn(sessionHeaders, sessionId)) throw new Error('fixture session not found');
+        return { header: sessionHeaders[sessionId] };
+      },
+    },
+    agents: {
+      get: () => ({ session, whenIdle: () => complete ? Promise.resolve() : new Promise(() => {}) }),
+      selectForNextRequest: (_agent, model) => { calls.selections.push(model); },
+    },
+    llm: {
+      resolveCallConfig: (model, signal) => {
+        calls.modelSignals.push(signal);
+        return resolveModel ? resolveModel(model, signal) : Promise.resolve(model);
+      },
+    },
+    sessions: { flush: async () => { calls.flushed += 1; flushed(); } },
+    permissionPresets: permissionService === undefined ? {
+      names: PERMISSION_MODES,
+      resolve: (mode) => {
+        if (!PERMISSION_MODES.includes(mode)) throw new Error('unknown preset');
+        return { sandbox: mode, approval: mode === 'danger-full-access' ? 'never' : 'ask' };
+      },
+      set: (targetSession, mode) => {
+        assert.equal(targetSession, session);
+        calls.permissions.push(mode);
+        effectivePermission = mode;
+      },
+      current: (targetSession) => {
+        assert.equal(targetSession, session);
+        return effectivePermission;
+      },
+    } : permissionService,
+  };
+  await applyCompanion({
+    get: (name) => services[name],
+    logger: {
+      warn: (line) => calls.warnings.push(line),
+      info: (line) => { if (line.includes('已把')) historyAttached(); },
+    },
+    effect: (register) => { dispose = register(); },
+  }, {
+    discoveryPath: pluginDiscovery,
+    ...(promptTimeoutMs ? { promptTimeoutMs } : {}),
+    ...(historicalSessions === undefined ? {} : { workspacePath: tmp, sessionMapPath }),
+  });
+  const info = JSON.parse(fs.readFileSync(pluginDiscovery, 'utf8'));
+  return {
+    info,
+    cfg: { dsh: { companionDiscovery: pluginDiscovery } },
+    calls,
+    promptStarted,
+    sessionFlushed,
+    historyFinished,
+    session,
+    dispose,
+  };
+}
+
 // ---------------------------------------------------------------- discovery
 ok('discovery 默认路径 = $DSH_HOME/qq-bridge-companion.json', () => {
   const oldHome = process.env.DSH_HOME;
@@ -112,12 +271,29 @@ await okAsync('probeCompanion：没有文件时不可用且给出原因', async 
   assert.equal(result.available, false);
   assert.match(result.reason, /discovery/);
 });
+await okAsync('runCompanionDsh：discovery 缺失或进程过期明确标记请求尚未接收', async () => {
+  for (const code of ['companion/missing', 'companion/stale']) {
+    if (code === 'companion/missing') fs.rmSync(discoveryPath, { force: true });
+    else writeDiscovery(1, { pid: 2_147_483_647 });
+    await assert.rejects(
+      () => runCompanionDsh('not submitted', { cfg, sessionId: 'old-session', cwd: tmp }),
+      (error) => {
+        assert.equal(error.code, code);
+        assert.equal(error.companion, true);
+        assert.equal(error.channelError, true);
+        assert.equal(error.sessionAccepted, false);
+        assert.equal(error.sessionId, undefined);
+        return true;
+      },
+    );
+  }
+});
 // ---------------------------------------------------------------- HTTP 协议
 await okAsync('probeCompanion：health 校验 token 并返回 pid', async () => {
   const server = await listen((req, res) => {
     assert.equal(req.headers.authorization, `Bearer ${TOKEN}`);
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, pid: process.pid, version: 1 }));
+    res.end(JSON.stringify({ ...HEALTH, version: 1 }));
   });
   const { port } = server.address();
   writeDiscovery(port);
@@ -128,6 +304,23 @@ await okAsync('probeCompanion：health 校验 token 并返回 pid', async () => 
     assert.equal(result.health.pid, process.pid);
   } finally {
     await close(server);
+  }
+});
+
+await okAsync('probeCompanion：旧插件或缺失目标权限能力不得接收对话', async () => {
+  for (const health of [
+    { ok: true, pid: process.pid },
+    { ...HEALTH, permissionModes: ['danger-full-access'] },
+  ]) {
+    const server = await listen((_req, res) => res.end(JSON.stringify(health)));
+    writeDiscovery(server.address().port);
+    try {
+      const result = await probeCompanion(cfg);
+      assert.equal(result.available, false);
+      assert.match(result.reason, /权限/);
+    } finally {
+      await close(server);
+    }
   }
 });
 
@@ -163,7 +356,26 @@ await okAsync('runCompanionDsh：发 text/workspace/model，返回 final 文本'
     assert.equal(received.text, 'ping');
     assert.equal(received.workspacePath, 'C:/work/qq-workspace');
     assert.deepEqual(received.model, { provider: 'relay-a', model: 'm1' });
+    assert.equal(received.permissionMode, 'workspace-write');
     assert.match(logs.join('\n'), /session-test-1/);
+  } finally {
+    await close(server);
+  }
+});
+
+await okAsync('runCompanionDsh：超时优先使用本轮选项，其次使用配置值', async () => {
+  const received = [];
+  const server = await listen(async (req, res) => {
+    received.push(JSON.parse(await readBody(req)));
+    res.end(JSON.stringify({ ok: true, sessionId: 'timeout-priority', text: 'ok' }));
+  });
+  writeDiscovery(server.address().port);
+  const timeoutCfg = { dsh: { ...cfg.dsh, timeoutMs: 12_345 } };
+  try {
+    await runCompanionDsh('config timeout', { cfg: timeoutCfg });
+    await runCompanionDsh('request timeout', { cfg: timeoutCfg, timeoutMs: 23_456 });
+    await runCompanionDsh('null uses config timeout', { cfg: timeoutCfg, timeoutMs: null });
+    assert.deepEqual(received.map((body) => body.timeoutMs), [12_345, 23_456, 12_345]);
   } finally {
     await close(server);
   }
@@ -206,6 +418,95 @@ await okAsync('runCompanionDsh：连不上时 channelError 且可安全回退', 
   );
 });
 
+await okAsync('runCompanionDsh：宿主收到请求后断开连接不得标记可回退', async () => {
+  let received = 0;
+  const server = await listen(async (req) => {
+    await readBody(req);
+    received += 1;
+    req.socket.destroy();
+  });
+  writeDiscovery(server.address().port);
+  try {
+    await assert.rejects(
+      () => bounded(runCompanionDsh('execute once', { cfg, cwd: tmp })),
+      (error) => {
+        assert.equal(error.channelError, undefined);
+        assert.equal(error.sessionAccepted, true);
+        return true;
+      },
+    );
+    assert.equal(received, 1);
+  } finally {
+    await close(server);
+  }
+});
+
+await okAsync('runCompanionDsh：响应截断及时失败且不得重跑', async () => {
+  const server = await listen(async (req, res) => {
+    await readBody(req);
+    res.writeHead(200, { 'content-type': 'application/json', 'content-length': 200 });
+    res.write('{"ok":true,');
+    setImmediate(() => res.destroy());
+  });
+  writeDiscovery(server.address().port);
+  try {
+    await assert.rejects(
+      () => bounded(runCompanionDsh('x', { cfg, cwd: tmp })),
+      (error) => {
+        assert.equal(error.channelError, undefined);
+        assert.equal(error.sessionAccepted, true);
+        assert.match(error.message, /中断|完整|aborted|reset/i);
+        return true;
+      },
+    );
+  } finally {
+    await close(server);
+  }
+});
+
+await okAsync('runCompanionDsh：主动取消不得回退或留下未结算请求', async () => {
+  const controller = new AbortController();
+  let received = 0;
+  const server = await listen(async (req) => {
+    await readBody(req);
+    received += 1;
+    controller.abort();
+  });
+  writeDiscovery(server.address().port);
+  try {
+    await assert.rejects(
+      () => bounded(runCompanionDsh('x', { cfg, cwd: tmp, signal: controller.signal })),
+      (error) => {
+        assert.equal(error.name, 'AbortError');
+        assert.equal(error.channelError, undefined);
+        assert.equal(error.sessionAccepted, true);
+        return true;
+      },
+    );
+    assert.equal(received, 1);
+  } finally {
+    await close(server);
+  }
+});
+
+await okAsync('runCompanionDsh：响应超时不得误判连接失败并重跑', async () => {
+  const server = await listen(async (req) => { await readBody(req); });
+  writeDiscovery(server.address().port);
+  try {
+    await assert.rejects(
+      () => bounded(runCompanionDsh('x', { cfg, cwd: tmp, timeoutMs: 1 }), 7_000),
+      (error) => {
+        assert.equal(error.channelError, undefined);
+        assert.equal(error.sessionAccepted, true);
+        assert.match(error.message, /超时/);
+        return true;
+      },
+    );
+  } finally {
+    await close(server);
+  }
+});
+
 await okAsync('runAgent：companion 可用时优先走 companion', async () => {
   const fakeDshDir = path.join(tmp, 'node_modules', '@deepseek-ai', 'dsh');
   const fakeBin = path.join(fakeDshDir, 'lib', 'bin.js');
@@ -220,7 +521,7 @@ await okAsync('runAgent：companion 可用时优先走 companion', async () => {
   fs.writeFileSync(path.join(fakeProfile, 'package.json'), '{"name":"fake-desktop"}\n');
   const server = await listen((req, res) => {
     if (req.url === '/health') {
-      res.end(JSON.stringify({ ok: true, pid: process.pid }));
+      res.end(JSON.stringify(HEALTH));
       return;
     }
     res.end(JSON.stringify({ ok: true, sessionId: 'session-route', text: 'via-companion' }));
@@ -230,6 +531,7 @@ await okAsync('runAgent：companion 可用时优先走 companion', async () => {
   try {
     const result = await runAgent('hi', {
       cfg: {
+        security: { adminUserIds: [123456] },
         dsh: {
           mode: 'desktop',
           command: fakeBin,
@@ -237,6 +539,7 @@ await okAsync('runAgent：companion 可用时优先走 companion', async () => {
           companionDiscovery: discoveryPath,
         },
       },
+      requesterId: 123456,
       cwd: tmp,
       log: { info: () => {}, warn: () => {} },
     });
@@ -244,6 +547,444 @@ await okAsync('runAgent：companion 可用时优先走 companion', async () => {
     assert.equal(result.sessionId, 'session-route');
   } finally {
     await close(server);
+  }
+});
+
+await okAsync('runAgent：探测成功后 discovery 消失或过期只安全回退执行一次', async () => {
+  const fallbackBin = path.join(tmp, 'preflight-fallback.cjs');
+  const marker = path.join(tmp, 'preflight-fallback-calls.jsonl');
+  const patch = path.join(tmp, 'preflight-fallback.yml');
+  fs.writeFileSync(patch, '[]\n');
+  fs.writeFileSync(fallbackBin, [
+    "const fs = require('node:fs');",
+    `fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2)) + '\\n');`,
+    'console.log(JSON.stringify({type:"session",sessionId:"session-safe-fallback"}));',
+    'console.log(JSON.stringify({type:"final",text:"safe-fallback"}));',
+  ].join('\n'));
+  for (const stale of [false, true]) {
+    fs.rmSync(marker, { force: true });
+    let prompts = 0;
+    const warnings = [];
+    const server = await listen(async (req, res) => {
+      if (req.url === '/health') {
+        if (stale) writeDiscovery(server.address().port, { pid: 2_147_483_647 });
+        else fs.rmSync(discoveryPath, { force: true });
+        res.end(JSON.stringify(HEALTH));
+        return;
+      }
+      await readBody(req);
+      prompts += 1;
+      res.writeHead(500);
+      res.end(JSON.stringify({ ok: false, error: 'prompt must not be sent' }));
+    });
+    writeDiscovery(server.address().port);
+    try {
+      const result = await bounded(runAgent('execute once', {
+        cfg: {
+          security: { adminUserIds: [123456] },
+          dsh: {
+            mode: 'desktop',
+            command: fallbackBin,
+            companionDiscovery: discoveryPath,
+            patchPath: patch,
+            fallbackToHeadless: true,
+            timeoutMs: 5_000,
+          },
+        },
+        requesterId: 123456,
+        cwd: tmp,
+        log: { info: () => {}, warn: (line) => warnings.push(line) },
+      }), 10_000);
+      assert.equal(result.finalText, 'safe-fallback');
+      assert.equal(result.sessionId, 'session-safe-fallback');
+      assert.equal(prompts, 0);
+      assert.equal(fs.readFileSync(marker, 'utf8').trim().split('\n').length, 1);
+      assert(warnings.some((line) => line.includes('连伴连接失败')));
+    } finally {
+      await close(server);
+    }
+  }
+});
+
+await okAsync('runAgent：已被 companion 接收的断线请求不回退独立宿主', async () => {
+  let prompts = 0;
+  const warnings = [];
+  const server = await listen(async (req, res) => {
+    if (req.url === '/health') {
+      res.end(JSON.stringify(HEALTH));
+      return;
+    }
+    await readBody(req);
+    prompts += 1;
+    req.socket.destroy();
+  });
+  writeDiscovery(server.address().port);
+  try {
+    await assert.rejects(
+      () => bounded(runAgent('execute once', {
+        cfg: {
+          security: { adminUserIds: [123456] },
+          dsh: {
+            mode: 'desktop',
+            command: path.join(tmp, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
+            desktopProfile: path.join(tmp, 'profiles', 'desktop'),
+            companionDiscovery: discoveryPath,
+          },
+        },
+        requesterId: 123456,
+        cwd: tmp,
+        log: { info: () => {}, warn: (line) => warnings.push(line) },
+      })),
+      (error) => {
+        assert.equal(error.companion, true);
+        assert.equal(error.channelError, undefined);
+        assert.equal(error.sessionAccepted, true);
+        return true;
+      },
+    );
+    assert.equal(prompts, 1);
+    assert.deepEqual(warnings, []);
+  } finally {
+    await close(server);
+  }
+});
+
+// ---------------------------------------------------------------- 真实插件 + 隔离宿主服务
+await okAsync('真实插件：历史挂载仅包含已存在的桌面会话，不泄漏普通聊天', async () => {
+  const fixture = await pluginFixture({
+    historicalSessions: {
+      chat: 'qq-chat-ordinary-private',
+      groupChat: 'qq-chat-ordinary-group',
+      missing: 'desktop-missing',
+      noHeader: 'desktop-no-header',
+      otherWorkspace: 'desktop-other-workspace',
+      old: 'desktop-too-old',
+      valid: 'desktop-valid',
+      duplicate: 'desktop-valid',
+    },
+    sessionHeaders: {
+      'qq-chat-ordinary-private': { cwd: tmp, createdAt: Date.now() },
+      'qq-chat-ordinary-group': { cwd: tmp, createdAt: Date.now() },
+      'desktop-no-header': undefined,
+      'desktop-other-workspace': { cwd: path.join(tmp, 'other'), createdAt: Date.now() },
+      'desktop-too-old': { cwd: tmp, createdAt: Date.now() - 8 * 24 * 60 * 60 * 1000 },
+      'desktop-valid': { cwd: tmp, createdAt: Date.now() },
+    },
+  });
+  try {
+    await bounded(fixture.historyFinished);
+    assert.deepEqual(fixture.calls.attached, ['desktop-valid']);
+    assert.equal(fixture.calls.observed.some((id) => id.startsWith('qq-chat-')), false);
+    assert.equal(fixture.calls.created, 0);
+    assert.equal(fixture.calls.prompted, 0);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+await okAsync('真实插件：正常完成返回最终文本且不执行取消', async () => {
+  const fixture = await pluginFixture({ complete: true });
+  try {
+    const result = await bounded(runCompanionDsh('complete', { cfg: fixture.cfg }));
+    assert.equal(result.finalText, 'test reply');
+    assert.equal(result.sessionId, 'fixture-session');
+    assert.equal(fixture.calls.cancelled, 0);
+    assert.equal(fixture.calls.flushed, 1);
+    assert.deepEqual(fixture.calls.permissions, ['workspace-write']);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+await okAsync('真实插件：逐请求应用三种权限，不沿用旧会话的高权限', async () => {
+  const fixture = await pluginFixture({ complete: true });
+  try {
+    const probe = await probeCompanion(fixture.cfg);
+    assert.equal(probe.available, true);
+    assert.deepEqual(probe.health.permissionModes, PERMISSION_MODES);
+    for (const permissionMode of ['workspace-write', 'danger-full-access', 'read-only']) {
+      const result = await runCompanionDsh('permissions', {
+        cfg: { dsh: { ...fixture.cfg.dsh, permissionMode } },
+        sessionId: 'fixture-session',
+      });
+      assert.equal(result.finalText, 'test reply');
+    }
+    assert.deepEqual(fixture.calls.permissions, ['workspace-write', 'danger-full-access', 'read-only']);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+await okAsync('真实插件：缺少权限服务在创建或执行会话前拒绝', async () => {
+  const fixture = await pluginFixture({ permissionService: null });
+  try {
+    assert.equal((await probeCompanion(fixture.cfg)).available, false);
+    await assert.rejects(() => runCompanionDsh('denied', { cfg: fixture.cfg }), (error) => {
+      assert.equal(error.code, 'companion/permission-unsupported');
+      assert.equal(error.sessionAccepted, false);
+      assert.equal(error.channelError, true);
+      return true;
+    });
+    assert.equal(fixture.calls.created, 0);
+    assert.equal(fixture.calls.prompted, 0);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+await okAsync('真实插件：缺失或无效权限参数不会继承宿主权限', async () => {
+  const fixture = await pluginFixture();
+  try {
+    for (const permissionMode of [undefined, '', 'custom']) {
+      const result = await callPlugin(fixture.info, '/prompt', { text: 'denied', permissionMode });
+      assert.equal(result.body.code, 'companion/permission-unsupported');
+      assert.equal(result.body.sessionAccepted, false);
+    }
+    assert.equal(fixture.calls.created, 0);
+    assert.equal(fixture.calls.prompted, 0);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+await okAsync('真实插件：同名预设有高权限时不误信名称，选取匹配的安全预设', async () => {
+  let current = 'workspace-write';
+  const selected = [];
+  const service = {
+    names: ['workspace-write', 'safe-workspace'],
+    resolve: (name) => {
+      if (name === 'workspace-write') return { sandbox: 'danger-full-access', approval: 'never' };
+      if (name === 'safe-workspace') return { sandbox: 'workspace-write', approval: 'ask' };
+      throw new Error('unknown preset');
+    },
+    set: (_session, name) => { selected.push(name); current = name; },
+    current: () => current,
+  };
+  const fixture = await pluginFixture({ permissionService: service, complete: true });
+  try {
+    assert.equal((await probeCompanion(fixture.cfg)).available, true);
+    await runCompanionDsh('safe alias', { cfg: fixture.cfg });
+    assert.deepEqual(selected, ['safe-workspace']);
+    assert.equal(fixture.calls.prompted, 1);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+await okAsync('真实插件：权限应用无效或抛错时不调用 prompt', async () => {
+  for (const set of [() => {}, () => { throw new Error('cannot set'); }]) {
+    const fixture = await pluginFixture({
+      permissionService: {
+        names: ['workspace-write', 'danger-full-access'],
+        resolve: (mode) => ({
+          sandbox: mode, approval: mode === 'danger-full-access' ? 'never' : 'ask',
+        }),
+        set,
+        current: () => 'danger-full-access',
+      },
+    });
+    try {
+      await assert.rejects(() => runCompanionDsh('denied', { cfg: fixture.cfg }), (error) => {
+        assert.equal(error.code, 'companion/permission-unsupported');
+        assert.equal(error.sessionAccepted, false);
+        return true;
+      });
+      assert.equal(fixture.calls.prompted, 0);
+      assert.equal(fixture.calls.flushed, 1);
+    } finally {
+      fixture.dispose();
+    }
+  }
+});
+
+await okAsync('真实插件：权限应用期间断线不提交或取消其它宿主任务', async () => {
+  let applying;
+  const permissionStarted = new Promise((resolve) => { applying = resolve; });
+  let release;
+  const permissionReady = new Promise((resolve) => { release = resolve; });
+  const fixture = await pluginFixture({
+    permissionService: {
+      names: ['workspace-write'],
+      resolve: () => ({ sandbox: 'workspace-write', approval: 'ask' }),
+      current: () => 'workspace-write',
+      set: async () => { applying(); await permissionReady; },
+    },
+  });
+  const controller = new AbortController();
+  try {
+    const pending = runCompanionDsh('abort before prompt', { cfg: fixture.cfg, signal: controller.signal });
+    const rejected = assert.rejects(pending, (error) => error.name === 'AbortError');
+    await bounded(permissionStarted);
+    controller.abort();
+    await bounded(rejected);
+    await bounded(fixture.sessionFlushed);
+    release();
+    assert.equal(fixture.calls.prompted, 0);
+    assert.equal(fixture.calls.cancelled, 0);
+  } finally {
+    release();
+    fixture.dispose();
+  }
+});
+
+await okAsync('真实插件：模型查询挂起时断线及时清理，同一会话仍可继续', async () => {
+  let resolving;
+  const modelStarted = new Promise((resolve) => { resolving = resolve; });
+  const fixture = await pluginFixture({
+    complete: true,
+    resolveModel: () => { resolving(); return new Promise(() => {}); },
+  });
+  const controller = new AbortController();
+  try {
+    const pending = runCompanionDsh('cancel model lookup', {
+      cfg: fixture.cfg,
+      model: { provider: 'fixture', model: 'pending-model' },
+      signal: controller.signal,
+    });
+    const rejected = assert.rejects(pending, (error) => error.name === 'AbortError');
+    await bounded(modelStarted);
+    controller.abort();
+    await bounded(rejected);
+    await bounded(fixture.sessionFlushed);
+    assert.equal(fixture.calls.modelSignals[0].aborted, true);
+    assert.equal(fixture.calls.prompted, 0);
+    assert.equal(fixture.calls.cancelled, 0);
+    assert.deepEqual(fixture.calls.selections, []);
+    const next = await bounded(runCompanionDsh('next message', { cfg: fixture.cfg }));
+    assert.equal(next.finalText, 'test reply');
+    assert.equal(fixture.calls.prompted, 1);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+await okAsync('真实插件：模型查询挂起受请求超时限制，后续请求不被锁住', async () => {
+  const fixture = await pluginFixture({
+    complete: true,
+    promptTimeoutMs: 30,
+    resolveModel: () => new Promise(() => {}),
+  });
+  try {
+    const result = await bounded(callPlugin(fixture.info, '/prompt', {
+      text: 'timeout model lookup', model: { provider: 'fixture', model: 'pending-model' },
+    }));
+    assert.equal(result.status, 500);
+    assert.match(result.body.error, /超时/);
+    assert.equal(fixture.calls.modelSignals[0].aborted, true);
+    assert.equal(fixture.calls.prompted, 0);
+    assert.equal(fixture.calls.cancelled, 0);
+    assert.deepEqual(fixture.calls.selections, []);
+    const next = await bounded(callPlugin(fixture.info, '/prompt', { text: 'next message' }));
+    assert.equal(next.status, 200);
+    assert.equal(fixture.calls.prompted, 1);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+await okAsync('客户端：只有明确的权限拒绝码加未执行证明才允许回退', async () => {
+  for (const body of [
+    { ok: false, error: 'not executed', sessionAccepted: false },
+    { ok: false, error: 'not executed', code: 'companion/permission-unsupported' },
+  ]) {
+    const server = await listen((_req, res) => {
+      res.writeHead(500);
+      res.end(JSON.stringify(body));
+    });
+    writeDiscovery(server.address().port);
+    try {
+      await assert.rejects(() => runCompanionDsh('x', { cfg }), (error) => {
+        assert.equal(error.sessionAccepted, true);
+        assert.equal(error.channelError, undefined);
+        return true;
+      });
+    } finally {
+      await close(server);
+    }
+  }
+});
+
+for (const [name, cancel] of [
+  ['同步返回值', () => ({ accepted: true })],
+  ['同步抛错', () => { throw new Error('fixture sync cancel failure'); }],
+  ['Promise 拒绝', () => Promise.reject(new Error('fixture async cancel failure'))],
+]) {
+  await okAsync(`真实插件：/cancel 兼容 ${name}，宿主保持可用`, async () => {
+    const fixture = await pluginFixture({ cancel });
+    try {
+      const pending = callPlugin(fixture.info, '/prompt', { text: 'pending' });
+      await bounded(fixture.promptStarted);
+      const cancelled = await callPlugin(fixture.info, '/cancel', { sessionId: 'fixture-session' });
+      assert.equal(cancelled.body.cancelled, true);
+      const result = await bounded(pending);
+      assert.equal(result.status, 500);
+      assert.equal(result.body.sessionId, 'fixture-session');
+      assert.equal(fixture.calls.cancelled, 1);
+      assert.equal(fixture.calls.flushed, 1);
+      assert.equal((await probeCompanion(fixture.cfg)).available, true);
+    } finally {
+      fixture.dispose();
+    }
+  });
+}
+
+await okAsync('真实插件：客户端断开会取消宿主任务并落盘', async () => {
+  const fixture = await pluginFixture();
+  const controller = new AbortController();
+  try {
+    const pending = runCompanionDsh('disconnect', { cfg: fixture.cfg, signal: controller.signal });
+    const rejected = assert.rejects(pending, (error) => error.name === 'AbortError');
+    await bounded(fixture.promptStarted);
+    controller.abort();
+    await bounded(rejected);
+    await bounded(fixture.sessionFlushed);
+    assert.equal(fixture.calls.cancelled, 1);
+    assert.equal(fixture.calls.flushed, 1);
+    assert.equal((await probeCompanion(fixture.cfg)).available, true);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+await okAsync('真实插件：超时会取消同步宿主控制器且返回明确错误', async () => {
+  const fixture = await pluginFixture({ promptTimeoutMs: 30 });
+  try {
+    const result = await bounded(callPlugin(fixture.info, '/prompt', { text: 'timeout' }));
+    assert.equal(result.status, 500);
+    assert.match(result.body.error, /超时/);
+    assert.equal(fixture.calls.cancelled, 1);
+    assert.equal(fixture.calls.flushed, 1);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+await okAsync('真实插件：等待 Agent 空闲时也能取消', async () => {
+  const fixture = await pluginFixture({ idle: true });
+  try {
+    const pending = callPlugin(fixture.info, '/prompt', { text: 'wait idle' });
+    await bounded(fixture.promptStarted);
+    const result = await callPlugin(fixture.info, '/cancel', { sessionId: 'fixture-session' });
+    assert.equal(result.body.cancelled, true);
+    assert.equal((await bounded(pending)).status, 500);
+    assert.equal(fixture.calls.cancelled, 1);
+    assert.equal(fixture.calls.flushed, 1);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+await okAsync('真实插件：卸载取消活动任务，不会抛出取消回调异常', async () => {
+  const fixture = await pluginFixture({ cancel: () => { throw new Error('dispose cancel failure'); } });
+  try {
+    const pending = callPlugin(fixture.info, '/prompt', { text: 'dispose' });
+    await bounded(fixture.promptStarted);
+    fixture.dispose();
+    assert.equal((await bounded(pending)).status, 500);
+    assert.equal(fixture.calls.cancelled, 1);
+    assert.equal(fixture.calls.flushed, 1);
+  } finally {
+    fixture.dispose();
   }
 });
 
@@ -299,7 +1040,7 @@ ok('安装器：安装后写入标记块，卸载后恢复原内容', () => {
   assert.equal(install.status, 0, install.stderr);
   const installed = fs.readFileSync(patchPath, 'utf8');
   assert.match(installed, /# >>> qq-bridge companion/);
-  assert.match(installed, /name: 'file:\/\/\/.*companion\/lib\/index\.js'/);
+  assert.match(installed, /name: 'file:\/\/\/.*\/src\/companion\/lib\/index\.js'/);
   assert.match(installed, /workspacePath: '/);
   assert.match(installed, /sessionMapPath: '/);
   assert.match(installed, /# existing/);
@@ -318,7 +1059,7 @@ ok('安装器：重复安装不会重复写块', () => {
 });
 
 // ---------------------------------------------------------------- 源码契约
-const pluginSource = fs.readFileSync(path.join(ROOT, 'companion/lib/index.js'), 'utf8');
+const pluginSource = fs.readFileSync(path.join(ROOT, 'src/companion/lib/index.js'), 'utf8');
 const clientSource = fs.readFileSync(path.join(ROOT, 'src/dsh-companion.js'), 'utf8');
 
 ok('插件：只依赖 node: 内置模块，导出 name/inject/apply', () => {
@@ -356,7 +1097,7 @@ ok('新文件都能通过 node --check', () => {
     'src/dsh-companion.js',
     'src/agent-runner.js',
     'src/config.js',
-    'companion/lib/index.js',
+    'src/companion/lib/index.js',
     'tools/install-companion.mjs',
   ]) {
     const result = spawnSync(process.execPath, ['--check', path.join(ROOT, file)], {

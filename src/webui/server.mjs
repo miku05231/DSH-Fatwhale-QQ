@@ -144,6 +144,7 @@ const SETTINGS_SPEC = {
     cwd: 'path',
   },
   security: {
+    adminUserIds: 'qqIdArray',
     allowFrom: 'intArray',
     denyFrom: 'intArray',
     allowGroupIds: 'intArray',
@@ -169,6 +170,7 @@ const SETTINGS_SPEC = {
     root: 'path',
     autoCollect: 'bool',
     autoTag: 'bool',
+    sendProbability: 'probability',
     maxBytes: 'int',
     minBytes: 'int',
     maxPerMessage: 'int',
@@ -1547,6 +1549,9 @@ export function createWebUiServer({
 
   function coerce(type, value) {
     if (type === 'bool') return Boolean(value);
+    if (type === 'probability') {
+      return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
+    }
     if (type === 'int') {
       const n = Number(value);
       return Number.isFinite(n) ? Math.trunc(n) : null;
@@ -1569,6 +1574,13 @@ export function createWebUiServer({
       const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(raw);
       return m ? `${m[1]}:${m[2]}` : null;
     }
+    if (type === 'qqIdArray') {
+      if (!Array.isArray(value) || value.length > 1000) return null;
+      const valid = value.every((id) =>
+        (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) ||
+        (typeof id === 'string' && /^[1-9]\d*$/.test(id.trim())));
+      return valid ? [...new Set(value.map((id) => String(id).trim()))] : null;
+    }
     if (type === 'intArray') {
       if (!Array.isArray(value)) return null;
       const nums = value.map((v) => Number(String(v).trim())).filter((n) => Number.isFinite(n));
@@ -1587,6 +1599,14 @@ export function createWebUiServer({
 
   async function putSettings(req, res) {
     const body = await readJsonBody(req);
+    if (Object.hasOwn(body?.security ?? {}, 'adminUserIds') &&
+        coerce('qqIdArray', body.security.adminUserIds) === null) {
+      return fail(res, 400, '电脑操作管理员必须是正整数 QQ 号数组');
+    }
+    if (Object.hasOwn(body?.stickers ?? {}, 'sendProbability') &&
+        coerce('probability', body.stickers.sendProbability) === null) {
+      return fail(res, 400, '表情发送概率必须是 0–1 之间的数字');
+    }
     let disk;
     try {
       disk = JSON.parse(await fsp.readFile(configPath, 'utf8'));

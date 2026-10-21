@@ -41,10 +41,12 @@ export const DEFAULTS = deepFreeze({
     // 空字符串 = 不设，让 dsh 用自己的默认值（workspace-write）。
     // 设成 danger-full-access 后，QQ 里的 agent 才能真正跑 shell 命令
     // （发图、撤回、发说说都靠 tools/qq.mjs）。代价是它对这个用户能干的
-    // 事也一并放开，只在你信任这个 QQ 白名单时才开。
+    // 事也一并放开，只给 security.adminUserIds 中的可信账号使用。
     permissionMode: 'danger-full-access',
   },
   security: {
+    // 独立于聊天准入名单。只有显式配置的账号能调用电脑工具。
+    adminUserIds: [],
     allowFrom: [],
     // allowGroupIds 非空时按群号精确放行；为空则退回 allowGroups 开关
     allowGroupIds: [],
@@ -93,6 +95,8 @@ export const DEFAULTS = deepFreeze({
     root: 'state\\stickers',
     autoCollect: true,
     autoTag: true,
+    // 0 关闭表情发送，1 保留原发送频率。
+    sendProbability: 1,
     maxBytes: 5 * 1024 * 1024,
     minBytes: 200,
     maxPerMessage: 3,
@@ -217,6 +221,7 @@ const OPTIONAL_STRINGS = [
   'dsh.mode',
   'dsh.desktopProfile',
   'dsh.companionDiscovery',
+  'dsh.permissionMode',
   'dsh.cwd', // 留空 = 进程当前目录；'.' = 配置文件所在目录
   'dsh.patchPath', // 留空 = 不套补丁（干净的机器、Docker 里默认就没补丁）
   'behavior.queuedNotice',
@@ -250,6 +255,10 @@ function validateConfig(config) {
   const mode = getField(config, 'dsh.mode');
   if (!['auto', 'desktop', 'headless'].includes(mode)) {
     invalid('dsh.mode', '必须是 auto、desktop 或 headless 之一', mode);
+  }
+  const permission = getField(config, 'dsh.permissionMode');
+  if (!['', 'read-only', 'workspace-write', 'danger-full-access'].includes(permission)) {
+    invalid('dsh.permissionMode', '必须是空字符串、read-only、workspace-write 或 danger-full-access', permission);
   }
 
   const idleMs = getField(config, 'dsh.desktopIdleMs');
@@ -311,6 +320,11 @@ function validateConfig(config) {
     const value = getField(config, field);
     if (typeof value !== 'boolean') invalid(field, '必须是 true 或 false', value);
   }
+  const sendProbability = getField(config, 'stickers.sendProbability');
+  if (typeof sendProbability !== 'number' || !Number.isFinite(sendProbability) ||
+      sendProbability < 0 || sendProbability > 1) {
+    invalid('stickers.sendProbability', '必须是 0–1 之间的数字（0 关闭发送，1 保留原频率）', sendProbability);
+  }
   const stickerRoot = getField(config, 'stickers.root');
   if (typeof stickerRoot !== 'string' || stickerRoot.trim() === '') {
     invalid('stickers.root', '必须是非空字符串（存放目录，绝对路径或相对项目根）', stickerRoot);
@@ -350,6 +364,19 @@ function validateConfig(config) {
       return;
     }
     invalid(field, '必须是整数 QQ 号或纯数字字符串', entry);
+  });
+
+  const admins = getField(config, 'security.adminUserIds');
+  if (!Array.isArray(admins)) {
+    invalid('security.adminUserIds', '必须是 QQ 号数组（留空 [] 表示无人拥有电脑权限）', admins);
+  }
+  admins.forEach((entry, index) => {
+    if (
+      !((typeof entry === 'number' && Number.isSafeInteger(entry) && entry > 0) ||
+        (typeof entry === 'string' && /^[1-9]\d*$/.test(entry.trim())))
+    ) {
+      invalid(`security.adminUserIds[${index}]`, '必须是正整数 QQ 号或纯数字字符串', entry);
+    }
   });
 
   return config;

@@ -179,7 +179,7 @@ function isMissingSession(error) {
 }
 
 /** 把父进程给的模型选择装到本次请求上（不改桌面端的默认模型） */
-async function applyModel(agent, model) {
+async function applyModel(agent, model, signal) {
   if (!model || typeof model !== 'object') return null;
   const provider = String(model.provider ?? '').trim();
   const modelId = String(model.model ?? '').trim();
@@ -192,7 +192,8 @@ async function applyModel(agent, model) {
     provider,
     model: modelId,
     ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}),
-  });
+  }, signal);
+  if (signal?.aborted) throw cancelledError();
   const selected = {
     provider: resolved.provider,
     model: resolved.model,
@@ -200,6 +201,94 @@ async function applyModel(agent, model) {
   };
   agents.selectForNextRequest(agent, selected);
   return selected;
+}
+
+function cancelledError() {
+  return Object.assign(new Error('本轮已取消'), { name: 'AbortError', code: 'aborted' });
+}
+
+function createPendingRequest(request) {
+  const active = {
+    id: request.id,
+    sessionId: null,
+    abort: new AbortController(),
+    cancelled: false,
+    promptSubmitted: false,
+  };
+  active.aborted = new Promise((_, reject) => {
+    active.onAbort = () => reject(cancelledError());
+    active.abort.signal.addEventListener('abort', active.onAbort, { once: true });
+  });
+  void active.aborted.catch(() => {});
+  return active;
+}
+
+async function waitForRequest(active, operation) {
+  if (active.abort.signal.aborted) throw cancelledError();
+  return Promise.race([
+    Promise.resolve().then(() => {
+      if (active.abort.signal.aborted) throw cancelledError();
+      return operation();
+    }),
+    active.aborted,
+  ]);
+}
+
+function cancelPendingRequest(active) {
+  if (!active || active.cancelled) return;
+  active.cancelled = true;
+  active.abort.abort();
+  if (!active.promptSubmitted) return;
+  try {
+    Promise.resolve(controller.cancel({ sessionId: active.sessionId })).catch((error) => {
+      logStderr(`取消失败：${sanitize(error?.message ?? error)}`);
+    });
+  } catch (error) {
+    logStderr(`取消失败：${sanitize(error?.message ?? error)}`);
+  }
+}
+
+/** 恢复会话保留自身权限，不能仅依赖进程启动时的 DSH_PERMISSION_MODE。 */
+function permissionPlan() {
+  const mode = options.permission || 'workspace-write';
+  const approval = mode === 'danger-full-access' ? 'never' : 'ask';
+  const fail = (message) => Object.assign(new Error(message), {
+    code: 'permission-unsupported',
+    sessionAccepted: false,
+  });
+  if (!['read-only', 'workspace-write', 'danger-full-access'].includes(mode)) {
+    throw fail(`无效的权限模式：${mode}`);
+  }
+  let service;
+  try {
+    service = ctx.get('permissionPresets');
+  } catch {
+    throw fail('宿主没有可用的逐会话权限服务');
+  }
+  if (!service || !['set', 'current', 'resolve'].every((key) => typeof service[key] === 'function')) {
+    throw fail('宿主没有可用的逐会话权限服务');
+  }
+  for (const name of new Set([mode, ...(Array.isArray(service.names) ? service.names : [])])) {
+    try {
+      const spec = service.resolve(name);
+      if (spec?.sandbox === mode && spec?.approval === approval) return { service, name, mode, approval, fail };
+    } catch {
+      /* 名称由宿主配置，按实际沙箱与审批匹配。 */
+    }
+  }
+  throw fail(`宿主不能保证请求的权限：${mode}`);
+}
+
+async function applyPermission(plan, session) {
+  try {
+    await plan.service.set(session, plan.name);
+    const effective = plan.service.resolve(plan.service.current(session));
+    if (effective?.sandbox !== plan.mode || effective?.approval !== plan.approval) {
+      throw new Error('应用后权限与请求不匹配');
+    }
+  } catch (error) {
+    throw plan.fail(`不能应用请求的会话权限：${String(error?.message ?? error)}`);
+  }
 }
 
 function readTurnResult(session, firstSeq) {
@@ -223,66 +312,71 @@ function readTurnResult(session, firstSeq) {
   return { text, end, eventTypes };
 }
 
-async function handlePrompt(request) {
+async function handlePrompt(request, active) {
   const cwd = String(request.cwd || options.cwd || process.cwd());
   const requestedSessionId = request.sessionId ? String(request.sessionId) : null;
+  const permission = permissionPlan();
   let created = null;
   let adopted = false;
 
   if (requestedSessionId) {
-    const knownCwd = await lookupSessionCwd(requestedSessionId);
+    const knownCwd = await waitForRequest(active, () => lookupSessionCwd(requestedSessionId));
     try {
-      created = await controller.create({
+      created = await waitForRequest(active, () => controller.create({
         cwd: knownCwd || cwd,
         sessionId: requestedSessionId,
-      });
+      }));
       adopted = true;
     } catch (error) {
       if (!isMissingSession(error)) throw error;
-      created = await controller.create({ cwd });
+      created = await waitForRequest(active, () => controller.create({ cwd }));
     }
   } else {
-    created = await controller.create({ cwd });
+    created = await waitForRequest(active, () => controller.create({ cwd }));
   }
 
   const sessionId = created.sessionId;
-  send({ v: 1, type: 'session', id: request.id, sessionId, adopted });
-
+  active.sessionId = sessionId;
   const agent = agents.get(sessionId);
   if (!agent) throw new Error(`会话 ${sessionId} 创建后没有活的 agent`);
 
   let selectedModel = null;
   try {
-    selectedModel = await applyModel(agent, request.model);
+    selectedModel = await waitForRequest(active, () => applyModel(agent, request.model, active.abort.signal));
   } catch (error) {
+    if (active.abort.signal.aborted) throw error;
     throw new Error(`指定的模型不可用：${error instanceof Error ? error.message : String(error)}`);
   }
+  await waitForRequest(active, () => applyPermission(permission, agent.session));
+  if (active.abort.signal.aborted) throw cancelledError();
+  send({ v: 1, type: 'session', id: request.id, sessionId, adopted });
 
   const firstSeq = agent.session.seq;
-  const abort = new AbortController();
-  pending = { id: request.id, sessionId, abort, cancelled: false };
   let idleError = null;
 
   try {
-    await controller.prompt(
-      {
-        requestId: randomUUID(),
-        sessionId,
-        mode: 'queue',
-        content: [{ type: 'text', text: String(request.text ?? '') }],
-        clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      },
-      abort.signal,
-    );
+    await waitForRequest(active, () => {
+      active.promptSubmitted = true;
+      return controller.prompt(
+        {
+          requestId: randomUUID(),
+          sessionId,
+          mode: 'queue',
+          content: [{ type: 'text', text: String(request.text ?? '') }],
+          clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        },
+        active.abort.signal,
+      );
+    });
     try {
-      await agent.whenIdle();
+      await waitForRequest(active, () => agent.whenIdle());
     } catch (error) {
+      if (active.abort.signal.aborted) throw error;
       // 回合失败时 whenIdle 也可能抛；真正的错误原因在 turn/end 事件里，
       // 先记下来，等下面读完事件再决定怎么回。
       idleError = error;
     }
   } finally {
-    pending = null;
     try {
       await sessions.flush(agent.session);
     } catch (error) {
@@ -329,14 +423,16 @@ async function handlePrompt(request) {
 }
 
 async function handleCancel(request) {
-  if (!pending) return;
-  if (request?.id && pending.id !== request.id) return;
-  pending.cancelled = true;
-  try {
-    controller.cancel({ sessionId: pending.sessionId });
-  } catch (error) {
-    logStderr(`取消失败：${sanitize(error?.message ?? error)}`);
+  if (request?.id) {
+    const index = queued.findIndex((item) => item.id === request.id);
+    if (index >= 0) {
+      const [cancelled] = queued.splice(index, 1);
+      send({ v: 1, type: 'error', id: cancelled.id, sessionId: null, code: 'aborted', message: '本轮已取消' });
+      return;
+    }
   }
+  if (request?.id && pending?.id !== request.id) return;
+  cancelPendingRequest(pending);
 }
 
 async function runQueue() {
@@ -346,18 +442,23 @@ async function runQueue() {
     while (queued.length > 0) {
       if (shuttingDown) break;
       const request = queued.shift();
+      const active = createPendingRequest(request);
+      pending = active;
       try {
-        await handlePrompt(request);
+        await handlePrompt(request, active);
       } catch (error) {
         send({
           v: 1,
           type: 'error',
           id: request.id,
-          sessionId: pending?.sessionId ?? null,
-          code: 'internal',
+          sessionId: active.sessionId,
+          code: error?.code ?? 'internal',
           message: sanitize(error instanceof Error ? error.message : String(error)),
         });
         logStderr(`处理失败：${sanitize(error?.stack ?? error)}`);
+      } finally {
+        active.abort.signal.removeEventListener('abort', active.onAbort);
+        if (pending === active) pending = null;
       }
     }
   } finally {
@@ -368,13 +469,7 @@ async function runQueue() {
 async function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
-  if (pending) {
-    try {
-      controller?.cancel?.({ sessionId: pending.sessionId });
-    } catch {
-      /* 忽略 */
-    }
-  }
+  cancelPendingRequest(pending);
   try {
     await ctx?.fiber?.dispose?.();
   } catch (error) {

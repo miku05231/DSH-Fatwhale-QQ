@@ -15,6 +15,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { loadConfig } from '../src/config.js';
+import { runChatOnlyDsh } from '../src/chat-only.js';
+import { resolveModelPlan } from '../src/model-follow.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -61,30 +64,6 @@ function run(cmd, args, { timeoutMs = 180000, cwd = ROOT } = {}) {
       resolve({ code: code ?? -1, out, err });
     });
   });
-}
-
-/**
- * 在 Windows 上 `dsh` 其实是 dsh.cmd（批处理包装），Node 的 spawn 无法直接执行它
- * （会 ENOENT），所以这里顺着 PATH 找到 dsh.cmd，再取出它真正要跑的 bin.js，
- * 用当前 node 直接执行，避免任何 shell 引号问题。
- */
-function resolveDshCommand() {
-  const override = process.env.DSH_BIN;
-  if (override && fs.existsSync(override)) return { cmd: process.execPath, args: [override] };
-
-  const pathExts = (process.env.PATHEXT ?? '.CMD;.BAT;.EXE').split(';').filter(Boolean);
-  const dirs = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
-  for (const dir of dirs) {
-    for (const ext of pathExts) {
-      const candidate = path.join(dir, `dsh${ext.toLowerCase()}`);
-      if (!fs.existsSync(candidate)) continue;
-      const bin = path.join(dir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
-      if (fs.existsSync(bin)) return { cmd: process.execPath, args: [bin] };
-    }
-  }
-  // 最后兜底：交给 shell 解析（引号风险由调用方承担）
-  const cmd = process.platform === 'win32' ? 'dsh.cmd' : 'dsh';
-  return { cmd, args: [], viaShell: true };
 }
 
 const today = () => {  const d = new Date();
@@ -175,13 +154,27 @@ async function main() {
   ].join('\n');
 
   console.log('[反思] 调 DSH 生成复盘…');
-  const dshCmd = resolveDshCommand();
-  if (dshCmd.viaShell) console.warn('[反思] 没找到 dsh 的 js 入口，退回 shell 调用');
-  const dsh = await run(
-    dshCmd.cmd,
-    [...dshCmd.args, '--profile', 'headless', '--patch', PATCH, prompt],
-    { timeoutMs: 300000, cwd: WORKSPACE }, // dsh 没有 --cwd 选项，工作目录靠 spawn 的 cwd 传
-  );
+  let dsh;
+  try {
+    const loaded = loadConfig(ROOT, { createIfMissing: false });
+    const configRoot = path.dirname(loaded.path);
+    const stateDir = path.resolve(configRoot, loaded.config.stateDir || 'state');
+    const patchPath = path.resolve(configRoot, loaded.config.dsh.patchPath || PATCH);
+    const modelPlan = resolveModelPlan({ stateDir, basePatchPath: patchPath });
+    // 对话日志包含普通群成员的输入；总结时一律禁用电脑工具。
+    const result = await runChatOnlyDsh(prompt, {
+      cfg: loaded.config,
+      cwd: fs.existsSync(WORKSPACE) ? WORKSPACE : configRoot,
+      projectRoot: configRoot,
+      stateDir,
+      patchPath,
+      extraPatchPaths: modelPlan.patchPaths,
+      model: modelPlan.info?.effective,
+    });
+    dsh = { code: 0, out: result.finalText, err: '' };
+  } catch (error) {
+    dsh = { code: 1, out: '', err: String(error?.message || error) };
+  }
 
   let body = (dsh.out ?? '').trim();
   if (dsh.code !== 0 || !body) {

@@ -12,24 +12,28 @@
  *
  * 用法：
  *   node tools/qq.mjs <action> ['<JSON 参数>']   透传任意 OneBot action
+ *   node tools/qq.mjs --config <path> <action> ['<JSON 参数>']
  *   node tools/qq.mjs --list                     列出常用 action
  *   node tools/qq.mjs --help <action>            查看单个 action / 快捷命令的说明
  *   node tools/qq.mjs <快捷命令> ...             见 --list 里的【快捷命令】
  *
  * 配置：读取项目根目录 config.json 的 onebot.url 与 onebot.accessToken；
  *       读不到或格式不对时退回默认 ws://127.0.0.1:3001。
- *       环境变量 QQ_ONEBOT_URL / QQ_ONEBOT_TOKEN 优先于 config.json。
+ *       --config / QQ_CONFIG 可指定配置；QQ_ONEBOT_URL / QQ_ONEBOT_TOKEN 优先于配置。
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { applyStickerSendPolicy } from '../src/sticker-send-policy.js';
 
 // ------------------------------------------------------------------ 常量
 
 /** 项目根目录：tools/ 的上一级。 */
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_PATH = resolve(PROJECT_ROOT, 'config.json');
+let selectedConfigPath = process.env.QQ_CONFIG ? resolve(process.env.QQ_CONFIG) : CONFIG_PATH;
+let explicitConfig = Boolean(process.env.QQ_CONFIG);
 const DEFAULT_WS_URL = 'ws://127.0.0.1:3001';
 /** 单次调用总超时（连接 + 等待响应）。 */
 const CALL_TIMEOUT_MS = 20000;
@@ -305,8 +309,9 @@ function applyEnvOverride(base) {
 function loadOneBotConfig() {
   let text;
   try {
-    text = readFileSync(CONFIG_PATH, 'utf8');
+    text = readFileSync(selectedConfigPath, 'utf8');
   } catch (err) {
+    if (explicitConfig) throw new CliError(`读取指定 QQ 配置失败：${err.code || err.message}`);
     note(`提示：读取 ${CONFIG_PATH} 失败（${err?.code || err?.message}），改用默认地址 ${DEFAULT_WS_URL}`);
     return applyEnvOverride({ url: DEFAULT_WS_URL, accessToken: '' });
   }
@@ -315,6 +320,7 @@ function loadOneBotConfig() {
   try {
     config = JSON.parse(text.replace(/^\uFEFF/, ''));
   } catch (err) {
+    if (explicitConfig) throw new CliError('指定 QQ 配置不是合法 JSON');
     note(`提示：${CONFIG_PATH} 不是合法 JSON（${err.message}），改用默认地址 ${DEFAULT_WS_URL}`);
     return applyEnvOverride({ url: DEFAULT_WS_URL, accessToken: '' });
   }
@@ -369,7 +375,14 @@ function eventDataToText(data) {
  * 短连接调用一条 OneBot action。
  * @returns {Promise<any>} 成功时返回响应里的 data
  */
-function callAction(action, params) {
+async function callAction(action, params) {
+  const policy = await applyStickerSendPolicy(action, params, {
+    configPath: explicitConfig || existsSync(selectedConfigPath) ? selectedConfigPath : undefined,
+    config: {},
+    configRoot: dirname(selectedConfigPath),
+  });
+  if (policy.skipped) return policy.result;
+  params = policy.params;
   const WebSocketImpl = globalThis.WebSocket;
   if (typeof WebSocketImpl !== 'function') {
     throw new CliError('当前 Node 没有内置 WebSocket（需要 Node ≥ 22），请升级 Node 后重试');
@@ -1415,6 +1428,7 @@ function printUsage() {
     '',
     '用法：',
     '  node tools/qq.mjs <action> [\'<JSON 参数>\']   透传任意 OneBot action',
+    '  node tools/qq.mjs --config <path> <action>    使用指定配置（读取失败时停止）',
     '  node tools/qq.mjs --list                      列出常用 action',
     '  node tools/qq.mjs --help <action>             查看单个 action 的参数说明',
     '  node tools/qq.mjs <快捷命令> ...              例如 send / history / qzone',
@@ -1434,6 +1448,12 @@ function printUsage() {
 
 async function main() {
   const argv = process.argv.slice(2);
+  if (argv[0] === '--config') {
+    if (!argv[1]) throw new CliError('--config 后需要配置文件路径');
+    selectedConfigPath = resolve(argv[1]);
+    explicitConfig = true;
+    argv.splice(0, 2);
+  }
 
   if (argv.length === 0) {
     note('错误：缺少 action 参数。用 --list 查看可用命令，用 --help <action> 查看参数。');

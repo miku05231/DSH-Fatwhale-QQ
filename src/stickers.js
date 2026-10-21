@@ -30,6 +30,7 @@ export const STICKER_DEFAULTS = Object.freeze({
   root: path.join('state', 'stickers'),
   autoCollect: true,
   autoTag: true,
+  sendProbability: 1,
   // 单张上限 5MB，限制表情包或手动导入图片的存储开销
   maxBytes: 5 * 1024 * 1024,
   // 小于 200 字节的图片是坏图/占位符，别收
@@ -97,6 +98,8 @@ export function normalizeStickerSettings(raw) {
     root,
     autoCollect: s.autoCollect !== false,
     autoTag: s.autoTag !== false,
+    sendProbability: typeof s.sendProbability === 'number' && Number.isFinite(s.sendProbability) &&
+      s.sendProbability >= 0 && s.sendProbability <= 1 ? s.sendProbability : STICKER_DEFAULTS.sendProbability,
     maxBytes: clampInt(s.maxBytes, STICKER_DEFAULTS.maxBytes, 1024, 64 * 1024 * 1024),
     minBytes: clampInt(s.minBytes, STICKER_DEFAULTS.minBytes, 0, 1024 * 1024),
     maxPerMessage: clampInt(s.maxPerMessage, STICKER_DEFAULTS.maxPerMessage, 1, 9),

@@ -64,7 +64,7 @@ function resolveWorkspace() {
 }
 
 function pluginUrl() {
-  const entry = path.join(PROJECT_ROOT, 'companion', 'lib', 'index.js');
+  const entry = path.join(PROJECT_ROOT, 'src', 'companion', 'lib', 'index.js');
   if (!fs.existsSync(entry)) fail(`找不到插件入口 ${entry}`);
   return `file:///${entry.replaceAll('\\', '/')}`;
 }

@@ -29,7 +29,6 @@ const ROOT = path.resolve(HERE, '..');
 const INCLUDE = [
   'src',
   'launcher',
-  'companion',
   'assets',
   'tools',
   'tests',
