@@ -304,6 +304,128 @@ await test('source, custom config/state, Docker and other platforms stay manual'
   });
 });
 
+async function sourceFixture(options, action) {
+  await fixture({ http: { data: release(VERSION, { assets: [] }) } }, async (f) => {
+    await mkdir(path.join(f.root, '.git'));
+    for (const relative of ['launcher/bootstrap.ps1', 'launcher/Launcher.ps1', 'src/index.js', 'src/webui/server.mjs']) {
+      await mkdir(path.dirname(path.join(f.root, relative)), { recursive: true });
+      await writeFile(path.join(f.root, relative), '// source fixture');
+    }
+    const calls = [];
+    let dirty = false;
+    const runGit = async (args) => {
+      calls.push(args);
+      if (options?.fail === args[0]) throw new Error('Isolated Git failure.');
+      if (args[0] === 'status') return dirty ? ' M src/index.js' : '';
+      if (args[0] === 'symbolic-ref') return 'refs/heads/main';
+      if (args[0] === 'show') return JSON.stringify({ name: 'qq-bridge', version: options?.version || VERSION });
+      if (args[0] === 'rev-parse') {
+        if (args.includes('--show-toplevel')) return f.root;
+        return args.at(-1) === 'HEAD' ? 'a'.repeat(40) : 'b'.repeat(40);
+      }
+      return '';
+    };
+    const manager = f.factory({ runGit, ...options?.manager });
+    await action({ ...f, manager, calls, setDirty: () => { dirty = true; } });
+  });
+}
+
+await test('the production Git runner recognizes a real source checkout and detects local edits', async () => {
+  await fixture({}, async ({ root, factory }) => {
+    const files = ['launcher/bootstrap.ps1', 'launcher/Launcher.ps1', 'src/index.js', 'src/webui/server.mjs'];
+    for (const relative of files) {
+      await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+      await writeFile(path.join(root, relative), '// source fixture');
+    }
+    for (const args of [
+      ['init', '-b', 'main'],
+      ['add', '--', 'package.json', 'scripts/install-update.ps1', ...files],
+      ['-c', 'user.name=Updater Test', '-c', 'user.email=updater@example.invalid', 'commit', '-m', 'Installed version'],
+    ]) {
+      const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true, timeout: 15_000 });
+      equal(result.status, 0, result.stderr || result.error?.message);
+    }
+    const clean = await factory().check();
+    equal(clean.installMode, 'source');
+    equal(clean.canInstall, true);
+    await writeFile(path.join(root, 'src/index.js'), '// local edit');
+    const dirty = await factory().check();
+    equal(dirty.canInstall, false);
+    truthy(dirty.installReason.includes('未提交'));
+  });
+});
+
+await test('clean source checkout installs the exact release tag without requiring portable assets', async () => {
+  await sourceFixture({}, async ({ manager, calls, jobs, http, root }) => {
+    const state = await manager.check();
+    equal(state.installMode, 'source');
+    equal(state.canInstall, true);
+    equal(state.installReason, null);
+    equal((await manager.install({ version: VERSION })).phase, 'downloading');
+    await until(() => jobs.length === 1);
+    const { job } = jobs[0];
+    equal(job.mode, 'source');
+    equal(job.originalCommit, 'a'.repeat(40));
+    equal(job.targetCommit, 'b'.repeat(40));
+    equal(job.branch, 'refs/heads/main');
+    equal(job.sourceRef, `refs/qq-bridge-updates/${job.jobId}`);
+    equal(job.packagePath, undefined);
+    equal(calls.find((args) => args[0] === 'fetch'), [
+      'fetch', '--no-tags', '--no-recurse-submodules', `https://github.com/${REPO}.git`,
+      `refs/tags/v${VERSION}:${job.sourceRef}`,
+    ]);
+    equal(http.calls.length, 1, 'Source installation only requests release metadata over HTTP.');
+    equal(await readFile(jobs[0].scriptPath, 'utf8'), HELPER);
+    truthy((await readFile(jobs[0].jobPath, 'utf8')).includes('"mode": "source"'));
+    equal((await manager.status()).phase, 'installing');
+    equal(JSON.parse(await readFile(path.join(root, 'state/updates/install.lock'), 'utf8')).jobId, job.jobId);
+  });
+});
+
+await test('source changes before checking or after confirmation prevent installation', async () => {
+  for (const beforeCheck of [true, false]) {
+    await sourceFixture({}, async ({ manager, setDirty, jobs, calls }) => {
+      if (beforeCheck) setDirty();
+      const state = await manager.check();
+      equal(state.canInstall, !beforeCheck);
+      if (beforeCheck) {
+        truthy(state.installReason.includes('未提交'));
+        await rejectsCode(() => manager.install({ version: VERSION }), 'UPDATE_MANUAL_ONLY');
+      } else {
+        setDirty();
+        await manager.install({ version: VERSION });
+        const failed = await until(async () => {
+          const value = await manager.status();
+          return value.phase === 'error' && value;
+        });
+        truthy(failed.error.includes('未提交'));
+      }
+      equal(jobs.length, 0);
+      equal(calls.filter((args) => args[0] === 'fetch').length, 0);
+    });
+  }
+});
+
+await test('source fetch, divergent history, mismatched versions and installer launch failures release the lock', async () => {
+  for (const options of [
+    { fail: 'fetch' }, { fail: 'merge-base' }, { version: '9.9.9' },
+    { manager: { launchInstaller: async () => { throw new Error('Cannot launch.'); } } },
+  ]) {
+    await sourceFixture(options, async ({ manager, root, jobs, calls }) => {
+      await manager.check();
+      await manager.install({ version: VERSION });
+      const failed = await until(async () => {
+        const value = await manager.status();
+        return value.phase === 'error' && value.canInstall && value;
+      });
+      truthy(failed.error);
+      await until(async () => !(await readdir(path.join(root, 'state/updates'))).includes('install.lock'));
+      equal(jobs.length, 0);
+      truthy(calls.some((args) => args[0] === 'update-ref' && args[1] === '-d'));
+    });
+  }
+});
+
 await test('Windows 8.3 aliases allow checks, settings and a verified mocked installation', async () => {
   if (process.platform !== 'win32') {
     console.log('SKIP native 8.3 alias regression requires Windows.');

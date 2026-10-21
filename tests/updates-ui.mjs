@@ -357,6 +357,28 @@ async function main() {
     await refresh();
     check('An up-to-date portable installation is not described as manual-only', !(await text('#updatesHint')).includes('Docker'));
 
+    fixture.status = { ...baseStatus(), installMode: 'source' };
+    await refresh();
+    check('Source checkout offers installation with a source-specific hint', await evaluate('!document.querySelector("#updatesInstall").hidden')
+      && (await text('#updatesHint')).includes('源码版可点击'));
+    await screenshot('updates-source');
+    const beforeSourceInstall = installCount();
+    await click('#updatesInstall');
+    check('Source confirmation explains local-change protection', (await text('#dialogBody')).includes('未提交修改'));
+    await click('#dialogOk');
+    await waitText('#updatesStatus', '正在拉取');
+    check('Source install submits once and shows indeterminate Git progress', installCount() === beforeSourceInstall + 1
+      && await evaluate('!document.querySelector("#updatesProgress").hasAttribute("value")'));
+    fixture.status = { ...fixture.status, phase: 'error', canInstall: false, installReason: '源码有未提交的修改，请先保存。', error: '源码更新已停止' };
+    await refresh();
+    check('Blocked source updates explain the reason and retain a disabled install button', (await text('#updatesHint')).includes('未提交')
+      && !(await text('#updatesHint')).includes('Docker')
+      && await evaluate('!document.querySelector("#updatesInstall").hidden && document.querySelector("#updatesInstall").disabled && document.querySelector("#updatesInstall").title.includes("未提交")'));
+    const beforeBlockedInstall = installCount();
+    await click('#updatesInstall');
+    check('Blocked source install cannot submit a request', installCount() === beforeBlockedInstall);
+    await screenshot('updates-source-blocked');
+
     fixture.status = { ...baseStatus(), latestVersion: '0.4.0', canInstall: false, installReason: '源码运行，请手动更新。', releaseUrl: 'javascript:alert(1)' };
     await refresh();
     check('Source and Docker instructions retain manual-update route', (await text('#updatesHint')).includes('Docker') && (await text('#updatesHint')).includes('源码'));

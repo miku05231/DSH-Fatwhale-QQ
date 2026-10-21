@@ -20,6 +20,9 @@ $script:Mutex = $null
 $script:OwnsMutex = $false
 $script:StartedBootstrap = $null
 $script:RestartAttempted = $false
+$script:SourceAttempted = $false
+$script:SourceApplied = $false
+$script:SourceMode = $false
 $script:VersionPattern = '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$'
 $script:Utf8 = New-Object System.Text.UTF8Encoding($false, $true)
 
@@ -492,6 +495,107 @@ function Undo-Overlay {
     if ($errors.Count -gt 0) { throw ('Rollback needs manual recovery from the backup: ' + ($errors -join '; ')) }
 }
 
+function Invoke-SourceGit([string[]]$Arguments) {
+    $git = Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    $hooks = Join-Path ([IO.Path]::GetDirectoryName($JobPath)) 'empty-hooks'
+    [void][IO.Directory]::CreateDirectory($hooks)
+    Assert-NoReparse $hooks
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $git.Source
+    $info.WorkingDirectory = $script:ProjectRoot
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $info.StandardOutputEncoding = $script:Utf8
+    $info.StandardErrorEncoding = $script:Utf8
+    $info.EnvironmentVariables['GIT_TERMINAL_PROMPT'] = '0'
+    $info.EnvironmentVariables['GCM_INTERACTIVE'] = 'never'
+    $all = @('-C', $script:ProjectRoot, '-c', ('core.hooksPath=' + $hooks)) + $Arguments
+    $info.Arguments = (($all | ForEach-Object {
+        '"' + [regex]::Replace([regex]::Replace($_, '(\\*)"', '$1$1\"'), '(\\+)$', '$1$1') + '"'
+    }) -join ' ')
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $info
+    try {
+        [void]$process.Start()
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errors = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(30000)) {
+            $process.Kill()
+            throw 'Git operation timed out.'
+        }
+        if ($process.ExitCode -ne 0) { throw ('Git operation failed: ' + $errors.Result.Trim()) }
+        return $output.Result.Trim()
+    } finally { $process.Dispose() }
+}
+
+function Assert-SourceState([string]$ExpectedCommit) {
+    $gitDirectory = Join-Path $script:ProjectRoot '.git'
+    Assert-NoReparse $gitDirectory
+    if (-not [IO.Directory]::Exists($gitDirectory)) { throw 'Source updates require a standalone Git checkout.' }
+    $top = Invoke-SourceGit @('rev-parse', '--show-toplevel')
+    if (-not (Test-SamePath (Get-CanonicalLocalPath $top) $script:ProjectRoot)) { throw 'Git root does not match the application.' }
+    if ((Invoke-SourceGit @('symbolic-ref', '--quiet', 'HEAD')) -cne [string]$script:Job.branch -or
+        (Invoke-SourceGit @('rev-parse', '--verify', 'HEAD')) -cne $ExpectedCommit) {
+        throw 'The source branch changed after the update was prepared; no files were replaced.'
+    }
+    if (Invoke-SourceGit @('status', '--porcelain', '--untracked-files=no')) {
+        throw 'Source files have uncommitted changes; commit or save them before updating.'
+    }
+    foreach ($marker in @('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'index.lock')) {
+        if (Test-Path -LiteralPath (Join-Path $gitDirectory $marker)) { throw 'Another Git operation is in progress.' }
+    }
+}
+
+function Install-SourceUpdate {
+    $original = [string](Get-Field $script:Job 'originalCommit')
+    $target = [string](Get-Field $script:Job 'targetCommit')
+    $branch = [string](Get-Field $script:Job 'branch')
+    $sourceRef = [string](Get-Field $script:Job 'sourceRef')
+    if ($original -notmatch '^[0-9a-f]{40}(?:[0-9a-f]{24})?$' -or
+        $target -notmatch '^[0-9a-f]{40}(?:[0-9a-f]{24})?$' -or
+        -not $branch.StartsWith('refs/heads/', [StringComparison]::Ordinal) -or
+        $sourceRef -cne ('refs/qq-bridge-updates/' + [string]$script:Job.jobId)) {
+        throw 'Invalid source update commit or branch.'
+    }
+    Assert-SourceState $original
+    if ((Invoke-SourceGit @('rev-parse', '--verify', ($sourceRef + '^{commit}'))) -cne $target) {
+        throw 'The fetched release changed after the update was prepared.'
+    }
+    $null = Invoke-SourceGit @('merge-base', '--is-ancestor', $original, $target)
+    $releasePackage = (Invoke-SourceGit @('show', ($target + ':package.json'))) | ConvertFrom-Json
+    if ([string](Get-Field $releasePackage 'name') -cne 'qq-bridge' -or
+        [string](Get-Field $releasePackage 'version') -cne [string]$script:Job.version) {
+        throw 'The source release version does not match the requested update.'
+    }
+    $protected = Get-ProtectedPaths
+    $changed = Invoke-SourceGit @('diff', '--no-renames', '--name-only', '-z', $original, $target, '--')
+    foreach ($relative in $changed.Split([char]0)) {
+        if (-not $relative) { continue }
+        $destination = Get-TargetPath $relative
+        foreach ($dataPath in $protected) {
+            if ((Test-Within $destination $dataPath) -or (Test-Within $dataPath $destination)) {
+                throw ('Source update conflicts with a configured data path: ' + $relative)
+            }
+        }
+    }
+    [IO.File]::WriteAllText((Join-Path ([IO.Path]::GetDirectoryName($JobPath)) 'source-backup.json'),
+        (@{ branch = $branch; commit = $original; target = $target } | ConvertTo-Json), $script:Utf8)
+    if (-not $SkipProcessActions) { Stop-AppProcesses }
+    Assert-SourceState $original
+    $script:SourceAttempted = $true
+    try {
+        $null = Invoke-SourceGit @('merge', '--ff-only', '--no-edit', '--no-overwrite-ignore', $target)
+    } finally {
+        $script:SourceApplied = (Invoke-SourceGit @('rev-parse', '--verify', 'HEAD')) -ceq $target
+    }
+    if ($TestFailAfterFiles -eq 0) { throw 'Isolated test: injected source update failure.' }
+    Restart-App -VerifyVersion
+    Write-Result 'complete' 'Source update installed. Local configuration, personas and memory were preserved.'
+    try { Clear-JobLock } catch { }
+}
+
 try {
     if ($TestFailAfterFiles -ge 0 -and -not ($SkipProcessActions -and $SkipRestart)) {
         throw 'The failure injection hook requires both isolated-test switches.'
@@ -510,20 +614,24 @@ try {
         throw 'Invalid application directory.'
     }
     Assert-NoReparse $script:ProjectRoot
-    Assert-NotGitCheckout $script:ProjectRoot
+    $mode = Get-Field $script:Job 'mode'
+    if ($null -ne $mode -and $mode -cne 'source') { throw 'Unsupported update installation mode.' }
+    $script:SourceMode = $mode -ceq 'source'
+    if (-not $script:SourceMode) { Assert-NotGitCheckout $script:ProjectRoot }
     $updates = Join-Path $script:ProjectRoot 'state\updates'
     $jobDirectory = Join-Path $updates $jobId
     $expectedJob = Join-Path $jobDirectory 'job.json'
     $expectedScript = Join-Path $jobDirectory 'install-update.ps1'
-    $package = Get-CanonicalLocalPath ([string](Get-Field $script:Job 'packagePath'))
+    $package = if ($script:SourceMode) { $null } else { Get-CanonicalLocalPath ([string](Get-Field $script:Job 'packagePath')) }
     $result = Get-CanonicalLocalPath ([string](Get-Field $script:Job 'resultPath'))
     if (-not (Test-SamePath $jobFile $expectedJob) -or -not (Test-SamePath (Get-CanonicalLocalPath $PSCommandPath) $expectedScript) -or
-        -not (Test-SamePath ([IO.Path]::GetDirectoryName($package)) $jobDirectory) -or
-        [IO.Path]::GetExtension($package) -ne '.zip' -or
+        (-not $script:SourceMode -and (-not (Test-SamePath ([IO.Path]::GetDirectoryName($package)) $jobDirectory) -or
+            [IO.Path]::GetExtension($package) -ne '.zip')) -or
         -not (Test-SamePath $result (Join-Path $updates 'result.json'))) {
         throw 'Update job, installer, package and result must use the expected state directory.'
     }
-    foreach ($path in @($updates, $jobDirectory, $package, $result, $expectedScript)) { Assert-NoReparse $path }
+    foreach ($path in @($updates, $jobDirectory, $result, $expectedScript)) { Assert-NoReparse $path }
+    if ($package) { Assert-NoReparse $package }
     $rootHasher = [Security.Cryptography.SHA256]::Create()
     try {
         $rootHash = [BitConverter]::ToString($rootHasher.ComputeHash($script:Utf8.GetBytes($script:ProjectRoot.ToLowerInvariant()))).Replace('-', '')
@@ -542,6 +650,7 @@ try {
         }
     }
     foreach ($relative in @('package.json', 'qq-bridge.exe', 'launcher\bootstrap.ps1', 'launcher\Launcher.ps1', 'src\index.js', 'src\webui\server.mjs')) {
+        if ($script:SourceMode -and $relative -eq 'qq-bridge.exe') { continue }
         $marker = Join-Path $script:ProjectRoot $relative
         Assert-NoReparse $marker
         if (-not [IO.File]::Exists($marker)) { throw ('This is not a complete portable installation: ' + $relative) }
@@ -554,6 +663,10 @@ try {
     $consoleNumber = 0
     if (-not [int]::TryParse([string](Get-Field $script:Job 'consolePid'), [ref]$consoleNumber) -or $consoleNumber -lt 0) {
         throw 'Invalid console process identifier.'
+    }
+    if ($script:SourceMode) {
+        Install-SourceUpdate
+        exit 0
     }
     $protected = Get-ProtectedPaths
     $expectedHash = [string](Get-Field $script:Job 'expectedSha256')
@@ -682,7 +795,23 @@ try {
     exit 0
 } catch {
     $message = [string]$_.Exception.Message + ' (installer line ' + $_.InvocationInfo.ScriptLineNumber + ')'
-    $canRestart = $script:Applied.Count -eq 0
+    $canRestart = $script:Applied.Count -eq 0 -and -not $script:SourceAttempted
+    if ($script:SourceApplied) {
+        try {
+            if ($script:RestartAttempted) { Stop-StartedBootstrap; Stop-AppProcesses }
+            Assert-SourceState ([string]$script:Job.targetCommit)
+            $null = Invoke-SourceGit @('reset', '--keep', [string]$script:Job.originalCommit)
+            $message += ' Previous source commit was restored.'
+            $canRestart = $true
+        } catch { $message += ' Source rollback needs manual recovery: ' + [string]$_.Exception.Message }
+    } elseif ($script:SourceAttempted) {
+        try {
+            Assert-SourceState ([string]$script:Job.originalCommit)
+            $canRestart = $true
+        } catch {
+            $message += ' Source update needs manual recovery; application services were not restarted. ' + [string]$_.Exception.Message
+        }
+    }
     if ($script:Applied.Count -gt 0) {
         try {
             if ($script:RestartAttempted) { Stop-StartedBootstrap; Stop-AppProcesses }
@@ -705,6 +834,14 @@ try {
     [Console]::Error.WriteLine($message)
     exit 1
 } finally {
+    if ($script:SourceMode -and $null -ne $script:Job) {
+        try {
+            $sourceRef = [string](Get-Field $script:Job 'sourceRef')
+            if ($sourceRef -ceq ('refs/qq-bridge-updates/' + [string]$script:Job.jobId)) {
+                $null = Invoke-SourceGit @('update-ref', '-d', $sourceRef)
+            }
+        } catch { }
+    }
     if ($null -ne $script:Archive) { $script:Archive.Dispose() }
     if ($null -ne $script:ZipStream) { $script:ZipStream.Dispose() }
     if ($null -ne $script:Mutex) {

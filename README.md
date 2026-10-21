@@ -110,7 +110,7 @@
 
 前提只有两个：Node.js 18+（本项目零第三方 npm 依赖，不用 `npm install`）、一个能登录 QQ 的 NapCat / OneBot 实现。
 
-从 **0.2.2** 起，控制台「系统 → 应用更新」会自动检查 GitHub 稳定版 Release。Windows 便携版确认后可下载安装并重启，保留配置、人格与记忆；源码和 Docker 使用手动更新。旧版需要先手动安装一次完整新版便携包，才能收到后续应用内提醒。
+控制台「系统 → 应用更新」会自动检查 GitHub 稳定版 Release。在 Windows 上，发现新版后点击「安装并重启」并确认，即可自动更新、重启桥接与托盘，保留配置、人格与记忆。便携版会下载并校验完整更新包；Git 源码版会拉取对应的正式发布标签，只在当前分支可以快进且已跟踪文件没有未提交修改时安装，失败时尝试恢复原版本。源码版需要安装 Git，并保留完整的启动脚本；自定义配置或状态目录、Git worktree、Docker 和其他系统仍请手动更新。自动检查仅提醒，不会自行安装；旧版须先手动更新一次才能使用新增的更新方式。
 
 作者发布步骤与更新规则见 [更新发布说明](docs/更新发布.md)。推送源码不会直接给用户升级，发布更高版本的 Release 后，客户端在下次检查时提示。
 
@@ -134,7 +134,7 @@
 
 右键菜单只有一个 **退出**（停止桥接与 NapCat，QQ 机器人下线；DSH 不受影响）。启动、停止、日志、重启、扫码、人格、会话、记忆库、开机自启这些操作全部搬到了控制台里，托盘只负责「在后台安静运行」和「退出」。
 
-菜单与退出确认框沿用控制台的 Material 3 配色，跟随 Windows 应用深浅色；菜单每次打开时重新读取主题。开启高对比度时使用系统颜色。确认框默认聚焦「取消」，回车、Esc 或关闭窗口都不会停服；确认「退出」后才按原有顺序停止桥接和 NapCat。
+菜单使用紧凑的单行「退出」，与退出确认框一起跟随 Windows 应用深浅色；菜单每次打开时重新读取主题。开启高对比度时使用系统颜色。状态探测在后台运行，托盘弹层收起、点击菜单外或切换窗口时菜单会关闭。确认框默认聚焦「取消」，回车、Esc 或关闭窗口都不会停服；确认「退出」后才按原有顺序停止桥接和 NapCat。
 
 > 纯 Shell 模式下 NapCat 就是本机的 QQ（`napcat\node.exe`），没有单独的 `QQ.exe`；「退出 NTQQ」等于停掉 NapCat 进程，退出时会一起结束。
 
@@ -822,6 +822,8 @@ NapCat 没在 3001 端口监听。控制台「概览」→ NapCat 卡片点「�
 
 **一条命令跑完全部并记账**（推荐）：
 
+请在独立、尚未初始化的源码副本中运行全量测试，目录内不能有 `config.json`。测试使用临时配置、人格、记忆、本地模型服务和独立浏览器资料目录，不需要在线模型凭据。真实内核固定为 DSH `0.2.0-rc.2`，可通过 `QQ_TEST_DSH_COMMAND` 指向其入口；界面回归需要 Microsoft Edge，可通过 `QQ_TEST_BROWSER_EXE` 指定。
+
 ```powershell
 cd D:\code\qq-bridge
 node tests\run-all.mjs
@@ -833,12 +835,12 @@ node tests\run-all.mjs
 
 ```powershell
 node tests\onebot-selftest.mjs      # OneBot 客户端行为（15 组断言）
-node tests\smoke-test.mjs           # 会话 / DSH 调用 / 超时（9 项）
+node tests\smoke-test.mjs           # 隔离真实内核：会话 / DSH 调用 / 超时
 node tests\session-window-test.mjs  # 固定窗口、重启、热设置、旧映射与权限隔离
 node tests\session-settings-test.mjs # 会话间隔输入、严格 API 校验与显示
-node tests\e2e-fake-napcat.mjs      # 假 NapCat 驱动的全链路（8 项）
+node tests\e2e-fake-napcat.mjs      # 假 NapCat + 本地模型：全链路 / 续聊 / 陌生人静默
 node tests\e2e-group.mjs            # 群聊：只记不回 / 越权不理 / @ 才回（9 项）
-node tests\e2e-memory.mjs           # 真跑 DSH：召回 → 回复 → 落盘 → 可检索 → 坏库降级（14 项）
+node tests\e2e-memory.mjs           # 隔离真实内核：召回 → 回复 → 落盘 → 可检索 → 坏库降级
 node tests\e2e-plugins.mjs          # 插件：指令接管不调 dsh / afterReply 生效 / 关开关回退（7 项）
 node tests\group-whitelist.mjs      # 群号白名单（6 项）
 node tests\blacklist-test.mjs       # 黑白名单 + 群策略：拉黑压白名单 / lastDrop 原因（20 项）
@@ -848,7 +850,7 @@ node tests\memory-test.mjs          # Obsidian 记忆库（100 项）
 node tests\plugins-test.mjs         # 插件宿主：元数据校验 / 开关 / schema 配置 / 钩子顺序（39 项）
 node tests\model-follow-test.mjs    # 模型跟随：解析桌面端补丁层 / runtime patch / 手动切 / patch 链（75 项）
 node tests\e2e-model-patch.mjs      # 模型跟随端到端：真桥接的 dsh argv、手动优先、桌面端换模型立刻跟上（20 项）
-node tests\model-patch-real-dsh.mjs # 把两层补丁交给真 dsh --dump-config，确认 runtime 覆盖基础（9 项）
+node tests\model-patch-real-dsh.mjs # 隔离真实内核合并两层补丁，确认 runtime 覆盖基础
 node tests\tray-click-target.mjs    # 托盘左键绑定 + 菜单只剩退出 + Open-WebUiConsole 的 Edge 参数（18 项，不动鼠标）
 node tests\tray-appearance-test.mjs # 托盘深浅色、缩放、退出确认与停服顺序（175 项，隔离运行）
 node tests\exe-host-test.mjs        # EXE 编译、参数、真实引导路径与发行包（隔离运行）

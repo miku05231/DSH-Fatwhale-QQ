@@ -150,12 +150,48 @@ function run(f, extra = [], { skipProcesses = true, skipRestart = true } = {}) {
   const result = spawnSync(PS, [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(f.executionJobDir ?? f.jobDir, 'install-update.ps1'),
     '-JobPath', f.executionJobPath ?? f.jobPath, ...(skipProcesses ? ['-SkipProcessActions'] : []), ...(skipRestart ? ['-SkipRestart'] : []), ...extra,
-  ], { encoding: 'utf8', windowsHide: true, timeout: 90_000 });
+  ], {
+    encoding: 'utf8', windowsHide: true, timeout: 90_000,
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_ASK_YESNO: 'false' },
+  });
   if (result.error) throw result.error;
   let state;
   if (fs.existsSync(f.resultPath)) state = JSON.parse(fs.readFileSync(f.resultPath, 'utf8').replace(/^\uFEFF/, ''));
   const stateDiagnostic = state ? `\nUpdate result: ${JSON.stringify(state)}` : '\nNo update result was written.';
   return { code: result.status, state, output: `${result.stdout}${result.stderr}${stateDiagnostic}` };
+}
+
+function sourceGit(f, ...args) {
+  const result = spawnSync('git', ['-C', f.root, ...args], {
+    encoding: 'utf8', windowsHide: true, timeout: 15_000,
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null' },
+  });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  return result.stdout.trim();
+}
+
+function sourceFixture(name, { config = {}, installedFiles = {}, targetFiles = {} } = {}) {
+  const f = fixture(name, { config });
+  for (const [rel, body] of Object.entries(installedFiles)) write(f.root, rel, body);
+  sourceGit(f, 'init', '-b', 'main');
+  sourceGit(f, 'config', 'user.name', 'Updater Test');
+  sourceGit(f, 'config', 'user.email', 'updater@example.invalid');
+  sourceGit(f, 'config', 'core.autocrlf', 'false');
+  write(f.root, '.gitignore', 'state/\nconfig.json\nlogs/\nqq-workspace/\nnapcat/\n记忆库/\n');
+  const managed = ['.gitignore', ...Object.keys(application).filter((rel) => rel !== 'qq-bridge.exe')];
+  sourceGit(f, 'add', '--', ...managed);
+  sourceGit(f, 'commit', '-m', 'Installed application');
+  const originalCommit = sourceGit(f, 'rev-parse', 'HEAD');
+  for (const [rel, body] of Object.entries({ ...application, ...targetFiles })) write(f.root, rel, body);
+  sourceGit(f, 'add', '--', ...managed, ...Object.keys(targetFiles));
+  sourceGit(f, 'commit', '-m', 'Release update');
+  const targetCommit = sourceGit(f, 'rev-parse', 'HEAD');
+  const sourceRef = `refs/qq-bridge-updates/${f.job.jobId}`;
+  sourceGit(f, 'update-ref', sourceRef, targetCommit);
+  sourceGit(f, 'reset', '--keep', originalCommit);
+  f.job = { ...f.job, mode: 'source', originalCommit, targetCommit, branch: 'refs/heads/main', sourceRef };
+  fs.writeFileSync(f.jobPath, JSON.stringify(f.job));
+  return f;
 }
 
 function unchanged(f) {
@@ -175,6 +211,109 @@ if (process.platform !== 'win32') {
   try {
     test('PowerShell source keeps its UTF-8 BOM', () => {
       assert.equal(fs.readFileSync(SCRIPT).subarray(0, 3).toString('hex'), 'efbbbf');
+    });
+    test('source update fast-forwards and preserves ignored and untracked user files', () => {
+      const f = sourceFixture('source-success');
+      fs.rmSync(path.join(f.root, 'qq-bridge.exe'));
+      const result = run(f);
+      assert.equal(result.code, 0, result.output);
+      assert.equal(result.state.phase, 'complete');
+      assert.equal(sourceGit(f, 'rev-parse', 'HEAD'), f.job.targetCommit);
+      assert.equal(sourceGit(f, 'symbolic-ref', 'HEAD'), f.job.branch);
+      assert.equal(fs.readFileSync(path.join(f.root, 'src/index.js'), 'utf8'), application['src/index.js']);
+      for (const rel of ['state/personas/active.json', 'src/user-added.js', '记忆库/note.md']) {
+        assert.equal(fs.readFileSync(path.join(f.root, rel), 'utf8'), `keep ${rel}`);
+      }
+      assert.equal(JSON.parse(fs.readFileSync(path.join(f.jobDir, 'source-backup.json'))).commit, f.job.originalCommit);
+      assert.ok(!fs.existsSync(path.join(f.root, 'state/updates/install.lock')));
+    });
+    test('source update refuses uncommitted tracked files', () => {
+      const f = sourceFixture('source-dirty');
+      write(f.root, 'src/index.js', '// keep local edit');
+      const result = run(f);
+      assert.equal(result.code, 1, result.output);
+      assert.match(result.state.message, /uncommitted/);
+      assert.equal(fs.readFileSync(path.join(f.root, 'src/index.js'), 'utf8'), '// keep local edit');
+      assert.equal(sourceGit(f, 'rev-parse', 'HEAD'), f.job.originalCommit);
+    });
+    test('source failure restores the original branch and code', () => {
+      const f = sourceFixture('source-rollback');
+      const result = run(f, ['-TestFailAfterFiles', '0']);
+      assert.equal(result.code, 1, result.output);
+      assert.match(result.state.message, /Previous source commit was restored/);
+      assert.equal(sourceGit(f, 'rev-parse', 'HEAD'), f.job.originalCommit);
+      assert.equal(sourceGit(f, 'symbolic-ref', 'HEAD'), f.job.branch);
+      unchanged(f);
+    });
+    test('source update refuses a branch changed after confirmation', () => {
+      const f = sourceFixture('source-changed');
+      sourceGit(f, 'switch', '-c', 'local-work');
+      const result = run(f);
+      assert.equal(result.code, 1, result.output);
+      assert.match(result.state.message, /branch changed/);
+      unchanged(f);
+    });
+    test('source update never overwrites untracked files even when ignored', () => {
+      const f = sourceFixture('source-untracked', { targetFiles: { 'src/new-file.js': '// release code' } });
+      sourceGit(f, 'config', 'core.excludesFile', path.join(f.root, 'local-ignore.txt'));
+      write(f.root, 'local-ignore.txt', 'src/new-file.js\n');
+      write(f.root, 'src/new-file.js', '// private local file');
+      const result = run(f);
+      assert.equal(result.code, 1, result.output);
+      assert.equal(sourceGit(f, 'rev-parse', 'HEAD'), f.job.originalCommit);
+      assert.equal(fs.readFileSync(path.join(f.root, 'src/new-file.js'), 'utf8'), '// private local file');
+      unchanged(f);
+    });
+    test('source merge with locked files preserves partial state for manual recovery without restarting', () => {
+      const restartMarker = 'state/restart-attempted';
+      const bootstrap = `[IO.File]::WriteAllText((Join-Path $PSScriptRoot '..\\${restartMarker.replaceAll('/', '\\')}'), 'unexpected restart'); exit 23`;
+      const f = sourceFixture('source-partial-checkout', {
+        installedFiles: { 'launcher/bootstrap.ps1': bootstrap, 'src/index.js': 'setInterval(() => {}, 1000);' },
+        targetFiles: { 'launcher/bootstrap.ps1': bootstrap },
+      });
+      const bridge = spawn(process.execPath, [path.join(f.root, 'src/index.js')], { stdio: 'ignore', windowsHide: true });
+      const ready = path.join(f.jobDir, 'lock-ready');
+      const release = path.join(f.jobDir, 'lock-release');
+      const psQuote = (value) => `'${value.replaceAll("'", "''")}'`;
+      const code = [
+        `$file = [IO.File]::Open(${psQuote(path.join(f.root, 'src/webui/server.mjs'))}, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)`,
+        `[IO.File]::WriteAllText(${psQuote(ready)}, 'ready')`,
+        `try { while (-not [IO.File]::Exists(${psQuote(release)})) { Start-Sleep -Milliseconds 100 } } finally { $file.Dispose() }`,
+      ].join('\n');
+      const holder = spawn(PS, ['-NoProfile', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')], {
+        stdio: 'ignore', windowsHide: true,
+      });
+      try {
+        assert.ok(bridge.pid && holder.pid);
+        const wait = spawnSync(PS, ['-NoProfile', '-Command', [
+          '$deadline = [DateTime]::UtcNow.AddSeconds(5)',
+          `while ([DateTime]::UtcNow -lt $deadline) { if ([IO.File]::Exists(${psQuote(ready)})) { exit 0 }; Start-Sleep -Milliseconds 50 }`,
+          'exit 1',
+        ].join('\n')], { timeout: 7000, windowsHide: true });
+        assert.equal(wait.status, 0, 'isolated file lock did not start');
+        const result = run(f, [], { skipProcesses: false, skipRestart: false });
+        assert.equal(result.code, 1, result.output);
+        assert.match(result.state.message, /manual recovery; application services were not restarted/);
+        assert.equal(sourceGit(f, 'rev-parse', 'HEAD'), f.job.originalCommit);
+        assert.equal(fs.readFileSync(path.join(f.root, 'src/index.js'), 'utf8'), application['src/index.js']);
+        assert.equal(fs.readFileSync(path.join(f.root, 'src/webui/server.mjs'), 'utf8'), 'old // new console');
+        assert.ok(sourceGit(f, 'status', '--porcelain', '--untracked-files=no'));
+        assert.ok(!fs.existsSync(path.join(f.root, restartMarker)));
+        assert.throws(() => process.kill(bridge.pid, 0));
+      } finally {
+        fs.writeFileSync(release, 'release');
+        holder.kill();
+        bridge.kill();
+      }
+    });
+    test('source update refuses releases that change a configured data path', () => {
+      const f = sourceFixture('source-protected', {
+        config: { persona: { path: 'README.md' } },
+      });
+      const result = run(f);
+      assert.equal(result.code, 1, result.output);
+      assert.match(result.state.message, /configured data path/);
+      unchanged(f);
     });
     test('valid ZIP overlays app files and preserves local data in Chinese, spaced and apostrophe paths', () => {
       const f = fixture('success', { config: { dsh: { cwd: '.' }, persona: { path: 'qq-workspace/AGENTS.md', dir: 'state/personas' } } });

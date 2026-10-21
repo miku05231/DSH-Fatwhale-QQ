@@ -71,7 +71,7 @@ dsh --profile headless --patch <abs path to patches/headless-model.yml> \
     "command": "dsh",
     "profile": "headless",
     "patchPath": "patches/headless-model.yml",
-    "cwd": "C:\\D\\DSH\\qq-bridge",
+    "cwd": "qq-workspace",
     "timeoutMs": 300000
   },
   "security": {

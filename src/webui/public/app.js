@@ -1454,7 +1454,19 @@ async function loadModel() {
 
 async function setModelMode(mode) {
   try {
-    const data = await api('/api/model', { method: 'PUT', body: JSON.stringify({ mode }) });
+    const body = { mode };
+    if (mode === 'manual' && !STATE.model?.manual) {
+      body.manual = {
+        provider: $('#modelProvider')?.value,
+        model: $('#modelModel')?.value,
+        reasoningEffort: $('#modelEffort')?.value || 'max',
+      };
+      if (!body.manual.provider || !body.manual.model) {
+        snackbar('没有可用的供应商和模型，请先配置模型');
+        return;
+      }
+    }
+    const data = await api('/api/model', { method: 'PUT', body: JSON.stringify(body) });
     STATE.model = data;
     renderModel(data);
     snackbar(mode === 'manual' ? '已切到手动指定' : '已切回跟随 DSH 桌面端');
@@ -1680,7 +1692,9 @@ function renderUpdates() {
   if (installing && unavailable) message = '控制台正在重启，正在等待重新连接…';
   else if (unavailable) message = '暂时无法读取更新状态，请稍后重试。旧版本控制台可能尚未提供更新功能。';
   else if (UPDATE_UI.pending === 'checking' || status?.phase === 'checking') message = '正在检查新版本…';
-  else if (status?.phase === 'downloading') message = `正在下载更新${Number.isFinite(status.progress) ? ` · ${Math.round(status.progress)}%` : ''}…`;
+  else if (status?.phase === 'downloading') message = status.installMode === 'source'
+    ? '正在拉取发布版本代码…'
+    : `正在下载更新${Number.isFinite(status.progress) ? ` · ${Math.round(status.progress)}%` : ''}…`;
   else if (status?.phase === 'installing' || (installing && status?.phase === 'complete')) message = '正在安装并重启，请稍候…';
   else if (status?.phase === 'available') message = `发现新版本 ${status.latestVersion || ''}`;
   else if (status?.phase === 'current') message = status.latestVersion ? '已是最新版本' : 'GitHub 上暂时没有正式发布版本';
@@ -1692,7 +1706,7 @@ function renderUpdates() {
 
   const progress = $('#updatesProgress');
   progress.hidden = !installing;
-  if (!unavailable && status?.phase === 'downloading' && Number.isFinite(status.progress)) {
+  if (!unavailable && status?.phase === 'downloading' && status.installMode !== 'source' && Number.isFinite(status.progress)) {
     progress.value = Math.min(100, Math.max(0, status.progress));
   } else progress.removeAttribute('value');
 
@@ -1702,7 +1716,9 @@ function renderUpdates() {
   else {
     const checked = status.checkedAt ? `上次检查：${relTime(status.checkedAt)}` : '开启后会在后台定期检查，有新版时提醒。';
     const manual = status.canInstall === false && /手动|源码|git pull|Docker|容器|便携包/.test(status.installReason || '');
-    hint.textContent = manual
+    hint.textContent = status.installMode === 'source'
+      ? `${manual ? status.installReason : '源码版可点击安装并重启，配置、人格和记忆会保留。'} ${checked}`
+      : manual
       ? `${status.installReason || '当前运行方式需手动更新。'} 源码版拉取代码；Docker 版更新镜像后重建容器，沿用原配置和数据卷。${status.checkedAt ? ` ${checked}` : ''}`
       : checked;
   }
@@ -1713,9 +1729,10 @@ function renderUpdates() {
   $('#updatesCheck').disabled = busy;
   $('#updatesCheckLabel').textContent = UPDATE_UI.pending === 'checking' || status?.phase === 'checking' ? '检查中…' : '检查更新';
   const install = $('#updatesInstall');
-  install.hidden = !(status?.latestVersion && (installing || (status.canInstall
+  install.hidden = !(status?.latestVersion && (installing || ((status.canInstall || status.installMode === 'source')
     && ['available', 'error'].includes(status.phase) && status.latestVersion !== status.currentVersion)));
-  install.disabled = busy || unavailable || !status?.updateToken;
+  install.disabled = busy || unavailable || !status?.updateToken || !status?.canInstall;
+  install.title = status?.canInstall ? '安装更新并重启控制台、桥接与托盘' : status?.installReason || '暂时无法安装更新';
   $('#updatesInstallLabel').textContent = installing ? '更新中…' : status?.phase === 'error' ? '重试安装并重启' : '安装并重启';
 
   const url = updateReleaseUrl(status?.releaseUrl);
@@ -1842,7 +1859,9 @@ async function installUpdate() {
   renderUpdates();
   const answer = confirmDialog(
     `安装 ${version} 并重启？`,
-    '配置、人格和记忆会保留。更新会重启桥接与托盘，期间暂时离线；DSH 保持运行。确认后开始下载并安装。',
+    status.installMode === 'source'
+      ? '将拉取正式发布版本的代码，保留配置、人格和记忆。本地代码有未提交修改或分支无法快进时会停止更新。更新会重启桥接与托盘，期间暂时离线；DSH 保持运行。'
+      : '配置、人格和记忆会保留。更新会重启桥接与托盘，期间暂时离线；DSH 保持运行。确认后开始下载并安装。',
     { okText: '安装并重启', danger: false },
   );
   $('#dialogCancel')?.focus();

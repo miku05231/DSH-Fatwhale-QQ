@@ -328,7 +328,8 @@ async function loaderTests(tmpRoot) {
 
 async function httpTests(tmpRoot) {
   const { createWebUiServer } = await import('../src/webui/server.mjs');
-  const { loadConfig } = await import('../src/config.js');
+  const { DEFAULTS } = await import('../src/config.js');
+  const { freePort, useIsolatedEnv } = await import('./helpers/isolated-fixtures.mjs');
 
   const stateDir = path.join(tmpRoot, 'http-state');
   const logDir = path.join(tmpRoot, 'http-logs');
@@ -336,7 +337,7 @@ async function httpTests(tmpRoot) {
   await mkdir(stateDir, { recursive: true });
   await mkdir(logDir, { recursive: true });
 
-  const { config } = loadConfig(PROJECT_ROOT, { createIfMissing: false });
+  const config = structuredClone(DEFAULTS);
   const tempConfig = {
     ...config,
     stateDir,
@@ -345,7 +346,11 @@ async function httpTests(tmpRoot) {
   };
   await writeFile(path.join(tmpRoot, 'config.json'), `${JSON.stringify(tempConfig, null, 2)}\n`, 'utf8');
 
-  const instance = createWebUiServer({ config: tempConfig, configRoot: tmpRoot, port: 5902 });
+  const restoreEnv = useIsolatedEnv(tmpRoot, { QQ_CONFIG: path.join(tmpRoot, 'config.json') });
+  const instance = createWebUiServer({
+    config: tempConfig, configRoot: tmpRoot, port: await freePort(),
+    updateManager: { async start() {}, stop() {} },
+  });
   const { port } = await instance.start();
   if (port <= 0) {
     bad('控制台没起来');
@@ -449,6 +454,7 @@ async function httpTests(tmpRoot) {
     eq((await call('/api/personas/bogus')).status, 404, '未知子路径返回 404');
   } finally {
     await instance.stop();
+    restoreEnv();
   }
 }
 

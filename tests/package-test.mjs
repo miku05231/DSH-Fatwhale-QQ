@@ -149,11 +149,61 @@ function run(args, opts = {}) {
   });
 }
 
+async function verifyOutputSafety(tmpRoot) {
+  const fixtureParent = path.join(tmpRoot, 'output-safety');
+  const fixtureRoot = path.join(fixtureParent, 'source');
+  const fixtureTool = path.join(fixtureRoot, 'tools', 'package.mjs');
+  const sourceSentinel = path.join(fixtureRoot, 'src', 'sentinel.txt');
+  await fsp.mkdir(path.dirname(fixtureTool), { recursive: true });
+  await fsp.mkdir(path.dirname(sourceSentinel), { recursive: true });
+  await fsp.copyFile(PACKAGER, fixtureTool);
+  await fsp.writeFile(path.join(fixtureRoot, 'package.json'), '{"name":"qq-bridge","version":"0.0.0"}\n');
+  await fsp.writeFile(path.join(fixtureRoot, 'config.json'), '{"synthetic":true}\n');
+  await fsp.writeFile(path.join(fixtureRoot, 'AGENTS.md'), 'private-maintenance-fixture\n');
+  await fsp.writeFile(sourceSentinel, 'preserve-source-fixture\n');
+
+  for (const [label, target] of [
+    ['source root', fixtureRoot],
+    ['source ancestor', fixtureParent],
+    ['included directory', path.join(fixtureRoot, 'src')],
+    ['source child', path.join(fixtureRoot, 'new-output')],
+    ['existing source file', path.join(fixtureRoot, 'package.json')],
+  ]) {
+    const rejected = run([fixtureTool, '--out', target, '--force', '--no-zip'], { cwd: tmpRoot });
+    check(rejected.status !== 0, `unsafe output rejected: ${label}`);
+    check(fs.existsSync(sourceSentinel) && fs.existsSync(path.join(fixtureRoot, 'config.json')),
+      `source and local data preserved: ${label}`);
+  }
+
+  const victim = path.join(fixtureParent, 'victim');
+  const link = path.join(fixtureParent, 'linked-output');
+  const victimSentinel = path.join(victim, 'sentinel.txt');
+  await fsp.mkdir(path.join(victim, 'nested'), { recursive: true });
+  await fsp.writeFile(victimSentinel, 'preserve-link-target-fixture\n');
+  await fsp.symlink(victim, link, process.platform === 'win32' ? 'junction' : 'dir');
+  for (const target of [link, path.join(link, 'nested')]) {
+    const rejected = run([fixtureTool, '--out', target, '--force', '--no-zip'], { cwd: tmpRoot });
+    check(rejected.status !== 0 && fs.existsSync(victimSentinel), 'linked output rejected without deleting its target');
+  }
+
+  for (const target of [path.join(fixtureRoot, 'dist', 'package'), path.join(fixtureParent, 'source-output')]) {
+    await fsp.mkdir(target, { recursive: true });
+    const stale = path.join(target, 'stale.txt');
+    await fsp.writeFile(stale, 'replaceable-output-fixture\n');
+    const accepted = run([fixtureTool, '--out', target, '--force', '--no-zip'], { cwd: tmpRoot });
+    check(accepted.status === 0 && !fs.existsSync(stale), 'separate output can be rebuilt with --force');
+    check(!fs.existsSync(path.join(target, 'AGENTS.md')), 'maintenance AGENTS.md is not packaged');
+  }
+}
+
 async function main() {
   const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'qq-package-'));
   const outDir = path.join(tmpRoot, 'app');
 
   try {
+    section('Output path safety (synthetic source tree)');
+    await verifyOutputSafety(tmpRoot);
+
     section('1/7 打包器能跑通');
     const build = run([PACKAGER, '--out', outDir, '--no-zip', '--force']);
     check(build.status === 0, '打包器退出码为 0', String(build.status));

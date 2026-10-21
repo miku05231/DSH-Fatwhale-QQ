@@ -88,9 +88,11 @@ async function main() {
   const removePreviews = temporaryDirectory && outputDirectory === temporaryDirectory;
 
   try {
-    const runs = await Promise.all(
-      ['Preview', 'ExitCancel', 'ExitConfirm'].map((mode) => runHarness(mode, outputDirectory)),
-    );
+    // Native dialogs share the desktop foreground; each harness needs exclusive focus.
+    const runs = [];
+    for (const mode of ['Preview', 'ExitCancel', 'ExitConfirm', 'Responsive']) {
+      runs.push(await runHarness(mode, outputDirectory));
+    }
     for (const run of runs) {
       console.log(`\n[${run.mode}]`);
       const line = run.stdout.split(/\r?\n/).find((entry) => entry.startsWith('TRAY_RESULT '));

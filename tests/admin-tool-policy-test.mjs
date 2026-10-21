@@ -209,7 +209,7 @@ try {
         toolRequestSent = true;
         stream({ role: 'assistant', tool_calls: toolNames.map((name, index) => ({
           index, id: `try-${index}`, type: 'function',
-          function: { name, arguments: JSON.stringify({ command: `Set-Content '${path.join(tmp, 'tool-ran.txt')}' executed`, path: 'C:/Users/admin/Desktop/private.txt' }) },
+          function: { name, arguments: JSON.stringify({ command: `Set-Content '${path.join(tmp, 'tool-ran.txt')}' executed`, path: 'C:/Users/test-user/Desktop/private.txt' }) },
         })) });
         stream({}, 'tool_calls');
       } else {

@@ -6,30 +6,29 @@
  *
  * 用法：
  *   node tests/ui-cdp.mjs                 # 全量场景
- *   node tests/ui-cdp.mjs --keep          # 结束后不关闭浏览器
- *   node tests/ui-cdp.mjs --port 5830     # 指定控制台端口
+ * 服务、家目录与浏览器 profile 都是临时 fixture，不连接运行中的控制台。
  */
 
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
+import { browserRuntimeEnv, createConsoleFixture, freePort } from './helpers/isolated-fixtures.mjs';
+import { killProcessTree } from '../src/dsh.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const SHOT_DIR = path.join(ROOT, 'state', 'ui-shots');
 
 const argv = process.argv.slice(2);
-const keepBrowser = argv.includes('--keep');
-const consolePort = Number(argv[argv.indexOf('--port') + 1]) > 0 ? Number(argv[argv.indexOf('--port') + 1]) : 5830;
+if (argv.length) throw new Error('ui-cdp only runs an isolated console; external ports and persistent browsers are unsupported.');
 
 const EDGE_CANDIDATES = [
+  process.env.QQ_TEST_BROWSER_EXE,
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-];
-
-const DEBUG_PORT = 9333;
+].filter(Boolean);
 
 /* ------------------------------------------------------------- 断言小工具 */
 
@@ -196,46 +195,39 @@ async function main() {
   await mkdir(SHOT_DIR, { recursive: true });
 
   const edge = await findEdge();
-  if (!edge) {
-    console.log('  [SKIP] 没有找到 Edge，跳过界面测试');
-    process.exit(0);
-  }
-
-  // 先确认控制台在线
-  let overview;
-  try {
-    overview = await fetchJson(`http://127.0.0.1:${consolePort}/api/overview`, 8000);
-  } catch (err) {
-    console.log(`  [SKIP] 控制台没在 ${consolePort} 端口运行：${err.message}`);
-    process.exit(0);
-  }
-  if (!overview?.ok) {
-    console.log('  [SKIP] 控制台返回异常，跳过界面测试');
-    process.exit(0);
-  }
-
-  const profileDir = path.join(os.tmpdir(), `qqdsh-cdp-${Date.now()}`);
-  const browser = spawn(
-    edge,
-    [
-      '--headless=new',
-      '--disable-gpu',
-      '--hide-scrollbars',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-extensions',
-      `--remote-debugging-port=${DEBUG_PORT}`,
-      `--user-data-dir=${profileDir}`,
-      '--window-size=1280,960',
-      'about:blank',
-    ],
-    { stdio: 'ignore', windowsHide: true },
-  );
-
+  if (!edge) throw new Error('Set QQ_TEST_BROWSER_EXE to Edge or Chromium for the required UI test.');
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), 'qq-console-cdp-'));
+  const profileDir = path.join(tmpRoot, 'browser');
+  const browserEnv = browserRuntimeEnv(tmpRoot);
+  const debugPort = await freePort();
+  let fixture;
+  let browser;
+  let browserDone;
+  let browserOutput = '';
   let cdp = null;
   try {
-    await waitForDevtools(DEBUG_PORT);
-    const targets = await fetchJson(`http://127.0.0.1:${DEBUG_PORT}/json/list`);
+    fixture = await createConsoleFixture(tmpRoot);
+    const consolePort = fixture.port;
+    const overview = await fetchJson(`http://127.0.0.1:${consolePort}/api/overview`, 8000);
+    if (!overview?.ok) throw new Error('The isolated console did not return an overview.');
+    await mkdir(profileDir, { recursive: true });
+    browser = spawn(edge, [
+      '--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run',
+      '--no-default-browser-check', '--disable-extensions', '--disable-background-networking',
+      `--remote-debugging-port=${debugPort}`, `--user-data-dir=${profileDir}`,
+      '--window-size=1280,960', 'about:blank',
+    ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: browserEnv });
+    browser.stdout.on('data', (chunk) => { browserOutput = (browserOutput + chunk).slice(-4000); });
+    browser.stderr.on('data', (chunk) => { browserOutput = (browserOutput + chunk).slice(-4000); });
+    browserDone = new Promise((resolve, reject) => {
+      browser.once('error', reject);
+      browser.once('close', resolve);
+    });
+    browserDone.catch(() => {});
+    await waitForDevtools(debugPort).catch((error) => {
+      throw new Error(`${error.message}; browser exit=${browser.exitCode}; ${browserOutput}`);
+    });
+    const targets = await fetchJson(`http://127.0.0.1:${debugPort}/json/list`);
     const page = (targets ?? []).find((t) => t.type === 'page');
     if (!page?.webSocketDebuggerUrl) throw new Error('没有可用的页面目标');
 
@@ -494,15 +486,10 @@ async function main() {
     }
   } finally {
     cdp?.close();
-    if (!keepBrowser) {
-      try {
-        browser.kill('SIGKILL');
-      } catch {
-        /* ignore */
-      }
-      await sleep(400);
-      await rm(profileDir, { recursive: true, force: true }).catch(() => {});
-    }
+    killProcessTree(browser);
+    if (browserDone) await Promise.race([browserDone.catch(() => {}), sleep(5000)]);
+    await fixture?.close();
+    await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
   }
 
   process.exit(failed === 0 ? 0 : 1);

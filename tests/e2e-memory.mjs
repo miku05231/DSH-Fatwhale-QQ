@@ -15,12 +15,13 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { createFakeNapCat } from './ws-harness.mjs';
+import { killProcessTree } from '../src/dsh.js';
+import { createLocalDshFixture } from './helpers/isolated-fixtures.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(HERE, '..');
@@ -51,12 +52,11 @@ async function waitFor(predicate, { timeout = 120000, interval = 250, label = '�
   throw new Error(`等待超时（${timeout}ms）：${label}`);
 }
 
-function killTree(pid) {
-  return new Promise((resolve) => {
-    const p = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
-    p.on('exit', () => resolve());
-    p.on('error', () => resolve());
-  });
+async function stopChild(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const closed = new Promise((resolve) => child.once('close', resolve));
+  killProcessTree(child);
+  await closed;
 }
 
 /**
@@ -82,12 +82,12 @@ const dateStamp = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /** 跑一条命令，收集输出 */
-function run(file, args, { timeoutMs = 60000 } = {}) {
+function run(file, args, { timeoutMs = 60000, env = process.env } = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [file, ...args], {
       cwd: PROJECT_ROOT,
       windowsHide: true,
-      env: { ...process.env, NODE_NO_WARNINGS: '1' },
+      env: { ...env, NODE_NO_WARNINGS: '1' },
     });
     let out = '';
     const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
@@ -105,7 +105,22 @@ function run(file, args, { timeoutMs = 60000 } = {}) {
 }
 
 async function main() {
-  const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'qq-memory-e2e-'));
+  const fixture = await createLocalDshFixture({
+    prefix: 'qq-memory-e2e-',
+    reply(body) {
+      const prompt = JSON.stringify(body.messages.filter((message) => message.role === 'user'));
+      return prompt.includes('只回复两个字') ? '还在' : 'fixture-memory-reply';
+    },
+  });
+  try {
+    await testFixture(fixture);
+  } finally {
+    await fixture.close();
+  }
+}
+
+async function testFixture(fixture) {
+  const tmpRoot = fixture.root;
   const vault = path.join(tmpRoot, '记忆库');
   const stateDir = path.join(tmpRoot, 'state');
   const logDir = path.join(tmpRoot, 'logs');
@@ -121,12 +136,13 @@ async function main() {
   const config = {
     onebot: { url: `ws://127.0.0.1:${port}`, accessToken: '' },
     dsh: {
-      command: 'dsh',
+      command: fixture.command,
       mode: 'headless',
       companion: false,
       profile: 'headless',
-      patchPath: path.join(PROJECT_ROOT, 'patches', 'headless-model.yml'),
-      cwd: path.join(PROJECT_ROOT, 'qq-workspace'),
+      patchPath: fixture.patchPath,
+      cwd: fixture.workspace,
+      permissionMode: 'read-only',
       timeoutMs: 240000,
     },
     security: {
@@ -150,7 +166,10 @@ async function main() {
       capture: true,
       maxInjectChars: 800,
       reflectEvery: 0, // 关掉自动反思，避免测试里额外起 dsh 子进程
+      reflectDaily: false,
     },
+    persona: { enabled: false },
+    stickers: { enabled: false },
     groupMemory: { limit: 100 },
     logDir,
     stateDir,
@@ -161,6 +180,7 @@ async function main() {
     cwd: PROJECT_ROOT,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: fixture.env,
   });
   const childOut = [];
   child.stdout.on('data', (c) => childOut.push(c.toString()));
@@ -182,6 +202,8 @@ async function main() {
     const indexExists = fs.existsSync(path.join(vault, '大肥鱼.md'));
     if (indexExists) ok('索引页 大肥鱼.md 已生成');
     else bad('索引页没生成');
+    await fsp.writeFile(path.join(vault, '40-知识', 'fixture.md'),
+      '# 红烧肉\n红烧肉菜谱测试记忆：fixture-memory-recall-marker。\n', 'utf8');
 
     section('2/5 一轮私聊 → 落盘');
     const before = napcat.state.calls.length;
@@ -193,8 +215,11 @@ async function main() {
       label: '收到真正的回复',
     });
     const replyText = String(replyCall.params.message ?? '');
-    if (replyText.trim()) ok('收到私聊回复', `「${replyText.slice(0, 50)}」`);
-    else bad('回复为空');
+    if (replyText === 'fixture-memory-reply') ok('收到真实内核的本地模型回复');
+    else bad('回复不是合成模型的内容', replyText.slice(0, 100));
+    const wire = JSON.stringify(fixture.requests);
+    if (wire.includes(said) && wire.includes('fixture-memory-recall-marker')) ok('长期记忆召回实际注入模型请求');
+    else bad('模型请求缺少当前输入或长期记忆');
 
     section('3/5 日志与人物页内容');
     const dailyFile = path.join(dailyDir, `${dateStamp()}.md`);
@@ -240,7 +265,7 @@ async function main() {
 
     section('4/5 检索可命中（tools/memory.mjs）');
     const search = await run(path.join('tools', 'memory.mjs'), ['search', '红烧肉', '--root', vault, '--json'], {
-      timeoutMs: 60000,
+      timeoutMs: 60000, env: fixture.env,
     });
     if (search.code === 0) {
       let parsed = null;
@@ -256,11 +281,13 @@ async function main() {
       bad('memory.mjs search 执行失败', search.out.slice(0, 160));
     }
 
-    const stats = await run(path.join('tools', 'memory.mjs'), ['stats', '--root', vault, '--json'], { timeoutMs: 30000 });
+    const stats = await run(path.join('tools', 'memory.mjs'), ['stats', '--root', vault, '--json'], {
+      timeoutMs: 30000, env: fixture.env,
+    });
     if (stats.code === 0 && /files/.test(stats.out)) ok('stats 可读');
     else bad('stats 读取失败', stats.out.slice(0, 120));
   } finally {
-    await killTree(child.pid);
+    await stopChild(child);
     await napcat.close?.();
   }
 
@@ -292,6 +319,7 @@ async function main() {
       cwd: PROJECT_ROOT,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: fixture.env,
     });
     const out2 = [];
     child2.stdout.on('data', (c) => out2.push(c.toString()));
@@ -312,19 +340,18 @@ async function main() {
         label: '降级实例回复',
       }).catch(() => null);
 
-      if (reply2 && String(reply2.params.message ?? '').trim()) ok('记忆坏了也照常回复');
-      else bad('记忆库故障导致不回复');
+      if (reply2 && String(reply2.params.message ?? '').trim() === '还在') ok('记忆坏了也照常回复');
+      else bad('记忆库故障导致不回复', String(reply2?.params?.message ?? '').slice(0, 120));
 
       const joined = out2.join('');
       if (/长期记忆不可用|记忆库未就绪/.test(joined)) ok('日志里给出了降级警告');
       else bad('日志缺少降级警告', joined.slice(0, 200));
     } finally {
-      await killTree(child2.pid);
+      await stopChild(child2);
       await napcat2.close?.();
     }
   }
 
-  await fsp.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
   console.log(`\n${'='.repeat(56)}`);
   console.log(`通过 ${passed} 项，失败 ${failed} 项`);
   console.log('='.repeat(56));

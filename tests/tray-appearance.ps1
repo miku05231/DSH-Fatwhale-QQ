@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet('Preview', 'ExitCancel', 'ExitConfirm')]
+    [ValidateSet('Preview', 'ExitCancel', 'ExitConfirm', 'Responsive')]
     [string]$Mode = 'Preview',
     [string]$OutputDirectory = $env:TRAY_PREVIEW_DIR
 )
@@ -93,26 +93,15 @@ function Test-MenuLayout {
     Add-PreviewCheck ($label + ' contains its exit item') ($Menu.ClientRectangle.Contains($item.Bounds)) $item.Bounds.ToString()
     if ($Menu.Renderer -is [System.Windows.Forms.ToolStripSystemRenderer]) { return }
 
-    $font = [System.Drawing.Font]::new($Menu.Font.FontFamily, [single]($Menu.Font.Size * 0.9))
-    try {
-        $titleSize = [System.Windows.Forms.TextRenderer]::MeasureText(
-            ($item.Text -split '（')[0],
-            $Menu.Font,
-            [System.Drawing.Size]::Empty,
-            ([System.Windows.Forms.TextFormatFlags]::SingleLine -bor [System.Windows.Forms.TextFormatFlags]::NoPadding)
-        )
-        $detailSize = [System.Windows.Forms.TextRenderer]::MeasureText(
-            [string]$item.Tag,
-            $font,
-            [System.Drawing.Size]::Empty,
-            ([System.Windows.Forms.TextFormatFlags]::SingleLine -bor [System.Windows.Forms.TextFormatFlags]::NoPadding)
-        )
-        $textWidth = $item.Width - [int](56 * $Menu.LayoutScale)
-        Add-PreviewCheck ($label + ' fits its title') (($titleSize.Width -le $textWidth) -and ($titleSize.Height -le [int](24 * $Menu.LayoutScale))) $titleSize.ToString()
-        Add-PreviewCheck ($label + ' fits its second line') (($detailSize.Width -le $textWidth) -and ($detailSize.Height -le [int](22 * $Menu.LayoutScale))) $detailSize.ToString()
-    } finally {
-        $font.Dispose()
-    }
+    $titleSize = [System.Windows.Forms.TextRenderer]::MeasureText(
+        $item.Text,
+        $Menu.Font,
+        [System.Drawing.Size]::Empty,
+        ([System.Windows.Forms.TextFormatFlags]::SingleLine -bor [System.Windows.Forms.TextFormatFlags]::NoPadding)
+    )
+    $textWidth = $item.Width - [int](44 * $Menu.LayoutScale)
+    Add-PreviewCheck ($label + ' fits its title') (($titleSize.Width -le $textWidth) -and ($titleSize.Height -le $item.Height)) $titleSize.ToString()
+    Add-PreviewCheck ($label + ' stays compact') (($Menu.Width -le [int](140 * $Menu.LayoutScale)) -and ($Menu.Height -le [int](44 * $Menu.LayoutScale))) $Menu.Size.ToString()
 }
 
 function Save-RenderedPreview {
@@ -279,8 +268,8 @@ namespace QqDshLauncher.Tests {
                 $menu = New-LauncherTrayMenu -Palette $palette
                 Add-PreviewCheck ($theme + ' menu contains only exit') (($menu -is [System.Windows.Forms.ContextMenuStrip]) -and ($menu.Items.Count -eq 1))
                 Add-PreviewCheck ($theme + ' menu has an accessible name') (-not [string]::IsNullOrWhiteSpace($menu.AccessibleName))
-                Add-PreviewCheck ($theme + ' menu preserves its exit label') ($menu.Items[0].Text -eq '退出（停止桥接与 NapCat）') $menu.Items[0].Text
-                Add-PreviewCheck ($theme + ' menu preserves accessible exit text') ($menu.Items[0].AccessibleName -eq $menu.Items[0].Text)
+                Add-PreviewCheck ($theme + ' menu has a compact exit label') ($menu.Items[0].Text -eq '退出') $menu.Items[0].Text
+                Add-PreviewCheck ($theme + ' menu preserves accessible exit text') ($menu.Items[0].AccessibleName -eq '退出（停止桥接与 NapCat）')
                 Add-PreviewCheck ($theme + ' menu tooltip explains DSH behavior') (($menu.Items[0].ToolTipText -match 'DSH') -and ($menu.Items[0].ToolTipText -match '继续')) $menu.Items[0].ToolTipText
                 $menu.TopLevel = $false
                 $hostForm.Controls.Add($menu)
@@ -402,9 +391,208 @@ function Invoke-ExitBehaviorCheck {
     }
 }
 
+function Invoke-ResponsivenessCheck {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    . (Join-Path $projectRoot 'launcher\lib\TrayAppearance.ps1')
+    Initialize-LauncherAppearance
+
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+        (Join-Path $projectRoot 'launcher\Launcher.ps1'), [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -gt 0) { throw $parseErrors[0].Message }
+    foreach ($name in @('Get-LauncherStatus', 'Start-LauncherStatusRefresh', 'Receive-LauncherStatusRefresh', 'Invoke-LauncherCleanup')) {
+        $definition = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+        }, $true) | Select-Object -First 1
+        if ($null -eq $definition) { throw ('Missing function: ' + $name) }
+        Invoke-Expression $definition.Extent.Text
+    }
+
+    $fixtureDir = Join-Path ([System.IO.Path]::GetTempPath()) ('qq-tray-status-' + [Guid]::NewGuid().ToString('N'))
+    $null = [System.IO.Directory]::CreateDirectory($fixtureDir)
+    $script:ProcessControlPath = Join-Path $fixtureDir 'ProcessControl.ps1'
+    [System.IO.File]::WriteAllText($script:ProcessControlPath, @'
+function Get-NapCatProcess {
+    Start-Sleep -Milliseconds 1500
+    [pscustomobject]@{ Running = $true; ProcessId = 101 }
+}
+function Get-NapCatLoginState { [pscustomobject]@{ LoggedIn = $true; Account = ''; Nickname = 'fixture'; Detail = '' } }
+function Get-DshProcess { [pscustomobject]@{ Running = $true; ProcessId = 102 } }
+function Get-BridgeProcess { [pscustomobject]@{ Running = $true; ProcessId = 103; Sessions = 2; InFlight = 0 } }
+'@)
+    $script:Exiting = $false
+    $script:RequireDsh = $true
+    $script:StatusWorker = $null
+    $script:StatusRequest = $null
+    $script:NextStatusRefresh = [DateTime]::MinValue
+    $script:ReceivedStatus = $null
+    $script:StatusUiThread = 0
+    $script:ClickCount = 0
+    $script:ClickMilliseconds = -1
+    $script:ProbeErrors = [System.Collections.Generic.List[string]]::new()
+    $uiThread = [System.Threading.Thread]::CurrentThread.ManagedThreadId
+    function Update-LauncherState {
+        param($Status)
+        $script:ReceivedStatus = $Status
+        $script:StatusUiThread = [System.Threading.Thread]::CurrentThread.ManagedThreadId
+    }
+    function Write-LauncherLog {
+        param([string]$Message, [string]$Level)
+        $script:ProbeErrors.Add($Message)
+    }
+    function Set-FixtureForeground {
+        param([System.Windows.Forms.Form]$Form)
+
+        if (-not $Form.Visible) { $Form.Show() }
+        $activationWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        do {
+            $Form.BringToFront()
+            $Form.Activate()
+            [System.Windows.Forms.Application]::DoEvents()
+            $current = $foregroundMethod.Invoke($null, @())
+            if ($current -eq $Form.Handle) { return $true }
+            [System.Threading.Thread]::Sleep(20)
+        } while ($activationWatch.ElapsedMilliseconds -lt 3000)
+        return $false
+    }
+    $menu = $null
+    $clickTimer = $null
+    $overflow = $null
+    $otherWindow = $null
+    $stoppingWorker = $null
+    try {
+        $menu = New-LauncherTrayMenu
+        $foregroundMethod = $menu.GetType().GetMethod('GetForegroundWindow', [System.Reflection.BindingFlags]'Static,NonPublic')
+        $menu.Items[0].Add_Click({
+            $script:ClickCount += 1
+            $script:ClickMilliseconds = $script:ClickWatch.ElapsedMilliseconds
+        })
+        $clickTimer = [System.Windows.Forms.Timer]::new()
+        $clickTimer.Interval = 50
+        $clickTimer.Add_Tick({
+            $clickTimer.Stop()
+            $menu.Items[0].PerformClick()
+        })
+        $script:ClickWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        Start-LauncherStatusRefresh
+        $startMs = $script:ClickWatch.ElapsedMilliseconds
+        Add-PreviewCheck 'Slow status probe starts without blocking the UI' ($startMs -lt 1000) ($startMs.ToString() + 'ms')
+        $worker = $script:StatusWorker
+        Start-LauncherStatusRefresh
+        Add-PreviewCheck 'Only one status probe runs at a time' ([object]::ReferenceEquals($worker, $script:StatusWorker))
+        $clickTimer.Start()
+        $pumps = 0
+        while ($null -eq $script:ReceivedStatus -and $script:ClickWatch.ElapsedMilliseconds -lt 10000) {
+            [System.Windows.Forms.Application]::DoEvents()
+            Receive-LauncherStatusRefresh
+            $pumps += 1
+            [System.Threading.Thread]::Sleep(10)
+        }
+        Add-PreviewCheck 'Exit click is processed during the slow status probe' (($script:ClickCount -eq 1) -and ($script:ClickMilliseconds -lt 1000)) ($script:ClickMilliseconds.ToString() + 'ms')
+        Add-PreviewCheck 'UI continues pumping while the status probe runs' ($pumps -gt 20) ($pumps.ToString() + ' cycles')
+        Add-PreviewCheck 'Background status probe returns the service state' (($null -ne $script:ReceivedStatus) -and $script:ReceivedStatus.Level -eq 'green' -and $script:ReceivedStatus.BridgeSessions -eq 2) ($script:ProbeErrors -join ', ')
+        Add-PreviewCheck 'Status updates are applied on the UI thread' ($script:StatusUiThread -eq $uiThread)
+        Add-PreviewCheck 'Completed status probe releases its runspace' ($null -eq $script:StatusWorker)
+
+        $overflow = [System.Windows.Forms.Form]::new()
+        $overflow.ShowInTaskbar = $false
+        $overflow.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+        $overflow.Location = [System.Drawing.Point]::new(-16000, -16000)
+        $overflow.Opacity = 0
+        $overflow.Show()
+        $menu.Show([System.Drawing.Point]::new(0, 0))
+        [System.Windows.Forms.Application]::DoEvents()
+        $flags = [System.Reflection.BindingFlags]'Instance,NonPublic'
+        $timerField = $menu.GetType().GetField('dismissTimer', $flags)
+        Add-PreviewCheck 'Opening the native menu starts its dismissal timer' ($timerField.GetValue($menu).Enabled)
+        $overflowField = $menu.GetType().GetField('overflowWindow', $flags)
+        $overflowField.SetValue($menu, $overflow.Handle)
+        $dismissWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($dismissWatch.ElapsedMilliseconds -lt 250) {
+            [System.Windows.Forms.Application]::DoEvents()
+            [System.Threading.Thread]::Sleep(10)
+        }
+        Add-PreviewCheck 'An idle native menu stays open across dismissal ticks' $menu.Visible
+        $overflow.Hide()
+        $dismissWatch.Restart()
+        while ($menu.Visible -and $dismissWatch.ElapsedMilliseconds -lt 1500) {
+            [System.Windows.Forms.Application]::DoEvents()
+            [System.Threading.Thread]::Sleep(10)
+        }
+        Add-PreviewCheck 'Hiding the overflow closes the native menu' (-not $menu.Visible) ($dismissWatch.ElapsedMilliseconds.ToString() + 'ms')
+
+        $ownerActivated = Set-FixtureForeground -Form $overflow
+        Add-PreviewCheck 'The first focus fixture becomes the native foreground window' $ownerActivated
+        $beforeForeground = $foregroundMethod.Invoke($null, @())
+        $menu.Show([System.Drawing.Point]::new(0, 0))
+        $otherWindow = [System.Windows.Forms.Form]::new()
+        $otherWindow.ShowInTaskbar = $false
+        $otherWindow.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+        $otherWindow.Location = [System.Drawing.Point]::new(-16000, -16000)
+        $otherWindow.Opacity = 0
+        $otherActivated = Set-FixtureForeground -Form $otherWindow
+        $afterForeground = $foregroundMethod.Invoke($null, @())
+        Add-PreviewCheck 'The focus test actually switches native foreground windows' (
+            $ownerActivated -and $otherActivated -and
+            $beforeForeground -eq $overflow.Handle -and
+            $afterForeground -eq $otherWindow.Handle -and
+            $beforeForeground -ne $afterForeground
+        ) ('before=' + $beforeForeground + ', after=' + $afterForeground + ', target=' + $otherWindow.Handle)
+        $dismissWatch.Restart()
+        while ($menu.Visible -and $dismissWatch.ElapsedMilliseconds -lt 1500) {
+            [System.Windows.Forms.Application]::DoEvents()
+            [System.Threading.Thread]::Sleep(10)
+        }
+        Add-PreviewCheck 'Changing the foreground closes the native menu' (-not $menu.Visible) ($dismissWatch.ElapsedMilliseconds.ToString() + 'ms')
+        Add-PreviewCheck 'Closed menus stop their dismissal timer' (-not $timerField.GetValue($menu).Enabled)
+
+        [System.IO.File]::WriteAllText($script:ProcessControlPath, @'
+function Get-NapCatProcess {
+    [System.Threading.Thread]::Sleep(1800)
+    [pscustomobject]@{ Running = $false }
+}
+function Get-DshProcess { [pscustomobject]@{ Running = $false } }
+function Get-BridgeProcess { [pscustomobject]@{ Running = $false } }
+'@)
+        $script:NextStatusRefresh = [DateTime]::MinValue
+        Start-LauncherStatusRefresh
+        $stoppingWorker = $script:StatusWorker
+        [System.Threading.Thread]::Sleep(100)
+        $script:Timer = $null
+        $script:TrayIcon = $null
+        $script:Menu = $null
+        $script:IconGreen = $null
+        $script:IconYellow = $null
+        $script:IconRed = $null
+        $script:AppIconImage = $null
+        $script:Mutex = $null
+        $cleanupWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        Invoke-LauncherCleanup
+        Add-PreviewCheck 'Cleanup does not wait for a native background probe' ($cleanupWatch.ElapsedMilliseconds -lt 1000) ($cleanupWatch.ElapsedMilliseconds.ToString() + 'ms')
+        Add-PreviewCheck 'Cleanup releases launcher references to the status worker' ($null -eq $script:StatusWorker)
+    } finally {
+        if ($null -ne $script:StatusWorker) {
+            $script:StatusWorker.Stop()
+            $script:StatusWorker.Dispose()
+        }
+        if ($null -ne $clickTimer) { $clickTimer.Dispose() }
+        if ($null -ne $menu) { $menu.Dispose() }
+        if ($null -ne $overflow) { $overflow.Dispose() }
+        if ($null -ne $otherWindow) { $otherWindow.Dispose() }
+        if ($null -ne $stoppingWorker) { $stoppingWorker.Dispose() }
+        [System.IO.File]::Delete($script:ProcessControlPath)
+        [System.IO.Directory]::Delete($fixtureDir)
+    }
+}
+
 try {
     if ($Mode -eq 'Preview') {
         Invoke-AppearancePreview
+    } elseif ($Mode -eq 'Responsive') {
+        Invoke-ResponsivenessCheck
     } else {
         Invoke-ExitBehaviorCheck
     }

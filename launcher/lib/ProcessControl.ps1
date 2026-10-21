@@ -373,7 +373,7 @@ function Get-NapCatProcess {
         $config = Get-ProcessControlConfig
         $filter = "Name='" + $config.NapCatProcess + "'"
 
-        $candidates = @(Get-CimInstance -ClassName Win32_Process -Filter $filter -ErrorAction Stop)
+        $candidates = @(Get-CimInstance -ClassName Win32_Process -Filter $filter -OperationTimeoutSec 3 -ErrorAction Stop)
         if ($candidates.Count -eq 0) { return $result }
 
         $matched = @()
@@ -575,7 +575,7 @@ function Get-DshProcess {
         $config = Get-ProcessControlConfig
         $filter = "Name='" + $config.DshProcess + "'"
 
-        $all = @(Get-CimInstance -ClassName Win32_Process -Filter $filter -ErrorAction Stop)
+        $all = @(Get-CimInstance -ClassName Win32_Process -Filter $filter -OperationTimeoutSec 3 -ErrorAction Stop)
         if ($all.Count -eq 0) { return $result }
 
         $ids = @{}
@@ -1062,7 +1062,7 @@ function Get-BridgeProcess {
 
         $marker = [string]$config.BridgeMarker
 
-        $processes = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue
+        $processes = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -OperationTimeoutSec 3 -ErrorAction SilentlyContinue
         foreach ($process in @($processes)) {
             $commandLine = [string]$process.CommandLine
             if ([string]::IsNullOrWhiteSpace($commandLine)) { continue }

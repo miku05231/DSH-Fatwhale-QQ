@@ -13,6 +13,7 @@ function Initialize-LauncherAppearance {
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace QqDshLauncher.Appearance
@@ -35,12 +36,68 @@ namespace QqDshLauncher.Appearance
     public sealed class TrayMenu : ContextMenuStrip
     {
         public float LayoutScale = 1;
+        private readonly Timer dismissTimer;
+        private IntPtr foregroundWindow, overflowWindow;
+        private bool mouseWasDown;
+
+        [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] private static extern IntPtr FindWindow(string className, string title);
+        [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+        [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
 
         public TrayMenu()
         {
             ShowImageMargin = false;
             ShowCheckMargin = false;
             AutoSize = false;
+            AutoClose = true;
+            dismissTimer = new Timer();
+            dismissTimer.Interval = 75;
+            dismissTimer.Tick += delegate { DismissIfInactive(); };
+        }
+
+        private static bool IsMouseButtonDown()
+        {
+            return GetAsyncKeyState(1) < 0 || GetAsyncKeyState(2) < 0;
+        }
+
+        protected override void OnOpened(EventArgs e)
+        {
+            if (!TopLevel) { base.OnOpened(e); return; }
+            overflowWindow = FindWindow("TopLevelWindowForOverflowXamlIsland", null);
+            if (overflowWindow == IntPtr.Zero || !IsWindowVisible(overflowWindow))
+                overflowWindow = FindWindow("NotifyIconOverflowWindow", null);
+            if (overflowWindow != IntPtr.Zero && !IsWindowVisible(overflowWindow))
+                overflowWindow = IntPtr.Zero;
+            foregroundWindow = GetForegroundWindow();
+            mouseWasDown = IsMouseButtonDown();
+            dismissTimer.Start();
+            base.OnOpened(e);
+        }
+
+        private void DismissIfInactive()
+        {
+            if (!Visible) return;
+            IntPtr current = GetForegroundWindow();
+            bool down = IsMouseButtonDown();
+            bool outsideClick = down && !mouseWasDown && !Bounds.Contains(Cursor.Position);
+            mouseWasDown = down;
+            if (outsideClick ||
+                (overflowWindow != IntPtr.Zero && !IsWindowVisible(overflowWindow)) ||
+                (current != IntPtr.Zero && current != Handle && current != foregroundWindow))
+                Close(ToolStripDropDownCloseReason.AppFocusChange);
+        }
+
+        protected override void OnClosed(ToolStripDropDownClosedEventArgs e)
+        {
+            dismissTimer.Stop();
+            base.OnClosed(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) dismissTimer.Dispose();
+            base.Dispose(disposing);
         }
 
         protected override void OnSizeChanged(EventArgs e)
@@ -103,18 +160,14 @@ namespace QqDshLauncher.Appearance
             {
                 pen.StartCap = LineCap.Round;
                 pen.EndCap = LineCap.Round;
-                e.Graphics.DrawArc(pen, px(12), px(23), px(17), px(17), -55, 290);
-                e.Graphics.DrawLine(pen, px(20), px(19), px(20), px(30));
+                e.Graphics.DrawArc(pen, px(10), px(10), px(14), px(14), -55, 290);
+                e.Graphics.DrawLine(pen, px(17), px(7), px(17), px(16));
             }
             string title = e.Item.Text.Split('\uFF08')[0];
-            string detail = e.Item.Tag as string ?? "";
             TextFormatFlags flags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine |
                 TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis;
             TextRenderer.DrawText(e.Graphics, title, e.TextFont,
-                new Rectangle(px(44), px(8), e.Item.Width - px(56), px(24)), Text, flags);
-            using (Font font = new Font(e.TextFont.FontFamily, e.TextFont.Size * 0.9f, FontStyle.Regular))
-                TextRenderer.DrawText(e.Graphics, detail, font,
-                    new Rectangle(px(44), px(32), e.Item.Width - px(56), px(22)), Muted, flags);
+                new Rectangle(px(36), 0, e.Item.Width - px(44), e.Item.Height), Text, flags);
         }
     }
 
@@ -217,14 +270,11 @@ function Set-LauncherTrayTheme {
     $graphics = $Menu.CreateGraphics()
     try { $scale = $graphics.DpiX / 96.0 } finally { $graphics.Dispose() }
     $Menu.LayoutScale = $scale
-    $Menu.Padding = [System.Windows.Forms.Padding]::new([int](8 * $scale))
-    $Menu.Size = [System.Drawing.Size]::new([int](280 * $scale), [int](80 * $scale))
+    $Menu.Padding = [System.Windows.Forms.Padding]::new([int](4 * $scale))
+    $Menu.Size = [System.Drawing.Size]::new([int](136 * $scale), [int](40 * $scale))
     if ($Menu.Items.Count -gt 0) {
-        $height = 64
-        if ($Palette.HighContrast) { $height = 48 }
-        $Menu.Items[0].Size = [System.Drawing.Size]::new([int](264 * $scale), [int]($height * $scale))
+        $Menu.Items[0].Size = [System.Drawing.Size]::new([int](128 * $scale), [int](32 * $scale))
         $Menu.Items[0].ForeColor = $Palette.ForeColor
-        if ($Palette.HighContrast) { $Menu.Height = [int](64 * $scale) }
     }
     $Menu.Invalidate()
 }
@@ -234,14 +284,14 @@ function New-LauncherTrayMenu {
 
     Initialize-LauncherAppearance
     $menu = [QqDshLauncher.Appearance.TrayMenu]::new()
-    $menu.Font = [System.Drawing.Font]::new('Microsoft YaHei UI', 10)
+    $menu.Font = [System.Drawing.Font]::new('Microsoft YaHei UI', 9)
     $menu.AccessibleName = 'QQ-DSH 托盘菜单'
     $menu.Tag = $Palette
-    $item = [System.Windows.Forms.ToolStripMenuItem]::new('退出（停止桥接与 NapCat）')
+    $item = [System.Windows.Forms.ToolStripMenuItem]::new('退出')
     $item.Name = 'exitMenuItem'
-    $item.AccessibleName = $item.Text
+    $item.AccessibleName = '退出（停止桥接与 NapCat）'
     $item.Tag = '停止桥接与 NapCat'
-    $item.ToolTipText = 'QQ 机器人将下线，DSH 继续运行。'
+    $item.ToolTipText = '停止桥接与 NapCat，QQ 机器人将下线，DSH 继续运行。'
     $item.AutoSize = $false
     $null = $menu.Items.Add($item)
     Set-LauncherTrayTheme -Menu $menu -Palette $Palette

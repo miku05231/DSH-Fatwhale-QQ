@@ -1,8 +1,9 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { copyFile, lstat, mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 const REPOSITORY = 'miku05231/DSH-Fatwhale-QQ';
 const RELEASES_URL = `https://github.com/${REPOSITORY}/releases`;
@@ -16,6 +17,15 @@ const ACTIVE_PHASES = new Set(['downloading', 'installing']);
 const MAX_JSON_BYTES = 1024 * 1024;
 const MAX_CHECKSUM_BYTES = 128 * 1024;
 const MAX_PACKAGE_BYTES = 250 * 1024 * 1024;
+const executeFile = promisify(execFile);
+
+async function defaultRunGit(args, { cwd }) {
+  const { stdout } = await executeFile('git', ['-C', cwd, '-c', 'core.hooksPath=/dev/null', ...args], {
+    cwd, windowsHide: true, timeout: 120_000, maxBuffer: 4 * 1024 * 1024,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' },
+  });
+  return stdout.trim();
+}
 
 function failure(code, message, statusCode = 400) {
   return Object.assign(new Error(message), { code, statusCode });
@@ -108,6 +118,7 @@ export function createUpdateManager({
   log = () => {},
   fetchImpl = globalThis.fetch,
   launchInstaller = defaultLaunchInstaller,
+  runGit = defaultRunGit,
   platform = process.platform,
   isDocker = Boolean(process.env.container || process.env.DOCKER_CONTAINER) || existsSync('/.dockerenv'),
   now = Date.now,
@@ -211,14 +222,43 @@ export function createUpdateManager({
       if (ACTIVE_PHASES.has(state.phase)) reason = state.phase === 'downloading' ? '正在下载更新。' : '正在安装更新。';
       else if (lockPresent) reason = '存在未完成的更新任务，已暂停应用内安装，请到发布页手动更新。';
       else if (!available) reason = '尚未发现可安装的新版。';
-      else reason = latestRelease.installReason;
+      else reason = eligibility.mode === 'source' ? null : latestRelease.installReason;
     }
     return {
       currentVersion,
       ...state,
-      canInstall: Boolean(eligibility.allowed && available && latestRelease.installable && !lockPresent && !ACTIVE_PHASES.has(state.phase)),
+      installMode: eligibility.mode || null,
+      canInstall: Boolean(eligibility.allowed && available && (eligibility.mode === 'source' || latestRelease.installable)
+        && !lockPresent && !ACTIVE_PHASES.has(state.phase)),
       installReason: reason || null,
     };
+  }
+
+  const git = (...args) => runGit(args, { cwd: root });
+
+  async function inspectSource() {
+    try {
+      const top = await git('rev-parse', '--show-toplevel');
+      if (await pathIdentity(top) !== await pathIdentity(root)) throw new Error('Nested checkout.');
+      const gitDir = await lstat(path.join(root, '.git'));
+      if (!gitDir.isDirectory() || gitDir.isSymbolicLink()) throw new Error('Linked checkout.');
+      await assertUnlinkedPath(path.join(root, '.git'));
+      await git('symbolic-ref', '--quiet', 'HEAD');
+      if (await git('status', '--porcelain', '--untracked-files=no')) {
+        return { allowed: false, mode: 'source', reason: '源码有未提交的修改，请先提交或自行保存修改，再检查更新。' };
+      }
+      for (const marker of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'index.lock']) {
+        if (existsSync(path.join(root, '.git', marker))) throw new Error('Git operation in progress.');
+      }
+      for (const relative of ['scripts/install-update.ps1', 'launcher/bootstrap.ps1', 'launcher/Launcher.ps1', 'src/index.js', 'src/webui/server.mjs']) {
+        const file = path.join(root, relative);
+        await assertUnlinkedPath(file);
+        if (!(await lstat(file)).isFile()) throw new Error('Incomplete checkout.');
+      }
+      return { allowed: true, mode: 'source', reason: null };
+    } catch {
+      return { allowed: false, mode: 'source', reason: '无法确认完整、空闲的 Git 分支，请安装 Git 并使用 git pull 手动更新。' };
+    }
   }
 
   async function inspectEnvironment() {
@@ -237,6 +277,7 @@ export function createUpdateManager({
     for (let directory = root; ; directory = path.dirname(directory)) {
       try {
         await lstat(path.join(directory, '.git'));
+        if (normalized(directory) === normalized(root)) return inspectSource();
         return { allowed: false, reason: '源码目录请使用 git pull 更新。' };
       } catch (error) {
         if (error.code !== 'ENOENT') return { allowed: false, reason: '无法确认安装目录，请手动更新。' };
@@ -259,7 +300,7 @@ export function createUpdateManager({
           if (error.code !== 'ENOENT') throw error;
         }
       }
-      return { allowed: true, reason: null };
+      return { allowed: true, mode: 'portable', reason: null };
     } catch {
       return { allowed: false, reason: '请安装完整 Windows 便携包后使用应用内更新。' };
     }
@@ -465,7 +506,7 @@ export function createUpdateManager({
       && validAsset(packages[0], packageName, maxPackageBytes)
       && validAsset(checksums[0], 'SHA256SUMS.txt', MAX_CHECKSUM_BYTES);
     return {
-      version, packageName, package: packages[0], checksums: checksums[0], installable,
+      version, tag, packageName, package: packages[0], checksums: checksums[0], installable,
       installReason: installable ? null : '发布版本缺少可信的完整便携包或 SHA256SUMS.txt，请手动更新。',
       url: `${RELEASES_URL}/tag/${encodeURIComponent(tag)}`,
       notes: typeof release.body === 'string' ? release.body.slice(0, 8000) : '',
@@ -531,9 +572,31 @@ export function createUpdateManager({
     }
   }
 
+  async function prepareSource(release, jobId) {
+    const originalCommit = await git('rev-parse', '--verify', 'HEAD');
+    const branch = await git('symbolic-ref', '--quiet', 'HEAD');
+    const sourceRef = `refs/qq-bridge-updates/${jobId}`;
+    try {
+      await git('fetch', '--no-tags', '--no-recurse-submodules',
+        `https://github.com/${REPOSITORY}.git`, `refs/tags/${release.tag}:${sourceRef}`);
+      const targetCommit = await git('rev-parse', '--verify', `${sourceRef}^{commit}`);
+      await git('merge-base', '--is-ancestor', originalCommit, targetCommit);
+      const pkg = JSON.parse(await git('show', `${targetCommit}:package.json`));
+      if (pkg.name !== 'qq-bridge' || pkg.version !== release.version) {
+        throw failure('UPDATE_SOURCE_VERSION', '发布标签中的应用版本不匹配，已取消更新。');
+      }
+      return { mode: 'source', originalCommit, targetCommit, branch, sourceRef };
+    } catch (error) {
+      await git('update-ref', '-d', sourceRef).catch(() => {});
+      if (error?.code?.startsWith?.('UPDATE_')) throw error;
+      throw failure('UPDATE_SOURCE_FETCH', '源码更新拉取失败或当前分支与发布版本已分叉，请检查网络或使用 git pull 手动处理。');
+    }
+  }
+
   async function performInstall(release) {
     let jobDir;
     let installerStarted = false;
+    let source;
     try {
       eligibility = await inspectEnvironment();
       if (!eligibility.allowed) throw failure('UPDATE_MANUAL_ONLY', eligibility.reason);
@@ -563,34 +626,40 @@ export function createUpdateManager({
       }
       jobDir = path.join(updatesRoot, jobId);
       await mkdir(jobDir, { mode: 0o700 });
-      const checksum = await requestBytes(release.checksums.browser_download_url, { maxBytes: MAX_CHECKSUM_BYTES });
-      const entries = checksum.buffer.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/).flatMap((line) => {
-        const match = /^([a-fA-F0-9]{64})[ \t]+[*]?(.+?)\s*$/.exec(line);
-        return match && match[2] === release.packageName ? [match[1].toLowerCase()] : [];
-      });
-      if (entries.length !== 1) throw failure('UPDATE_BAD_CHECKSUM', '校验和文件缺少唯一的便携包记录。');
-      const packagePath = path.join(jobDir, release.packageName);
-      const partialPath = `${packagePath}.part`;
-      const output = await open(partialPath, 'wx', 0o600);
-      let downloaded;
-      try {
-        downloaded = await requestBytes(release.package.browser_download_url, {
-          maxBytes: maxPackageBytes,
-          file: output,
-          expectedSize: release.package.size,
-          timeoutMs: downloadTimeoutMs,
-          onProgress: (progress) => { state.progress = progress; },
+      if (eligibility.mode === 'source') source = await prepareSource(release, jobId);
+      let packagePath;
+      let expectedSha256;
+      if (!source) {
+        const checksum = await requestBytes(release.checksums.browser_download_url, { maxBytes: MAX_CHECKSUM_BYTES });
+        const entries = checksum.buffer.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/).flatMap((line) => {
+          const match = /^([a-fA-F0-9]{64})[ \t]+[*]?(.+?)\s*$/.exec(line);
+          return match && match[2] === release.packageName ? [match[1].toLowerCase()] : [];
         });
-      } finally {
-        await output.close();
+        if (entries.length !== 1) throw failure('UPDATE_BAD_CHECKSUM', '校验和文件缺少唯一的便携包记录。');
+        packagePath = path.join(jobDir, release.packageName);
+        const partialPath = `${packagePath}.part`;
+        const output = await open(partialPath, 'wx', 0o600);
+        let downloaded;
+        try {
+          downloaded = await requestBytes(release.package.browser_download_url, {
+            maxBytes: maxPackageBytes,
+            file: output,
+            expectedSize: release.package.size,
+            timeoutMs: downloadTimeoutMs,
+            onProgress: (progress) => { state.progress = progress; },
+          });
+        } finally {
+          await output.close();
+        }
+        if (downloaded.sha256 !== entries[0]) throw failure('UPDATE_HASH_MISMATCH', '便携包 SHA-256 校验失败，已取消安装。');
+        await rename(partialPath, packagePath);
+        expectedSha256 = entries[0];
       }
-      if (downloaded.sha256 !== entries[0]) throw failure('UPDATE_HASH_MISMATCH', '便携包 SHA-256 校验失败，已取消安装。');
-      await rename(partialPath, packagePath);
       const scriptPath = path.join(jobDir, 'install-update.ps1');
       const jobPath = path.join(jobDir, 'job.json');
       const job = {
         schemaVersion: 1, jobId, projectRoot: root, packagePath,
-        expectedSha256: entries[0], version: release.version,
+        expectedSha256, version: release.version, ...source,
         consolePid: process.pid, resultPath: resultFile,
       };
       await copyFile(path.join(root, 'scripts', 'install-update.ps1'), scriptPath);
@@ -606,6 +675,7 @@ export function createUpdateManager({
       state.progress = null;
       state.error = publicError(error);
       report(`[updates] ${state.error}`);
+      if (source && !installerStarted) await git('update-ref', '-d', source.sourceRef).catch(() => {});
       if (jobDir && !installerStarted && path.dirname(jobDir) === updatesRoot) {
         await rm(jobDir, { recursive: true, force: true }).catch(() => {});
       }
@@ -621,7 +691,7 @@ export function createUpdateManager({
       throw failure('UPDATE_NOT_AVAILABLE', '请先检查更新，并确认安装当前检测到的新版。', 409);
     }
     if (ACTIVE_PHASES.has(state.phase) || installPromise) return snapshot();
-    if (!eligibility.allowed || !latestRelease.installable) {
+    if (!eligibility.allowed || (eligibility.mode !== 'source' && !latestRelease.installable)) {
       throw failure('UPDATE_MANUAL_ONLY', eligibility.reason || latestRelease.installReason, 409);
     }
     if (lockPresent) throw failure('UPDATE_LOCKED', '已有更新任务正在进行，请先确认其安装结果。', 409);

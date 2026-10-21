@@ -69,7 +69,7 @@ try {
   check(prompt.includes(tool) && prompt.includes(store), '提示包含实际工具和库的绝对路径');
   check(prompt.includes('--config') && prompt.includes(cfgFile) && prompt.includes('--root'), '外置配置与库目录随命令传递');
   check(prompt.includes(' add ') && prompt.includes('ok:true') && prompt.includes('path'), '提示要求 add 后确认返回保存路径');
-  check(!prompt.includes('C:\\D\\DSH\\qq-bridge'), '没有硬编码的安装路径');
+  check(!prompt.includes('D:\\example\\qq-bridge'), '没有硬编码的安装路径');
   const otherStore = path.join(tmp, 'moved stickers');
   const movedPrompt = buildStickerPrompt({
     projectRoot, configPath: cfgFile, root: otherStore,

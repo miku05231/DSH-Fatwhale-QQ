@@ -1,7 +1,10 @@
 import { isAllowed, checkGroupAllowed } from '../src/security.js';
-import { readFile } from 'node:fs/promises';
-
-const cfg = JSON.parse(await readFile(new URL('../config.json', import.meta.url), 'utf8'));
+const cfg = {
+  security: {
+    allowFrom: [1000000002], allowGroupIds: [200000001],
+    allowGroups: false, allowGroupMembers: false,
+  },
+};
 const selfId = 1000000001;
 const bot = cfg.security.allowFrom[0];
 const grp = cfg.security.allowGroupIds[0];

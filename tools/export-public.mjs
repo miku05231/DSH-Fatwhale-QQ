@@ -44,7 +44,6 @@ const INCLUDE = [
   'README.md',
   'package.json',
   'deepseek-waitou.png',
-  'AGENTS.md',
   'scripts',
   'docker',
   'Dockerfile',
@@ -56,7 +55,7 @@ const INCLUDE = [
 ];
 
 /** 这些即使在白名单里也不复制 */
-const EXCLUDE = [/state[\\/]/, /logs[\\/]/, /napcat[\\/]/, /node_modules[\\/]/, /\.tmp$/, /config\.json$/, /\.credentials/];
+const EXCLUDE = [/^AGENTS\.md$/i, /state[\\/]/, /logs[\\/]/, /napcat[\\/]/, /node_modules[\\/]/, /\.tmp$/, /config\.json$/, /\.credentials/];
 
 /** 文本文件后缀：参与脱敏 */
 const TEXT_EXT = new Set(['.js', '.mjs', '.cjs', '.ps1', '.cmd', '.sh', '.bat', '.css', '.html', '.md', '.json', '.yml', '.yaml', '.txt', '.example']);
@@ -119,7 +118,7 @@ const PUBLIC_README = `> 非官方项目。QQ 侧通过第三方协议端 [NapCa
 - **表情包库**：自动收集聊天里的表情并打标签（来源 / 群 / 谁发的 / 关键词 / 动图静态 / 尺寸），可筛选、改标签、换存放目录、重建索引
 - **插件**：往 \`src/plugins/\` 扔一个 .js 就能加功能，控制台自动生成开关与配置表单
 - **托盘 / 自启**：一键启动全部、左键直达控制台、开机自启；托盘与窗口图标用 \`assets/app-icon.png\`
-- **应用更新**：系统页检查 GitHub 稳定版 Release；Windows 便携版确认后校验、备份并升级，保留本机数据。源码和 Docker 采用手动更新，发布步骤见 \`docs/更新发布.md\`。
+- **应用更新**：系统页检查 GitHub 稳定版 Release；Windows 便携版确认后校验、备份并升级，独立 Git 源码目录可安装对应发布标签（要求无未提交修改且可快进），保留本机数据。Docker 按部署方式更新，发布步骤见 \`docs/更新发布.md\`。
 
 ## 环境要求
 
@@ -154,12 +153,16 @@ node src\\webui\\server.mjs   # 然后访问 http://127.0.0.1:5830
 
 ## 测试
 
+在未创建 \`config.json\` 的干净源码目录运行。真实内核固定为 DSH \`0.2.0-rc.2\`，浏览器检查使用 Edge。
+
 \`\`\`powershell
-node tests\\run-all.mjs          # 全量（25 组，约 4 分钟）
-node tests\\plugins-test.mjs     # 单跑插件宿主
+$env:QQ_TEST_DSH_COMMAND = 'dsh' # 已安装 0.2.0-rc.2 的命令，也可填写 lib\\bin.js 的绝对路径
+$env:QQ_TEST_BROWSER_EXE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
+node tests\\run-all.mjs
+node tests\\plugins-test.mjs # 单跑插件宿主
 \`\`\`
 
-绝大多数用例自带假 NapCat / 假 dsh，不需要真账号；少数用例（\`perm-mode-check\`、\`real-config-check\`、\`e2e-memory\`）需要本机装有 DSH 和可用模型。
+全量套件使用临时配置与 DSH_HOME、假 NapCat 和本机模型端点，不需要真实 QQ 账号或在线模型密钥。真实 NapCat、Docker 和 Electron 桌面验证按各测试的要求单独执行。
 
 ## 插件
 
@@ -315,7 +318,7 @@ const EXAMPLE_CONFIG = {
   groupMemory: { limit: 300 },
   memory: {
     enabled: true,
-    root: 'C:\\Users\\you\\Documents\\Obsidian Vault\\YourBot',
+    root: '记忆库',
     capture: true,
     reflectEvery: 20,
     maxInjectChars: 1200,
@@ -363,6 +366,35 @@ function redact(text) {
   let out = text;
   for (const [from, to] of REPLACEMENTS) out = out.split(from).join(to);
   return out;
+}
+
+function isWithin(candidate, directory) {
+  const relative = path.relative(directory, candidate);
+  return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+}
+
+async function safeOutputDirectory(value) {
+  const resolved = path.resolve(value);
+  const missing = [];
+  let canonical;
+  for (let probe = resolved; ; probe = path.dirname(probe)) {
+    try {
+      const item = await fsp.lstat(probe);
+      if (item.isSymbolicLink()) throw new Error('Output paths must not traverse symbolic links or junctions.');
+      if (probe === resolved && !item.isDirectory()) throw new Error('The output target must be a directory.');
+      if (!canonical) canonical = path.join(await fsp.realpath(probe), ...missing);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      if (!canonical) missing.unshift(path.basename(probe));
+    }
+    if (path.dirname(probe) === probe) break;
+  }
+  const source = await fsp.realpath(ROOT);
+  if (!canonical || isWithin(source, canonical) ||
+      (isWithin(canonical, source) && !isWithin(canonical, path.join(source, 'dist')))) {
+    throw new Error('Output must not contain the source tree or overlap its files; use dist or a separate directory.');
+  }
+  return canonical;
 }
 
 async function publicReadme() {
@@ -424,7 +456,7 @@ async function walk(dir, visit) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const out = args.out;
+  let out = await safeOutputDirectory(args.out);
   const readme = await publicReadme();
 
   if (fs.existsSync(out)) {
@@ -432,6 +464,7 @@ async function main() {
       console.error(`输出目录已存在：${out}\n加 --force 覆盖，或换 --out 指定别的位置。`);
       process.exit(1);
     }
+    out = await safeOutputDirectory(out);
     await fsp.rm(out, { recursive: true, force: true });
   }
   await fsp.mkdir(out, { recursive: true });
@@ -441,6 +474,7 @@ async function main() {
 
   const stats = { files: 0, redacted: 0, bytes: 0 };
   for (const item of INCLUDE) {
+    if (EXCLUDE.some((re) => re.test(item))) continue;
     const src = path.join(ROOT, item);
     if (!fs.existsSync(src)) {
       console.log(`  - 跳过（不存在）：${item}`);

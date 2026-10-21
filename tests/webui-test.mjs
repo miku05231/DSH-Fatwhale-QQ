@@ -8,11 +8,12 @@
  * 不碰真实数据：只写临时目录，人格/记忆只读。
  */
 
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createConsoleFixture } from './helpers/isolated-fixtures.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(HERE, '..');
@@ -119,22 +120,8 @@ async function unitTests() {
 /* ------------------------------------------------------------------ 集成 */
 
 async function httpTests(tmpRoot) {
-  const { createWebUiServer } = await import('../src/webui/server.mjs');
-  const { loadConfig } = await import('../src/config.js');
-
-  const { config } = loadConfig(PROJECT_ROOT, { createIfMissing: false });
-  // 路径测试会通过 PUT /api/settings 改真实 config.json（控制台的 configRoot 就是项目根），
-  // 所以先快照原文，finally 里原样写回，避免测试污染机器人的配置。
-  const realConfigPath = path.join(PROJECT_ROOT, 'config.json');
-  const originalConfigText = existsSync(realConfigPath) ? await readFile(realConfigPath, 'utf8') : null;
-  // stateDir / logDir 改成临时目录，避免污染真实 state（尤其是 webui-port.txt）
-  const instance = createWebUiServer({
-    config: { ...config, stateDir: tmpRoot, logDir: tmpRoot },
-    configRoot: PROJECT_ROOT,
-    port: 5899,
-  });
-
-  const { port } = await instance.start();
+  const fixture = await createConsoleFixture(tmpRoot);
+  const { port } = fixture;
   if (port > 0) ok('控制台已启动', `127.0.0.1:${port}`);
   else {
     bad('控制台没起来');
@@ -175,7 +162,7 @@ async function httpTests(tmpRoot) {
     if (settings.body?.ok === true && settings.body.data?.editable) ok('设置可读且带字段描述');
     else bad('设置读取失败');
 
-    // 黑白名单：字段存在 + policy 类型校验 + intArray 回写（用当前值回写，不改真实配置）
+    // 黑白名单：字段存在 + policy 类型校验 + 临时配置回写。
     const sec = settings.body?.data?.security ?? {};
     if (Array.isArray(sec.denyFrom) || sec.denyFrom === null) ok('设置里有 denyFrom 字段');
     else bad('设置里缺 denyFrom', JSON.stringify(sec.denyFrom));
@@ -326,14 +313,14 @@ async function httpTests(tmpRoot) {
     else bad('静态资源穿越没被拦', `HTTP ${traversalStatic.status}`);
 
     // 日志脱敏：整份响应里不该出现配置中的明文 token
-    const rawCfg = JSON.parse(await readFile(path.join(PROJECT_ROOT, 'config.json'), 'utf8'));
+    const rawCfg = JSON.parse(await readFile(fixture.configPath, 'utf8'));
     const token = String(rawCfg?.onebot?.accessToken ?? '');
     if (token.length > 6) {
       const overviewRaw = await (await fetch(base + '/api/overview')).text();
       if (!overviewRaw.includes(token)) ok('响应里没有明文 accessToken');
       else bad('响应泄露 accessToken');
     } else {
-      ok('accessToken 为空，跳过泄露检查');
+      bad('fixture 必须包含合成 token 才能验证脱敏');
     }
 
     // 自定义路径：人格 / 记忆库 / 工作区
@@ -385,13 +372,14 @@ async function httpTests(tmpRoot) {
     const customPersona = await get('/api/persona');
     if (String(customPersona.body?.data?.body ?? '').includes('说话短一点')) ok('人格页读回自定义内容');
     else bad('人格读回失败');
+    const diskConfig = JSON.parse(await readFile(fixture.configPath, 'utf8'));
+    eq(diskConfig.persona.path, 'persona/custom.md', '路径变更只落盘到临时配置');
+    const customText = await readFile(path.join(tmpRoot, 'persona', 'custom.md'), 'utf8');
+    if (customText.includes('说话短一点')) ok('人格写入临时目录');
+    else bad('临时人格文件内容不符');
   } finally {
-    if (originalConfigText !== null) await writeFile(realConfigPath, originalConfigText, 'utf8');
-    await rm(path.join(PROJECT_ROOT, 'persona'), { recursive: true, force: true });
-    await rm(path.join(PROJECT_ROOT, 'memory-custom'), { recursive: true, force: true });
-    await rm(path.join(PROJECT_ROOT, 'workspace-custom'), { recursive: true, force: true });
-    await instance.stop();
-    const still = path.join(tmpRoot, 'webui-port.txt');
+    await fixture.close();
+    const still = path.join(tmpRoot, 'state', 'webui-port.txt');
     if (!existsSync(still)) ok('停止后端口文件已清理');
     else bad('停止后端口文件残留', still);
   }

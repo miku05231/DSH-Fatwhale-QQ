@@ -17,43 +17,19 @@
 
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 import { runDsh } from '../src/dsh.js';
 import { SessionStore } from '../src/sessions.js';
+import { createLocalDshFixture, useIsolatedEnv } from './helpers/isolated-fixtures.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(HERE, '..');
 
-// 用真实 config.json 里的 patchPath（通常是本机的 patches/*.local.yml）；
-// 没有 config.json 时退回仓库里的模板，保证在干净机器上也能跑起来。
-function pickPatchRel() {
-  try {
-    const raw = fs.readFileSync(path.join(PROJECT_ROOT, 'config.json'), 'utf8');
-    const parsed = JSON.parse(raw);
-    const p = parsed?.dsh?.patchPath;
-    if (typeof p === 'string' && p.trim()) return p.trim();
-  } catch {
-    /* 没有真实配置就用模板 */
-  }
-  return 'patches/headless-model.yml';
-}
-const PATCH_REL = pickPatchRel();
-const PATCH_ABS = path.isAbsolute(PATCH_REL) ? PATCH_REL : path.join(PROJECT_ROOT, PATCH_REL);
-
 const SECRET = '7319';
-
-// 与 config.json 的 dsh 段保持一致（不依赖 config.js，避免耦合其它模块）
-const cfg = {
-  dsh: {
-    command: process.env.DSH_BIN || 'dsh',
-    profile: 'headless',
-    patchPath: PATCH_REL,
-    cwd: PROJECT_ROOT,
-    timeoutMs: 180_000,
-  },
-};
+let fixture;
+let cfg;
+let restoreEnv;
 
 /* ------------------------------------------------------------------ */
 /* 简陋的测试框架                                                      */
@@ -164,6 +140,7 @@ record('runDsh：新建会话并取回 sessionId', async () => {
 
 record('runDsh：同一 sessionId 续传能记住上一轮内容', async () => {
   assert(sharedSessionId, '上一项没有拿到 sessionId，无法续传');
+  const before = fixture.requests.length;
   const r = await runDsh('我刚才让你记住的数字是多少？只回答数字本身。', {
     sessionId: sharedSessionId,
     cfg,
@@ -176,6 +153,9 @@ record('runDsh：同一 sessionId 续传能记住上一轮内容', async () => {
   );
   const turnEnd = r.events.filter((e) => e.type === 'status' && e.phase === 'turn_end').pop();
   assert(turnEnd && turnEnd.turn >= 2, `第二轮 turn 应 >= 2，实际 ${turnEnd ? turnEnd.turn : '无 turn_end'}`);
+  const wire = JSON.stringify(fixture.requests.slice(before));
+  assert(wire.includes(`请记住这个数字：${SECRET}`) && wire.includes('已记住'),
+    '续传请求必须包含第一轮用户输入和模型回复');
   return `第 ${turnEnd.turn} 轮回答「${r.finalText.trim().slice(0, 20)}」`;
 });
 
@@ -211,8 +191,26 @@ record('runDsh：已 abort 的 signal 立即拒绝', async () => {
   return `立即拒绝（${fmtMs(elapsed)}）`;
 });
 
+record('runDsh：模型请求进行中可以中止', async () => {
+  const controller = new AbortController();
+  const running = runDsh('smoke-wait-for-cancel', { cfg, log: quietLog, signal: controller.signal });
+  const result = running.then(() => null, (error) => error);
+  const end = Date.now() + 15000;
+  try {
+    while (!fixture.requests.some((request) => JSON.stringify(request.messages).includes('smoke-wait-for-cancel'))) {
+      if (Date.now() > end) throw new Error('真实内核未发出待中止的本地模型请求');
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+  } finally {
+    controller.abort();
+    await result;
+  }
+  const error = await result;
+  assert(error?.aborted && /取消/.test(error.message), '中途取消必须结束真实内核并明确拒绝');
+});
+
 record('runDsh：超时会杀掉进程树并拒绝', async () => {
-  const timeoutMs = 1500;
+  const timeoutMs = 6000;
   const timeoutCfg = { dsh: { ...cfg.dsh, timeoutMs } };
   const started = performance.now();
   let rejected = null;
@@ -228,6 +226,8 @@ record('runDsh：超时会杀掉进程树并拒绝', async () => {
   assert(rejected, '超时的调用本应失败，却成功了');
   assert(/超时/.test(rejected.message), `错误信息应说明超时，实际：${rejected.message}`);
   assert(rejected.timedOut === true, 'err.timedOut 应为 true');
+  assert(fixture.requests.some((request) => JSON.stringify(request.messages).includes('3000')),
+    '超时必须发生在真实内核访问合成模型之后');
   assert(elapsed < 30_000, `超时后应尽快返回，实际耗时 ${fmtMs(elapsed)}`);
   return `${fmtMs(elapsed)} 后拒绝：${rejected.message.slice(0, 60)}…`;
 });
@@ -250,22 +250,30 @@ function hr() {
 }
 
 async function main() {
-  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-bridge-smoke-'));
+  fixture = await createLocalDshFixture({
+    prefix: 'qq-bridge-smoke-',
+    reply(body) {
+      const prompt = JSON.stringify(body.messages.filter((message) => message.role === 'user'));
+      if (prompt.includes('3000') || prompt.includes('smoke-wait-for-cancel')) return null;
+      if (prompt.includes('数字是多少')) return SECRET;
+      return '已记住';
+    },
+  });
+  tmpRoot = fixture.root;
+  restoreEnv = useIsolatedEnv(tmpRoot, { QQ_FIXTURE_API_KEY: 'synthetic-local-key' });
+  cfg = { dsh: {
+    command: fixture.command, mode: 'headless', companion: false, profile: 'headless',
+    patchPath: fixture.patchPath, cwd: fixture.workspace, permissionMode: 'read-only', timeoutMs: 45000,
+  } };
 
   console.log(hr());
   console.log('QQ↔DSH 桥接 · 冒烟测试');
   console.log(`项目根   ：${PROJECT_ROOT}`);
-  console.log(`patch    ：${PATCH_ABS}${fs.existsSync(PATCH_ABS) ? '' : '  ← 不存在！'}`);
+  console.log('模型     ：固定真实内核 + 本地合成 SSE，无在线服务');
   console.log(`Node     ：${process.version}（${process.platform}）`);
   console.log(`临时目录 ：${tmpRoot}`);
   console.log(hr());
   console.log('');
-
-  if (!fs.existsSync(PATCH_ABS)) {
-    console.error(`[失败] 找不到 patch 文件：${PATCH_ABS}`);
-    process.exitCode = 1;
-    return;
-  }
 
   const allStarted = performance.now();
   for (let i = 0; i < cases.length; i += 1) {
@@ -300,11 +308,6 @@ async function main() {
 try {
   await main();
 } finally {
-  if (tmpRoot) {
-    try {
-      fs.rmSync(tmpRoot, { recursive: true, force: true });
-    } catch {
-      /* 清理失败不影响结论 */
-    }
-  }
+  restoreEnv?.();
+  await fixture?.close();
 }

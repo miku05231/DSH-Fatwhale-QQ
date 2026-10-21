@@ -12,9 +12,12 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { browserRuntimeEnv, isolatedEnv, prepareIsolatedHome } from './helpers/isolated-fixtures.mjs';
+import { killProcessTree } from '../src/dsh.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -50,6 +53,20 @@ const SUITE = [
     expect: ['通过'],
     timeoutMs: 60_000,
     note: 'OneBot 报文解析/构造的纯函数测试',
+  },
+  {
+    name: 'OneBot 重连退避',
+    file: 'tests/backoff-check.mjs',
+    expect: ['OK'],
+    timeoutMs: 60_000,
+    note: '断开后的指数退避、成功重连复位与最大延迟',
+  },
+  {
+    name: 'OneBot 重连（真实本机连接）',
+    file: 'tests/onebot-reconnect-test.mjs',
+    expect: ['PASS'],
+    timeoutMs: 60_000,
+    note: '本机协议服务断开后主动重连，停止后不再重试',
   },
   {
     name: '群白名单',
@@ -167,7 +184,7 @@ const SUITE = [
     file: 'tests/model-patch-real-dsh.mjs',
     expect: ['通过'],
     timeoutMs: 120_000,
-    note: '基础 + runtime 交给真 dsh --dump-config，确认 runtime 盖住基础 patch',
+    note: '隔离桌面模型 fixture + 真 dsh --dump-config，确认补丁顺序与强度覆盖，无用户配置',
   },
   {
     name: '托盘左键目标',
@@ -230,8 +247,7 @@ const SUITE = [
     file: 'tests/smoke-test.mjs',
     expect: ['通过'],
     timeoutMs: 180_000,
-    note: '会话存储 / runDsh 续传 / 超时中断',
-    network: true,
+    note: '固定真实 DSH + 本地模型：会话存储 / 续传历史 / 运行中取消 / 超时中断',
   },
   {
     name: '端到端（假 NapCat）',
@@ -245,8 +261,7 @@ const SUITE = [
     file: 'tests/e2e-memory.mjs',
     expect: ['失败 0 项'],
     timeoutMs: 420_000,
-    note: '真跑 DSH：记忆注入 → 回复 → 落盘到 Obsidian → CLI 可检索 → 记忆库坏了能降级',
-    network: true,
+    note: '真 DSH + 本地模型：记忆注入 → 回复 → 临时记忆库落盘 → CLI 检索 → 故障降级',
   },
   {
     name: '端到端（群聊）',
@@ -326,12 +341,11 @@ const SUITE = [
     note: 'Dockerfile / entrypoint / compose / .env / .dockerignore / .cmd / .sh / 文档',
   },
   {
-    name: '真实配置连通性',
+    name: '配置与真实内核（隔离）',
     file: 'tests/real-config-check.mjs',
-    expect: ['C:\\D\\DSH'],
+    expect: ['isolated config cwd and relative patch'],
     timeoutMs: 240_000,
-    note: '真跑一次 dsh headless，验证 cwd 与 patch',
-    network: true,
+    note: '临时 config + 固定真实内核 + 本地模型，验证相对 patch 与实际 cwd',
   },
   {
     name: '打开本地文件夹（隔离）',
@@ -352,7 +366,7 @@ const SUITE = [
     file: 'tests/ui-cdp.mjs',
     expect: ['通过'],
     timeoutMs: 240_000,
-    note: '真浏览器渲染 + 点击交互 + 深色模式；控制台没起会自我跳过',
+    note: '自建临时控制台 + 隔离浏览器 + 随机端口，验证渲染 / 点击 / 深色 / 窄屏；缺依赖失败',
   },
   {
     name: '封装应用',
@@ -373,24 +387,30 @@ const SUITE = [
     file: 'tests/final-audit.mjs',
     expect: ['通过'],
     timeoutMs: 120_000,
-    note: '文件齐全 / 编码 BOM / 无测试残留 / config 自洽',
+    note: '公共文件齐全 / 编码 BOM / 临时配置与默认路径自洽，不加载私人资料',
   },
 ];
 
 /** 跑一个 Node 脚本，返回 { code, stdout, stderr, ms } */
-function runOne(file, timeoutMs) {
-  return new Promise((resolve) => {
+async function runOne(file, timeoutMs) {
+  const isolatedRoot = await mkdtemp(path.join(os.tmpdir(), 'qq-suite-case-'));
+  await prepareIsolatedHome(isolatedRoot);
+  try {
+    return await new Promise((resolve) => {
     const started = Date.now();
     const child = spawn(process.execPath, [path.join(ROOT, file)], {
       cwd: ROOT,
       windowsHide: true,
-      env: { ...process.env, NODE_NO_WARNINGS: '1' },
+      env: (['tests/dsh-web-test.mjs', 'tests/ui-cdp.mjs', 'tests/updates-ui.mjs'].includes(file)
+        ? browserRuntimeEnv : isolatedEnv)(isolatedRoot, {
+        NODE_NO_WARNINGS: '1', QQ_TEST_REQUIRE_DSH: '1', QQ_TEST_REQUIRE_BROWSER: '1',
+      }),
     });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => {
       try {
-        child.kill('SIGKILL');
+        killProcessTree(child);
       } catch {
         /* ignore */
       }
@@ -406,7 +426,10 @@ function runOne(file, timeoutMs) {
       clearTimeout(timer);
       resolve({ code: -1, stdout, stderr: String(err?.message ?? err), ms: Date.now() - started });
     });
-  });
+    });
+  } finally {
+    await rm(isolatedRoot, { recursive: true, force: true });
+  }
 }
 
 function tail(text, lines = 6) {
@@ -421,6 +444,13 @@ function stamp() {
 }
 
 async function main() {
+  let hasLocalConfig = false;
+  try { await access(path.join(ROOT, 'config.json')); hasLocalConfig = true; } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  if (hasLocalConfig && !only) {
+    throw new Error('全量测试需要不含 config.json 的干净工作树；请在独立源码副本运行，以保护正在使用的安装。');
+  }
   await mkdir(LOG_DIR, { recursive: true });
 
   let list = SUITE;

@@ -52,6 +52,7 @@ const INCLUDE_FILES = [
 
 /** 这些目录/文件永远不进包 */
 const EXCLUDE = [
+  /^AGENTS\.md$/i,
   /(^|[\\/])state([\\/]|$)/,
   /(^|[\\/])logs([\\/]|$)/,
   /(^|[\\/])napcat([\\/]|$)/,
@@ -130,6 +131,35 @@ function excluded(rel) {
 
 function psQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function isWithin(candidate, directory) {
+  const relative = path.relative(directory, candidate);
+  return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+}
+
+async function safeOutputDirectory(value) {
+  const resolved = path.resolve(value);
+  const missing = [];
+  let canonical;
+  for (let probe = resolved; ; probe = path.dirname(probe)) {
+    try {
+      const item = await fsp.lstat(probe);
+      if (item.isSymbolicLink()) throw new Error('Output paths must not traverse symbolic links or junctions.');
+      if (probe === resolved && !item.isDirectory()) throw new Error('The output target must be a directory.');
+      if (!canonical) canonical = path.join(await fsp.realpath(probe), ...missing);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      if (!canonical) missing.unshift(path.basename(probe));
+    }
+    if (path.dirname(probe) === probe) break;
+  }
+  const source = await fsp.realpath(ROOT);
+  if (!canonical || isWithin(source, canonical) ||
+      (isWithin(canonical, source) && !isWithin(canonical, path.join(source, 'dist')))) {
+    throw new Error('Output must not contain the source tree or overlap its files; use dist or a separate directory.');
+  }
+  return canonical;
 }
 
 async function readVersion() {
@@ -214,6 +244,7 @@ async function build({ outDir, zip }) {
     for (const rel of rels) files.push(rel);
   }
   for (const file of INCLUDE_FILES) {
+    if (excluded(file)) continue;
     const src = path.join(ROOT, file);
     if (fs.existsSync(src)) files.push(file);
   }
@@ -281,7 +312,7 @@ async function main() {
   }
 
   const version = await readVersion();
-  const outDir = path.resolve(argValue('--out', path.join(ROOT, 'dist', `qq-dsh-bridge-${version}`)));
+  let outDir = await safeOutputDirectory(argValue('--out', path.join(ROOT, 'dist', `qq-dsh-bridge-${version}`)));
   const zip = !hasFlag('--no-zip');
   const force = hasFlag('--force');
 
@@ -291,6 +322,7 @@ async function main() {
       process.exitCode = 1;
       return;
     }
+    outDir = await safeOutputDirectory(outDir);
     await fsp.rm(outDir, { recursive: true, force: true });
   }
 

@@ -138,6 +138,9 @@ $script:LastStatus = $null
 $script:TrayIcon = $null
 $script:Menu = $null
 $script:Timer = $null
+$script:StatusWorker = $null
+$script:StatusRequest = $null
+$script:NextStatusRefresh = [DateTime]::MinValue
 $script:StatusItem = $null
 $script:AutostartItem = $null
 $script:IconGreen = $null
@@ -973,7 +976,10 @@ function Get-LauncherStatus {
 
 # 刷新图标颜色 + 状态摘要 + 悬停提示 + 开机自启勾选态
 function Update-LauncherState {
-    $status = Get-LauncherStatus
+    param($Status = $null)
+
+    if ($null -eq $Status) { $Status = Get-LauncherStatus }
+    $status = $Status
     $script:LastStatus = $status
 
     # 菜单首行：● <状态摘要>（加粗，点击刷新）
@@ -1037,6 +1043,55 @@ function Update-LauncherState {
     }
 
     return $status
+}
+
+function Start-LauncherStatusRefresh {
+    if ($script:Exiting -or $null -ne $script:StatusWorker) { return }
+
+    $worker = [System.Management.Automation.PowerShell]::Create()
+    try {
+        $null = $worker.AddScript({
+            param($ProcessControlPath, $StatusDefinition, $RequireDsh)
+            . $ProcessControlPath
+            function Invoke-LibFunction {
+                param([string]$Name, [object[]]$Arguments = @())
+                & $Name @Arguments
+            }
+            $script:RequireDsh = $RequireDsh
+            Set-Item -LiteralPath Function:\Get-LauncherStatus -Value ([scriptblock]::Create($StatusDefinition))
+            Get-LauncherStatus
+        }.ToString()).AddArgument($script:ProcessControlPath).
+            AddArgument(${function:Get-LauncherStatus}.ToString()).
+            AddArgument($script:RequireDsh)
+        $script:StatusRequest = $worker.BeginInvoke()
+        $script:StatusWorker = $worker
+    } catch {
+        $worker.Dispose()
+        $script:NextStatusRefresh = [DateTime]::UtcNow.AddSeconds(3)
+        Write-LauncherLog ('后台状态探测失败：' + $_.Exception.Message) 'WARN'
+    }
+}
+
+function Receive-LauncherStatusRefresh {
+    if ($script:Exiting) { return }
+    if ($null -ne $script:StatusWorker -and $script:StatusRequest.IsCompleted) {
+        try {
+            $results = @($script:StatusWorker.EndInvoke($script:StatusRequest))
+            if ($results.Count -gt 0) {
+                $null = Update-LauncherState -Status $results[-1]
+            }
+        } catch {
+            Write-LauncherLog ('后台状态探测失败：' + $_.Exception.Message) 'WARN'
+        } finally {
+            $script:StatusWorker.Dispose()
+            $script:StatusWorker = $null
+            $script:StatusRequest = $null
+            $script:NextStatusRefresh = [DateTime]::UtcNow.AddSeconds(3)
+        }
+    }
+    if ($null -eq $script:StatusWorker -and [DateTime]::UtcNow -ge $script:NextStatusRefresh) {
+        Start-LauncherStatusRefresh
+    }
 }
 
 # ---------------------------------------------------------------- 菜单动作
@@ -1575,6 +1630,7 @@ function Show-SessionManager {
 function Invoke-LauncherExit {
     if ($script:Exiting -or $script:ExitPromptOpen) { return }
 
+    if ($null -ne $script:Menu) { $script:Menu.Close() }
     $script:ExitPromptOpen = $true
     try {
         try {
@@ -1653,6 +1709,19 @@ function Invoke-LauncherCleanup {
     if ($null -ne $script:Menu) {
         try { $script:Menu.Dispose() } catch { }
         $script:Menu = $null
+    }
+
+    if ($null -ne $script:StatusWorker) {
+        try {
+            if ($script:StatusRequest.IsCompleted) {
+                $script:StatusWorker.Dispose()
+            } else {
+                # Cleanup ends this process; cancel without waiting on a native probe.
+                $null = $script:StatusWorker.BeginStop($null, $null)
+            }
+        } catch { }
+        $script:StatusWorker = $null
+        $script:StatusRequest = $null
     }
 
     foreach ($icon in @($script:IconGreen, $script:IconYellow, $script:IconRed)) {
@@ -1736,15 +1805,14 @@ try {
             Invoke-MenuAction '左键单击托盘' { Open-WebUiConsole }
         })
 
-    # 先刷一次，让图标立刻反映真实状态
-    $null = Update-LauncherState
+    Start-LauncherStatusRefresh
 
-    # 每 3 秒刷新图标颜色与状态摘要
+    # Poll completed background work without blocking the WinForms message loop.
     $script:Timer = [System.Windows.Forms.Timer]::new()
-    $script:Timer.Interval = 3000
+    $script:Timer.Interval = 100
     $script:Timer.Add_Tick({
         try {
-            $null = Update-LauncherState
+            Receive-LauncherStatusRefresh
         } catch {
             # 单次刷新失败不能让托盘崩掉
         }

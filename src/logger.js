@@ -1,7 +1,7 @@
 // src/logger.js —— 按天切分的文件日志（零依赖）
 //
 // 用法：
-//   const log = createLogger('onebot', { logDir: 'C:\\D\\DSH\\qq-bridge\\logs' })
+//   const log = createLogger('onebot', { logDir: 'logs' })
 //   log.info('已连接'); log.child('ws').debug('帧', { id: 1 })
 //
 // 文件：<logDir>/bridge-YYYY-MM-DD.log（UTF-8 无 BOM，追加写）

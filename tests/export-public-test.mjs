@@ -55,8 +55,62 @@ async function walk(dir, out = []) {
   return out;
 }
 
+async function verifyOutputSafety(tmpRoot) {
+  const fixtureParent = path.join(tmpRoot, 'output-safety');
+  const fixtureRoot = path.join(fixtureParent, 'source');
+  const fixtureTool = path.join(fixtureRoot, 'tools', 'export-public.mjs');
+  const sourceSentinel = path.join(fixtureRoot, 'src', 'sentinel.txt');
+  await fsp.mkdir(path.dirname(fixtureTool), { recursive: true });
+  await fsp.mkdir(path.dirname(sourceSentinel), { recursive: true });
+  await fsp.copyFile(TOOL, fixtureTool);
+  await fsp.writeFile(path.join(fixtureRoot, 'package.json'), '{"name":"qq-bridge","version":"0.0.0"}\n');
+  await fsp.writeFile(path.join(fixtureRoot, 'README.md'), '<!-- showcase:start -->\nSynthetic fixture\n<!-- showcase:end -->\n');
+  await fsp.writeFile(path.join(fixtureRoot, 'config.json'), '{"synthetic":true}\n');
+  await fsp.writeFile(path.join(fixtureRoot, 'AGENTS.md'), 'private-maintenance-fixture\n');
+  await fsp.writeFile(sourceSentinel, 'preserve-source-fixture\n');
+  const runFixture = (target) => spawnSync(process.execPath, [fixtureTool, '--out', target, '--force'], {
+    cwd: tmpRoot, encoding: 'utf8', windowsHide: true, timeout: 30_000,
+  });
+
+  for (const [label, target] of [
+    ['source root', fixtureRoot],
+    ['source ancestor', fixtureParent],
+    ['included directory', path.join(fixtureRoot, 'src')],
+    ['source child', path.join(fixtureRoot, 'new-output')],
+    ['existing source file', path.join(fixtureRoot, 'package.json')],
+  ]) {
+    const rejected = runFixture(target);
+    ok(rejected.status !== 0, `unsafe output rejected: ${label}`);
+    ok(fs.existsSync(sourceSentinel) && fs.existsSync(path.join(fixtureRoot, 'config.json')),
+      `source and local data preserved: ${label}`);
+  }
+
+  const victim = path.join(fixtureParent, 'victim');
+  const link = path.join(fixtureParent, 'linked-output');
+  const victimSentinel = path.join(victim, 'sentinel.txt');
+  await fsp.mkdir(path.join(victim, 'nested'), { recursive: true });
+  await fsp.writeFile(victimSentinel, 'preserve-link-target-fixture\n');
+  await fsp.symlink(victim, link, process.platform === 'win32' ? 'junction' : 'dir');
+  for (const target of [link, path.join(link, 'nested')]) {
+    const rejected = runFixture(target);
+    ok(rejected.status !== 0 && fs.existsSync(victimSentinel), 'linked output rejected without deleting its target');
+  }
+
+  for (const target of [path.join(fixtureRoot, 'dist', 'public'), path.join(fixtureParent, 'source-output')]) {
+    await fsp.mkdir(target, { recursive: true });
+    const stale = path.join(target, 'stale.txt');
+    await fsp.writeFile(stale, 'replaceable-output-fixture\n');
+    const accepted = runFixture(target);
+    ok(accepted.status === 0 && !fs.existsSync(stale), 'separate output can be rebuilt with --force');
+    ok(!fs.existsSync(path.join(target, 'AGENTS.md')), 'maintenance AGENTS.md is not exported');
+  }
+}
+
 async function main() {
   const out = path.join(await fsp.mkdtemp(path.join(os.tmpdir(), 'qq-public-')), 'repo');
+
+  console.log('[Output path safety (synthetic source tree)]');
+  await verifyOutputSafety(path.dirname(out));
 
   console.log('[1/5 跑导出脚本]');
   const run = spawnSync(process.execPath, [TOOL, '--out', out, '--force'], {
@@ -136,7 +190,7 @@ async function main() {
   ok(changedImages.length === 0, '展示截图按原始字节导出', changedImages.map((file) => path.relative(screenshotRoot, file)).join('; '));
 
   console.log('\n[4/5 不该出的东西一个都没有]');
-  const forbiddenDirs = ['config.json', 'state', 'logs', 'napcat', 'node_modules', '.env', 'qq-workspace'];
+  const forbiddenDirs = ['AGENTS.md', 'config.json', 'state', 'logs', 'napcat', 'node_modules', '.env', 'qq-workspace'];
   for (const rel of forbiddenDirs) {
     ok(!fs.existsSync(path.join(out, rel)), `没有 ${rel}`);
   }

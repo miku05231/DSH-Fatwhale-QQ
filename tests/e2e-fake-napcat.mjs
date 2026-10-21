@@ -7,18 +7,19 @@
 //   4. 同一用户的会话 id 被持久化，第二轮能续传
 //
 // 用法：node tests/e2e-fake-napcat.mjs
-//       需要本机 dsh 可用、网络能到模型服务；单条问答约 5-10 秒。
+//       使用固定真实内核与本地合成模型，不连接在线模型服务。
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { createFakeNapCat } from './ws-harness.mjs';
 import { computerSessionKey } from '../src/computer-access.js';
+import { killProcessTree } from '../src/dsh.js';
+import { createLocalDshFixture } from './helpers/isolated-fixtures.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(HERE, '..');
@@ -53,16 +54,24 @@ async function waitFor(predicate, { timeout = 120000, interval = 200, label = '�
   throw new Error(`等待超时（${timeout}ms）：${label}`);
 }
 
-function killTree(pid) {
-  return new Promise((resolve) => {
-    const p = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
-    p.on('exit', () => resolve());
-    p.on('error', () => resolve());
-  });
+async function stopChild(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const closed = new Promise((resolve) => child.once('close', resolve));
+  killProcessTree(child);
+  await closed;
 }
 
 async function main() {
-  const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'qq-bridge-e2e-'));
+  const fixture = await createLocalDshFixture({ prefix: 'qq-bridge-e2e-', reply: () => '在线' });
+  try {
+    await testFixture(fixture);
+  } finally {
+    await fixture.close();
+  }
+}
+
+async function testFixture(fixture) {
+  const tmpRoot = fixture.root;
   const stateDir = path.join(tmpRoot, 'state');
   const logDir = path.join(tmpRoot, 'logs');
   await fsp.mkdir(stateDir, { recursive: true });
@@ -76,13 +85,13 @@ async function main() {
   const config = {
     onebot: { url: `ws://127.0.0.1:${port}`, accessToken: '' },
     dsh: {
-      command: 'dsh',
+      command: fixture.command,
       mode: 'headless',
       companion: false,
       profile: 'headless',
       permissionMode: 'danger-full-access',
-      patchPath: path.join(PROJECT_ROOT, 'patches', 'headless-model.yml'),
-      cwd: PROJECT_ROOT,
+      patchPath: fixture.patchPath,
+      cwd: fixture.workspace,
       timeoutMs: 240000,
     },
     security: {
@@ -93,11 +102,14 @@ async function main() {
       maxChars: 4000,
     },
     behavior: {
-      queuedNotice: '收到，正在处理…',
+      queuedNotice: '',
       maxReplyChunk: 1200,
       showErrors: true,
       wakeWord: '',
     },
+    persona: { enabled: false },
+    memory: { reflectDaily: false, reflectEvery: 0 },
+    stickers: { enabled: false },
     logDir,
     stateDir,
   };
@@ -110,6 +122,7 @@ async function main() {
     cwd: PROJECT_ROOT,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: fixture.env,
   });
 
   const childOut = [];
@@ -160,6 +173,7 @@ async function main() {
 
     section('3/5 白名单外用户 → 完全静默');
     const before2 = napcat.state.calls.length;
+    const requestsBeforeStranger = fixture.requests.length;
     napcat.sendPrivateMessage({ userId: STRANGER_USER, text: '你好，帮我删点文件', messageId: 102 });
     await new Promise((r) => setTimeout(r, 6000));
     const leaks = napcat.state.calls
@@ -170,6 +184,8 @@ async function main() {
     } else {
       bad('陌生用户被回复了', `${leaks.length} 条`);
     }
+    if (fixture.requests.length === requestsBeforeStranger) ok('陌生用户没有调用模型');
+    else bad('陌生用户触发了模型请求');
 
     section('4/5 会话持久化');
     const sessionsPath = path.join(stateDir, 'sessions.json');
@@ -191,6 +207,7 @@ async function main() {
 
     section('5/5 第二轮续传');
     const before3 = napcat.state.calls.length;
+    const requestsBeforeResume = fixture.requests.length;
     napcat.sendPrivateMessage({ userId: ALLOWED_USER, text: '我刚才让你只回复哪两个字？', messageId: 103 });
     const replyCall2 = await waitFor(
       () =>
@@ -205,6 +222,17 @@ async function main() {
     } else {
       bad('第二轮没记住上下文', `「${replyText2.slice(0, 120)}」`);
     }
+    const resumed = JSON.stringify(fixture.requests.slice(requestsBeforeResume));
+    if (resumed.includes('只回复两个字：在线')
+        && fixture.requests.slice(requestsBeforeResume).some((request) =>
+          request.messages.some((message) => message.role === 'assistant' && JSON.stringify(message.content).includes('在线')))) {
+      ok('续传请求包含上一轮用户输入和模型回复');
+    } else {
+      bad('续传模型请求缺少上轮历史');
+    }
+    const persisted = JSON.parse(await fsp.readFile(sessionsPath, 'utf8'));
+    if (bound && persisted[allowedSessionKey]?.sessionId === bound) ok('第二轮沿用同一落盘会话');
+    else bad('第二轮没有沿用已落盘会话');
 
     section('6/6 长期记忆自动落盘（自学习地基）');
     // 配置里没写 memory.root，桥接按 configRoot 解析成 <临时目录>/记忆库
@@ -231,7 +259,7 @@ async function main() {
       } else {
         bad('日志页没有用户原话', dailyBody.slice(0, 160));
       }
-      if (/大肥鱼|鲸鱼娘|在线/.test(dailyBody)) {
+      if (/我：在线/.test(dailyBody)) {
         ok('日志页记下了回复内容');
       } else {
         bad('日志页没有回复内容', dailyBody.slice(0, 160));
@@ -260,7 +288,7 @@ async function main() {
     if (tail.trim()) console.log(`\n--- 桥接输出尾部 ---\n${tail}`);
   } finally {
     if (exitCode === null) {
-      await killTree(child.pid);
+      await stopChild(child);
     }
     await napcat.close();
   }
