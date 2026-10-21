@@ -149,6 +149,7 @@ async function main() {
     onebot: { url: `ws://127.0.0.1:${port}`, accessToken: '' },
     dsh: {
       command: fakeDsh,
+      mode: 'headless',
       profile: 'headless',
       patchPath: basePatch,
       cwd: tmpRoot,

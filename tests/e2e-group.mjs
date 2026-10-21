@@ -58,6 +58,7 @@ const config = {
   onebot: { url: '', accessToken: '' },
   dsh: {
     command: 'dsh',
+    mode: 'headless',
     profile: 'headless',
     patchPath: path.join(PROJECT_ROOT, 'patches', 'headless-model.yml'),
     cwd: path.join(PROJECT_ROOT, 'qq-workspace'),
