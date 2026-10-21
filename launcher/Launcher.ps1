@@ -140,6 +140,8 @@ $script:Menu = $null
 $script:Timer = $null
 $script:StatusWorker = $null
 $script:StatusRequest = $null
+$script:StatusPool = $null
+$script:StatusPoolOpen = $null
 $script:NextStatusRefresh = [DateTime]::MinValue
 $script:StatusItem = $null
 $script:AutostartItem = $null
@@ -1048,8 +1050,22 @@ function Update-LauncherState {
 function Start-LauncherStatusRefresh {
     if ($script:Exiting -or $null -ne $script:StatusWorker) { return }
 
-    $worker = [System.Management.Automation.PowerShell]::Create()
+    $worker = $null
     try {
+        # An implicit runspace can initialize synchronously in BeginInvoke.
+        # Open one reusable pool asynchronously before submitting any probes.
+        if ($null -eq $script:StatusPool) {
+            $script:StatusPool = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspacePool(1, 1)
+            $script:StatusPoolOpen = $script:StatusPool.BeginOpen($null, $null)
+            return
+        }
+        if ($null -ne $script:StatusPoolOpen) {
+            if (-not $script:StatusPoolOpen.IsCompleted) { return }
+            $script:StatusPool.EndOpen($script:StatusPoolOpen)
+            $script:StatusPoolOpen = $null
+        }
+        $worker = [System.Management.Automation.PowerShell]::Create()
+        $worker.RunspacePool = $script:StatusPool
         $null = $worker.AddScript({
             param($ProcessControlPath, $StatusDefinition, $RequireDsh)
             . $ProcessControlPath
@@ -1066,7 +1082,12 @@ function Start-LauncherStatusRefresh {
         $script:StatusRequest = $worker.BeginInvoke()
         $script:StatusWorker = $worker
     } catch {
-        $worker.Dispose()
+        if ($null -ne $worker) { $worker.Dispose() }
+        if ($null -ne $script:StatusPool) {
+            try { $null = $script:StatusPool.BeginClose($null, $null) } catch { }
+            $script:StatusPool = $null
+            $script:StatusPoolOpen = $null
+        }
         $script:NextStatusRefresh = [DateTime]::UtcNow.AddSeconds(3)
         Write-LauncherLog ('后台状态探测失败：' + $_.Exception.Message) 'WARN'
     }
@@ -1722,6 +1743,12 @@ function Invoke-LauncherCleanup {
         } catch { }
         $script:StatusWorker = $null
         $script:StatusRequest = $null
+    }
+
+    if ($null -ne $script:StatusPool) {
+        try { $null = $script:StatusPool.BeginClose($null, $null) } catch { }
+        $script:StatusPool = $null
+        $script:StatusPoolOpen = $null
     }
 
     foreach ($icon in @($script:IconGreen, $script:IconYellow, $script:IconRed)) {

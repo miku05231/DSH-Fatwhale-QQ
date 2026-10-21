@@ -427,6 +427,8 @@ function Get-BridgeProcess { [pscustomobject]@{ Running = $true; ProcessId = 103
     $script:RequireDsh = $true
     $script:StatusWorker = $null
     $script:StatusRequest = $null
+    $script:StatusPool = $null
+    $script:StatusPoolOpen = $null
     $script:NextStatusRefresh = [DateTime]::MinValue
     $script:ReceivedStatus = $null
     $script:StatusUiThread = 0
@@ -463,6 +465,7 @@ function Get-BridgeProcess { [pscustomobject]@{ Running = $true; ProcessId = 103
     $overflow = $null
     $otherWindow = $null
     $stoppingWorker = $null
+    $stoppingPool = $null
     try {
         $menu = New-LauncherTrayMenu
         $foregroundMethod = $menu.GetType().GetMethod('GetForegroundWindow', [System.Reflection.BindingFlags]'Static,NonPublic')
@@ -477,25 +480,58 @@ function Get-BridgeProcess { [pscustomobject]@{ Running = $true; ProcessId = 103
             $menu.Items[0].PerformClick()
         })
         $script:ClickWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $clickTimer.Start()
         Start-LauncherStatusRefresh
         $startMs = $script:ClickWatch.ElapsedMilliseconds
         Add-PreviewCheck 'Slow status probe starts without blocking the UI' ($startMs -lt 1000) ($startMs.ToString() + 'ms')
-        $worker = $script:StatusWorker
+        $pool = $script:StatusPool
+        $opening = $script:StatusPoolOpen
         Start-LauncherStatusRefresh
-        Add-PreviewCheck 'Only one status probe runs at a time' ([object]::ReferenceEquals($worker, $script:StatusWorker))
-        $clickTimer.Start()
+        Add-PreviewCheck 'Only one status pool opens at a time' (
+            $null -ne $pool -and [object]::ReferenceEquals($pool, $script:StatusPool) -and
+            ($null -eq $script:StatusPoolOpen -or [object]::ReferenceEquals($opening, $script:StatusPoolOpen)))
         $pumps = 0
-        while ($null -eq $script:ReceivedStatus -and $script:ClickWatch.ElapsedMilliseconds -lt 10000) {
+        $maxRefreshMs = 0
+        $concurrencyChecked = $false
+        while ($null -eq $script:ReceivedStatus -and $script:ClickWatch.ElapsedMilliseconds -lt 20000) {
             [System.Windows.Forms.Application]::DoEvents()
+            $refreshWatch = [System.Diagnostics.Stopwatch]::StartNew()
             Receive-LauncherStatusRefresh
+            $maxRefreshMs = [Math]::Max($maxRefreshMs, $refreshWatch.ElapsedMilliseconds)
+            if (-not $concurrencyChecked -and $null -ne $script:StatusWorker) {
+                $worker = $script:StatusWorker
+                Start-LauncherStatusRefresh
+                Add-PreviewCheck 'Only one status probe runs at a time' ([object]::ReferenceEquals($worker, $script:StatusWorker))
+                $concurrencyChecked = $true
+            }
             $pumps += 1
             [System.Threading.Thread]::Sleep(10)
         }
         Add-PreviewCheck 'Exit click is processed during the slow status probe' (($script:ClickCount -eq 1) -and ($script:ClickMilliseconds -lt 1000)) ($script:ClickMilliseconds.ToString() + 'ms')
+        Add-PreviewCheck 'Status refresh ticks do not block the UI' ($maxRefreshMs -lt 1000) ($maxRefreshMs.ToString() + 'ms')
         Add-PreviewCheck 'UI continues pumping while the status probe runs' ($pumps -gt 20) ($pumps.ToString() + ' cycles')
         Add-PreviewCheck 'Background status probe returns the service state' (($null -ne $script:ReceivedStatus) -and $script:ReceivedStatus.Level -eq 'green' -and $script:ReceivedStatus.BridgeSessions -eq 2) ($script:ProbeErrors -join ', ')
         Add-PreviewCheck 'Status updates are applied on the UI thread' ($script:StatusUiThread -eq $uiThread)
-        Add-PreviewCheck 'Completed status probe releases its runspace' ($null -eq $script:StatusWorker)
+        Add-PreviewCheck 'Completed status probe releases its pipeline' ($null -eq $script:StatusWorker)
+        Add-PreviewCheck 'Completed probes retain the opened status pool' (
+            [object]::ReferenceEquals($pool, $script:StatusPool) -and
+            $script:StatusPool.RunspacePoolStateInfo.State -eq 'Opened')
+
+        $script:ReceivedStatus = $null
+        $script:NextStatusRefresh = [DateTime]::MinValue
+        Start-LauncherStatusRefresh
+        $secondWorker = $script:StatusWorker
+        Add-PreviewCheck 'Subsequent probes reuse the opened status pool' (
+            $null -ne $secondWorker -and [object]::ReferenceEquals($pool, $script:StatusPool))
+        $secondWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($null -eq $script:ReceivedStatus -and $secondWatch.ElapsedMilliseconds -lt 20000) {
+            [System.Windows.Forms.Application]::DoEvents()
+            Receive-LauncherStatusRefresh
+            [System.Threading.Thread]::Sleep(10)
+        }
+        Add-PreviewCheck 'A second probe returns service state using the same pool' (
+            $null -ne $script:ReceivedStatus -and $script:ReceivedStatus.Level -eq 'green' -and
+            $null -eq $script:StatusWorker -and [object]::ReferenceEquals($pool, $script:StatusPool))
 
         $overflow = [System.Windows.Forms.Form]::new()
         $overflow.ShowInTaskbar = $false
@@ -550,8 +586,14 @@ function Get-BridgeProcess { [pscustomobject]@{ Running = $true; ProcessId = 103
         Add-PreviewCheck 'Closed menus stop their dismissal timer' (-not $timerField.GetValue($menu).Enabled)
 
         [System.IO.File]::WriteAllText($script:ProcessControlPath, @'
+$script:ProbeFixtureDirectory = $PSScriptRoot
 function Get-NapCatProcess {
-    [System.Threading.Thread]::Sleep(1800)
+    [System.IO.File]::WriteAllText((Join-Path $script:ProbeFixtureDirectory 'probe-started'), '')
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while (-not [System.IO.File]::Exists((Join-Path $script:ProbeFixtureDirectory 'probe-release')) -and
+        $watch.ElapsedMilliseconds -lt 10000) {
+        [System.Threading.Thread]::Sleep(10)
+    }
     [pscustomobject]@{ Running = $false }
 }
 function Get-DshProcess { [pscustomobject]@{ Running = $false } }
@@ -560,7 +602,16 @@ function Get-BridgeProcess { [pscustomobject]@{ Running = $false } }
         $script:NextStatusRefresh = [DateTime]::MinValue
         Start-LauncherStatusRefresh
         $stoppingWorker = $script:StatusWorker
-        [System.Threading.Thread]::Sleep(100)
+        $stoppingPool = $script:StatusPool
+        $enteredWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $startedPath = Join-Path $fixtureDir 'probe-started'
+        while (-not [System.IO.File]::Exists($startedPath) -and $enteredWatch.ElapsedMilliseconds -lt 10000) {
+            [System.Windows.Forms.Application]::DoEvents()
+            [System.Threading.Thread]::Sleep(10)
+        }
+        Add-PreviewCheck 'Cleanup fixture has entered a native blocking probe' (
+            [System.IO.File]::Exists($startedPath) -and $null -ne $stoppingWorker -and
+            -not $script:StatusRequest.IsCompleted)
         $script:Timer = $null
         $script:TrayIcon = $null
         $script:Menu = $null
@@ -573,7 +624,23 @@ function Get-BridgeProcess { [pscustomobject]@{ Running = $false } }
         Invoke-LauncherCleanup
         Add-PreviewCheck 'Cleanup does not wait for a native background probe' ($cleanupWatch.ElapsedMilliseconds -lt 1000) ($cleanupWatch.ElapsedMilliseconds.ToString() + 'ms')
         Add-PreviewCheck 'Cleanup releases launcher references to the status worker' ($null -eq $script:StatusWorker)
+        Add-PreviewCheck 'Cleanup releases launcher references to the status pool' (
+            $null -eq $script:StatusPool -and $null -eq $script:StatusPoolOpen)
+
+        [System.IO.File]::WriteAllText((Join-Path $fixtureDir 'probe-release'), '')
+        $script:Exiting = $false
+        Start-LauncherStatusRefresh
+        $openingPool = $script:StatusPool
+        Add-PreviewCheck 'Opening cleanup fixture has an asynchronous open request' (
+            $null -ne $openingPool -and $null -ne $script:StatusPoolOpen -and $null -eq $script:StatusWorker)
+        $cleanupWatch.Restart()
+        Invoke-LauncherCleanup
+        Add-PreviewCheck 'Cleanup during asynchronous pool initialization stays responsive' (
+            $cleanupWatch.ElapsedMilliseconds -lt 1000 -and
+            $null -eq $script:StatusPool -and $null -eq $script:StatusPoolOpen)
+        $openingPool.Dispose()
     } finally {
+        [System.IO.File]::WriteAllText((Join-Path $fixtureDir 'probe-release'), '')
         if ($null -ne $script:StatusWorker) {
             $script:StatusWorker.Stop()
             $script:StatusWorker.Dispose()
@@ -583,6 +650,10 @@ function Get-BridgeProcess { [pscustomobject]@{ Running = $false } }
         if ($null -ne $overflow) { $overflow.Dispose() }
         if ($null -ne $otherWindow) { $otherWindow.Dispose() }
         if ($null -ne $stoppingWorker) { $stoppingWorker.Dispose() }
+        if ($null -ne $stoppingPool) { $stoppingPool.Dispose() }
+        if ($null -ne $script:StatusPool) { $script:StatusPool.Dispose() }
+        [System.IO.File]::Delete((Join-Path $fixtureDir 'probe-started'))
+        [System.IO.File]::Delete((Join-Path $fixtureDir 'probe-release'))
         [System.IO.File]::Delete($script:ProcessControlPath)
         [System.IO.Directory]::Delete($fixtureDir)
     }
