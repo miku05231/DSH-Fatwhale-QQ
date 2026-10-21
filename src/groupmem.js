@@ -1,7 +1,7 @@
 // src/groupmem.js —— 群聊记忆仓库（零依赖 / 同步 / 绝不把异常抛给调用方）
 //
-// 文件：<dir>/<groupId>.jsonl，一行一条 JSON：
-//   {"ts":1792427196000,"userId":1819709466,"nickname":"ski","text":"今天谁值班","messageId":1250079138}
+// 文件：<dir>/<groupId>.jsonl，一行一条 JSON（以下为合成示例，非真实记录）：
+//   {"ts":1700000000000,"userId":10001,"nickname":"示例用户","text":"这是一条测试消息","messageId":1}
 //
 // 关键点：
 //   - 每个群最多保留 limit 条，超出后裁剪内存数组并重写整个文件；

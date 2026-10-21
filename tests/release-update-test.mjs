@@ -88,12 +88,17 @@ async function installArtifact({ label, directory, helperSource }, digest) {
     JSON.parse(await readFile(path.join(applicationRoot, 'package.json'), 'utf8')).version === version);
   for (const relative of [
     'src/open-path.ps1', 'src/open-path.js', 'src/sticker-prompt.js',
+    'src/sessions.js', 'src/config.js', 'src/index.js',
+    'src/webui/server.mjs', 'src/webui/public/app.js', 'src/webui/public/index.html',
     'src/companion/lib/index.js', 'src/companion/package.json', 'tools/install-companion.mjs',
   ]) {
     const expected = (await readFile(path.join(root, relative), 'utf8')).replace(/^\uFEFF/, '');
     const actual = (await readFile(path.join(applicationRoot, relative), 'utf8')).replace(/^\uFEFF/, '');
     check(`${label}: the installed package contains the complete current source: ${relative}`, actual === expected);
   }
+  const exampleConfig = JSON.parse(await readFile(path.join(applicationRoot, 'config.example.json'), 'utf8'));
+  check(`${label}: the installed example includes the default session window`,
+    exampleConfig.behavior.sessionWindowMinutes === 180);
   const plugin = JSON.parse(await readFile(path.join(applicationRoot, 'src', 'companion', 'package.json'), 'utf8'));
   check(`${label}: companion remains a standalone ESM plugin inside the existing src whitelist`,
     plugin.name === 'qq-bridge-companion' && plugin.type === 'module' && plugin.main === 'lib/index.js');

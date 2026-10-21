@@ -431,22 +431,23 @@ test('存储格式：一行一条 JSON，缺省字段不写键', () => {
   const dir = path.join(root, 't16');
   const mem = new GroupMemory({ dir });
 
+  // 合成示例，非真实聊天记录。
   mem.append('g', {
-    ts: 1792427196000,
-    userId: 1819709466,
-    nickname: 'ski',
-    text: '今天谁值班',
-    messageId: 1250079138,
+    ts: 1700000000000,
+    userId: 10001,
+    nickname: '示例用户',
+    text: '这是一条测试消息',
+    messageId: 1,
   });
-  mem.append('g', { ts: 1792427196001, text: '没有其它字段' });
-  mem.append('g', { ts: 1792427196002, text: '带图', images: 3 });
+  mem.append('g', { ts: 1700000000001, text: '没有其它字段' });
+  mem.append('g', { ts: 1700000000002, text: '带图', images: 3 });
 
   const lines = readLines(path.join(dir, 'g.jsonl'));
   assert.equal(lines.length, 3);
   // 与规格里给的那行完全一致（键顺序也一样）
   assert.equal(
     lines[0],
-    '{"ts":1792427196000,"userId":1819709466,"nickname":"ski","text":"今天谁值班","messageId":1250079138}',
+    '{"ts":1700000000000,"userId":10001,"nickname":"示例用户","text":"这是一条测试消息","messageId":1}',
   );
   assert.deepEqual(Object.keys(JSON.parse(lines[1])), ['ts', 'text']);
   assert.equal(JSON.parse(lines[2]).images, 3);

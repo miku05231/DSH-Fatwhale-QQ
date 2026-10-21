@@ -311,7 +311,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  console.log('✔ 脱敏自检通过：没有 QQ 号、个人路径、token 或私有端点残留');
+  console.log('✔ 脱敏自检通过：已检查本机路径和既定密钥/端点模式；QQ 号及其他隐私需另行审查');
   console.log('');
   console.log('下一步：');
   console.log(`  1) 把 NapCat 解压到 ${path.join(outDir, 'napcat')}`);
