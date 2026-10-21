@@ -35,6 +35,9 @@ const INCLUDE = [
   'docs/控制台架构.md',
   'docs/测试清单.md',
   'docs/Docker部署.md',
+  'docs/Docker验证报告.md',
+  'docs/隐私审计报告.md',
+  'docs/从零验证报告.md',
   'docs/screenshots',
   'docs/更新发布.md',
   '.github',
@@ -97,10 +100,9 @@ const REPLACEMENTS = expandReplacements(BASE_REPLACEMENTS);
 
 /** 导出后绝不允许出现的片段（由替换表的明文自动推导，外加密钥/端点特征） */
 const FORBIDDEN = [
-  ...REPLACEMENTS.map(([from]) => new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')),
-  /xianapi\.cloud/i,
-  /apikey\.fan/i,
-  /sk-[A-Za-z0-9]{16,}/,
+  ...REPLACEMENTS.map(([from]) => ['本机路径', new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')]),
+  ['疑似密钥', /\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/],
+  ['URL 内嵌长凭据', /https?:\/\/[^/\s"'`<>:]+:[^/\s"'`<>@]{16,}@/i],
 ];
 
 const PUBLIC_README = `> 非官方项目。QQ 侧通过第三方协议端 [NapCat](https://github.com/NapNeko/NapCatQQ)（OneBot 11）连接，**不符合腾讯服务条款，有封号风险**。请使用小号，并自行评估。
@@ -478,9 +480,8 @@ async function main() {
     const ext = path.extname(file).toLowerCase();
     if (!TEXT_EXT.has(ext) && path.basename(file) !== 'LICENSE' && !path.basename(file).startsWith('.git')) return;
     const text = await fsp.readFile(file, 'utf8');
-    for (const re of FORBIDDEN) {
-      const m = text.match(re);
-      if (m) leaks.push(`${path.relative(out, file)} → ${m[0]}`);
+    for (const [label, re] of FORBIDDEN) {
+      if (re.test(text)) leaks.push(`${path.relative(out, file)} → ${label}`);
     }
   });
 
@@ -492,7 +493,7 @@ async function main() {
     console.log('\n请先修 EXPORT 规则或源文件，再重新导出。');
     process.exitCode = 1;
   } else {
-    console.log('✔ 脱敏自检通过：没有 QQ 号、个人路径、密钥或私有端点残留');
+    console.log('✔ 脱敏自检通过：未命中本机路径、已知密钥格式或 URL 内嵌长凭据；QQ 号及其他隐私需另行审查');
   }
 
   try {

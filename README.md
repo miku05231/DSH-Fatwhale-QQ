@@ -92,6 +92,9 @@
 
 > **验证范围**：DSH Desktop（Windows 桌面版）已实测。Docker 已在 WSL2 Linux 引擎上完成镜像构建、真实 NapCat 连接、真实 DeepSeek 推理和隔离消息链路验证；默认配置发现的问题与复测结果见 [Docker 验证报告](docs/Docker验证报告.md)。`node tests/docker-runtime-test.mjs` 提供真实容器回归测试；真人 QQ 消息完整收发与其他系统仍需各自验收。
 
+全新克隆、安装与共享磁盘的验证过程见 [从零验证报告](docs/从零验证报告.md)；
+当前源码与历史提交的隐私问题见 [隐私审计报告](docs/隐私审计报告.md)。
+
 ---
 
 ## 零、直接下载（不想编译）

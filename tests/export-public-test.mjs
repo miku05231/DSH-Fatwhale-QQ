@@ -91,6 +91,10 @@ async function main() {
     'launcher/Launcher.ps1',
     'tests/run-all.mjs',
     'docs/控制台架构.md',
+    'docs/Docker部署.md',
+    'docs/Docker验证报告.md',
+    'docs/隐私审计报告.md',
+    'docs/从零验证报告.md',
     'docs/更新发布.md',
     'scripts/install-update.ps1',
     '.github/workflows/release.yml',
@@ -144,13 +148,30 @@ async function main() {
     for (const [label, re] of [
       ['个人路径', new RegExp(os.homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')],
       ['本机工程路径', new RegExp(path.dirname(PROJECT_ROOT).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')],
-      ['私有端点', /xianapi\.cloud|apikey\.fan/i],
-      ['疑似密钥', /sk-[A-Za-z0-9]{20,}/],
+      ['疑似密钥', /\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/],
+      ['URL 内嵌长凭据', /https?:\/\/[^/\s"'`<>:]+:[^/\s"'`<>@]{16,}@/i],
     ]) {
       if (re.test(text)) leaks.push(`${path.relative(out, file)} → ${label}`);
     }
   }
-  ok(leaks.length === 0, '产物里没有 QQ 号/个人路径/私有端点/密钥', leaks.slice(0, 5).join('; '));
+  ok(leaks.length === 0, '产物未命中本机路径、已知密钥格式或 URL 内嵌长凭据', leaks.slice(0, 5).join('; '));
+  ok(String(run.stdout).includes('QQ 号及其他隐私需另行审查'), '导出提示保留 QQ 号及其他隐私的人工审查范围');
+
+  const syntheticKey = `sk-${'a1B2c3D4'.repeat(4)}`;
+  const syntheticCredential = 'not-a-real-credential-'.repeat(2);
+  const syntheticUrl = ['https://fixture', syntheticCredential].join(':') + '@example.invalid/v1';
+  const fixture = path.join(out, 'src', 'privacy-negative-fixture.js');
+  await fsp.writeFile(fixture, `export const key = ${JSON.stringify(syntheticKey)};\nexport const url = ${JSON.stringify(syntheticUrl)};\n`, 'utf8');
+  const rejected = spawnSync(process.execPath, [path.join(out, 'tools', 'export-public.mjs'), '--out', path.join(path.dirname(out), 'rejected')], {
+    cwd: out,
+    encoding: 'utf8',
+    timeout: 120000,
+  });
+  ok(rejected.status === 1, '含合成密钥的导出被拒绝');
+  ok(String(rejected.stdout).includes('privacy-negative-fixture.js') && String(rejected.stdout).includes('疑似密钥'), '拒绝日志包含文件和类别');
+  ok(String(rejected.stdout).includes('URL 内嵌长凭据'), '含合成 URL 长凭据的导出被拒绝');
+  ok(!`${rejected.stdout}${rejected.stderr}`.includes(syntheticKey) && !`${rejected.stdout}${rejected.stderr}`.includes(syntheticCredential), '拒绝日志不回显匹配到的凭据');
+  await fsp.rm(fixture);
 
   console.log('\n[5/5 产物自身可跑]');
   const check = spawnSync(process.execPath, ['--check', path.join(out, 'src', 'plugins.js')], { encoding: 'utf8', timeout: 30000 });

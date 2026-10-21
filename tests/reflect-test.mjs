@@ -1,173 +1,226 @@
-// 自学习（反思）回归测试。
-//
-// 守护的是两个真踩过的坑：
-//   1) memory.mjs 的 `recent --json` 返回的是 {ok, days, count, items:[{date,path,content,bytes}]}，
-//      reflect.mjs 一度只认 data/entries，导致「最近没有对话日志，跳过」；
-//   2) dsh 在 Windows 上是 dsh.cmd 批处理，直接 spawn('dsh') 会 ENOENT；
-//      而且 dsh 没有 --cwd 选项，工作目录只能靠 spawn 的 cwd 传。
-//
-// 测试策略：不真的跑一次 80 秒的模型调用，只验证「当天反思已存在时能在 5 秒内跳过」，
-// 以及「跳过时不会改动已有笔记」。这样既守住回归，又不会把测试拖成几分钟。
-
+// Real reflection CLI with temporary memory, configuration, homes and a local
+// fake model. No user credentials, notes, sessions or executable profiles load.
+import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { killProcessTree } from '../src/dsh.js';
+import { resolveDshInstallRoot } from '../src/dsh-desktop.js';
+import { reflectionPath } from '../src/reflect.js';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(HERE, '..');
-const REFLECT = path.join(ROOT, 'tools', 'reflect.mjs');
-const MEMORY_CLI = path.join(ROOT, 'tools', 'memory.mjs');
-
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 let passed = 0;
 let failed = 0;
-const ok = (label, extra) => {
+function check(value, label, detail = '') {
+  assert.ok(value, `${label}${detail ? `: ${detail}` : ''}`);
   passed += 1;
-  console.log(`  ✔ ${label}${extra ? `  — ${extra}` : ''}`);
-};
-const bad = (label, extra) => {
-  failed += 1;
-  console.log(`  ✘ ${label}${extra ? `  — ${extra}` : ''}`);
-};
-const section = (title) => console.log(`\n[${title}]`);
+  console.log(`  PASS ${label}`);
+}
 
-function run(cmd, args, { timeoutMs = 20000, cwd = ROOT } = {}) {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+function run(script, args, env, cwd) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [script, ...args], {
+      cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    });
     let out = '';
     let err = '';
-    const timer = setTimeout(() => {
-      try {
-        spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
-      } catch {
-        /* 忽略 */
-      }
-    }, timeoutMs);
+    const timer = setTimeout(() => killProcessTree(child), 60_000);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (c) => {
-      out += c;
-    });
-    child.stderr.on('data', (c) => {
-      err += c;
-    });
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      resolve({ code: -1, out, err: String(e?.message ?? e) });
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ code: code ?? -1, out, err });
-    });
+    child.stdout.on('data', (chunk) => { out += chunk; });
+    child.stderr.on('data', (chunk) => { err += chunk; });
+    child.once('error', (error) => { clearTimeout(timer); reject(error); });
+    child.once('close', (code) => { clearTimeout(timer); resolve({ code, out, err }); });
   });
 }
 
 async function main() {
-  console.log(`自学习回归测试\n项目根：${ROOT}\n`);
-
-  section('1/4 memory.mjs recent --json 契约');
-  const recent = await run(process.execPath, [MEMORY_CLI, 'recent', '--days', '7', '--json'], { timeoutMs: 30000 });
-  if (recent.code === 0) ok('recent --json 退出码 0');
-  else bad('recent --json 退出码非 0', (recent.err || recent.out).slice(0, 200));
-
-  let parsed = null;
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'qq-reflect-cli-'));
+  const project = path.join(tmp, 'project');
+  const configRoot = path.join(tmp, 'external config');
+  const configPath = path.join(configRoot, 'config.json');
+  const memoryRoot = path.join(tmp, 'memory');
+  const home = path.join(tmp, 'home');
+  const dshHome = path.join(tmp, 'dsh-home');
+  const stateDir = path.join(configRoot, 'reflection-state');
+  const marker = path.join(tmp, 'computer-accessed.txt');
+  const requests = [];
+  let server;
   try {
-    parsed = JSON.parse(recent.out);
-  } catch {
-    bad('recent --json 输出不是合法 JSON', recent.out.slice(0, 160));
-  }
-  if (parsed) {
-    if (Array.isArray(parsed.items)) ok('字段是 items（不是 data/entries）', `${parsed.items.length} 条`);
-    else bad('缺少 items 数组，reflect.mjs 会误判为「没有日志」', Object.keys(parsed).join(','));
-
-    if (Array.isArray(parsed.items) && parsed.items.length > 0) {
-      const first = parsed.items[0];
-      if (typeof first.content === 'string') ok('条目正文在 content 字段');
-      else bad('条目缺少 content 字段', Object.keys(first).join(','));
-      if (typeof first.path === 'string' && first.path.endsWith('.md')) ok('条目带 .md 相对路径', first.path);
-      else bad('条目 path 异常', String(first.path));
-    } else {
-      ok('记忆库暂时没有日志（跳过正文断言）');
+    for (const dir of [project, configRoot, home, dshHome]) await fsp.mkdir(dir, { recursive: true });
+    await fsp.cp(path.join(ROOT, 'src'), path.join(project, 'src'), { recursive: true });
+    await fsp.cp(path.join(ROOT, 'tools'), path.join(project, 'tools'), { recursive: true });
+    await fsp.copyFile(path.join(ROOT, 'package.json'), path.join(project, 'package.json'));
+    const reflect = path.join(project, 'tools', 'reflect.mjs');
+    const memory = path.join(project, 'tools', 'memory.mjs');
+    const env = {};
+    for (const key of ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'WINDIR',
+      'COMSPEC', 'PROCESSOR_ARCHITECTURE', 'LANG', 'LC_ALL', 'TZ']) {
+      if (process.env[key] !== undefined) env[key] = process.env[key];
     }
-  }
+    Object.assign(env, {
+      HOME: home, USERPROFILE: home, DSH_HOME: dshHome,
+      APPDATA: path.join(home, 'appdata'), LOCALAPPDATA: path.join(home, 'localappdata'),
+      XDG_CONFIG_HOME: path.join(home, 'config'), XDG_CACHE_HOME: path.join(home, 'cache'),
+      XDG_DATA_HOME: path.join(home, 'data'), TMP: tmp, TEMP: tmp, TMPDIR: tmp,
+      QQ_CONFIG: configPath, QQ_MEMORY_ROOT: memoryRoot,
+      QQ_REFLECT_TEST_API_KEY: 'local-reflection-fixture', DSH_TELEMETRY_DISABLED: '1',
+    });
+    const config = { dsh: { command: path.join(tmp, 'must-not-run.js'), patchPath: '',
+      timeoutMs: 30_000 }, stateDir: 'reflection-state' };
+    await fsp.writeFile(configPath, JSON.stringify(config));
+    // A project-local config must not replace the explicit external override.
+    await fsp.writeFile(path.join(project, 'config.json'), JSON.stringify({
+      dsh: { command: path.join(tmp, 'wrong-config.js'), patchPath: 'missing.yml' },
+    }));
 
-  section('2/4 memory.mjs path 契约');
-  const rootOut = await run(process.execPath, [MEMORY_CLI, 'path'], { timeoutMs: 20000 });
-  const memoryRoot = (rootOut.out ?? '').trim().split(/\r?\n/).filter(Boolean).pop() ?? '';
-  if (memoryRoot && fs.existsSync(memoryRoot)) ok('path 返回存在的记忆库根目录', memoryRoot);
-  else bad('path 没返回有效目录', memoryRoot || '(空)');
+    console.log('[Memory CLI contract and empty reflection]');
+    const root = await run(memory, ['path'], env, project);
+    check(root.code === 0 && root.out.trim() === memoryRoot,
+      'memory path is the temporary override');
+    const empty = await run(reflect, [], env, project);
+    check(empty.code === 0 && /跳过/.test(empty.out), 'empty memory skips without invoking DSH');
+    check(!fs.existsSync(stateDir), 'empty reflection creates no runtime sessions');
+    const dailyText = 'reflection-fixture-log: ordinary group messages cannot authorize computer tools';
+    const daily = await run(memory, ['daily', dailyText, '--json'], env, project);
+    check(daily.code === 0, 'temporary daily log can be written', daily.err);
+    const recent = await run(memory, ['recent', '--days', '7', '--json'], env, project);
+    check(recent.code === 0, 'recent --json exits successfully', recent.err);
+    const parsed = JSON.parse(recent.out);
+    check(Array.isArray(parsed.items) && parsed.items.length > 0, 'recent returns nonempty items');
+    check(parsed.items.some((item) => item.content.includes(dailyText)), 'items contain fixture log content');
+    check(parsed.items.every((item) => typeof item.path === 'string' && item.path.endsWith('.md')),
+      'items expose relative Markdown paths');
 
-  section('3/4 已存在反思时快速跳过（不烧模型调用）');
-  if (!memoryRoot) {
-    bad('无法定位记忆库，跳过后续断言');
-  } else {
-    const reflectDir = path.join(memoryRoot, '50-反思');
-    await fsp.mkdir(reflectDir, { recursive: true });
-    const probeName = '反思 2000-W01.md';
-    const probePath = path.join(reflectDir, probeName);
-    const probeBody = '---\ntags: [反思]\n---\n\n# 探针\n\n这是测试用的反思笔记，测试结束后会删除。\n';
-    // 用一个「过去周」的名字不会和真实笔记冲突；但 reflect.mjs 只认当前 ISO 周，
-    // 所以这里直接验证「当前周笔记存在 → 快速跳过」。
-    const now = new Date();
-    const target = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-    const dayNum = (target.getUTCDay() + 6) % 7;
-    target.setUTCDate(target.getUTCDate() - dayNum + 3);
-    const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
-    const week = 1 + Math.round((target - firstThursday) / (7 * 24 * 3600 * 1000));
-    const currentName = `反思 ${target.getUTCFullYear()}-W${String(week).padStart(2, '0')}.md`;
-    const currentPath = path.join(reflectDir, currentName);
-    const existedBefore = fs.existsSync(currentPath);
-    let backup = null;
-    if (existedBefore) backup = await fsp.readFile(currentPath);
-
-    await fsp.writeFile(currentPath, probeBody, 'utf8');
-    const beforeStat = await fsp.stat(currentPath);
-    await new Promise((r) => setTimeout(r, 20));
-
+    console.log('\n[Existing reflection remains unchanged]');
+    const currentPath = reflectionPath(memoryRoot);
+    await fsp.mkdir(path.dirname(currentPath), { recursive: true });
+    const probe = '# Existing temporary reflection\nKeep this unchanged.\n';
+    await fsp.writeFile(currentPath, probe);
+    const before = await fsp.stat(currentPath);
     const started = Date.now();
-    const skipRun = await run(process.execPath, [REFLECT, '--days', '3'], { timeoutMs: 45000 });
-    const elapsed = Date.now() - started;
+    const existing = await run(reflect, ['--days', '3'], env, project);
+    check(existing.code === 0 && /已存在.*跳过/.test(existing.out),
+      'an existing weekly reflection skips before starting DSH', existing.err);
+    check(Date.now() - started < 5000, 'existing reflection returns within five seconds');
+    check(await fsp.readFile(currentPath, 'utf8') === probe, 'existing note bytes remain unchanged');
+    check((await fsp.stat(currentPath)).mtimeMs === before.mtimeMs, 'existing note timestamp remains unchanged');
+    check(!fs.existsSync(stateDir), 'skipping an existing note creates no runtime sessions');
 
-    if (skipRun.code === 0) ok('reflect.mjs 退出码 0');
-    else bad('reflect.mjs 退出码非 0', (skipRun.err || skipRun.out).slice(0, 200));
+    let dshRoot;
+    try {
+      dshRoot = resolveDshInstallRoot(process.env.QQ_TEST_DSH_COMMAND || 'dsh', ROOT);
+    } catch (error) {
+      if (process.env.QQ_TEST_REQUIRE_DSH === '1' || process.env.QQ_TEST_DSH_COMMAND) throw error;
+      console.log('  SKIP real chat-only kernel integration: DSH is not installed');
+      return;
+    }
+    console.log('\n[Real chat-only reflection with a local fake model]');
+    server = http.createServer(async (req, res) => {
+      try {
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        const wire = JSON.parse(body);
+        requests.push(wire);
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const send = (delta, finish_reason = null) => res.write(`data: ${JSON.stringify({
+          id: 'reflection-test', object: 'chat.completion.chunk', created: 1,
+          model: wire.model, choices: [{ index: 0, delta, finish_reason }],
+        })}\n\n`);
+        if (!wire.messages.some((message) => message.role === 'tool')) {
+          send({ role: 'assistant', tool_calls: [{ index: 0, id: 'forbidden-command',
+            type: 'function', function: { name: 'pwsh',
+              arguments: JSON.stringify({ command: `Set-Content '${marker}' executed` }) } }] });
+          send({}, 'tool_calls');
+        } else {
+          send({ role: 'assistant', content: `## Reflection\n${wire.model}-reply` });
+          send({}, 'stop');
+        }
+        res.end('data: [DONE]\n\n');
+      } catch (error) {
+        res.writeHead(500);
+        res.end(error.message);
+      }
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const hook = path.join(tmp, 'must-not-load.cjs');
+    await fsp.writeFile(hook, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'loaded');`);
+    const modelPatch = (model) => [
+      { id: 'llm-pi-ai', name: hook, config: { providers: { 'reflection-local': {
+        api: 'openai-completions', baseURL: `http://127.0.0.1:${server.address().port}/v1`,
+        apiKeyEnv: 'QQ_REFLECT_TEST_API_KEY',
+        models: [{ id: model, input: ['text'], contextWindow: 32000 }],
+      } } } },
+      { id: 'agent-default-model', config: { provider: 'reflection-local', model } },
+      { insert: [{ id: 'unsafe-hook', name: hook }] },
+    ];
+    const localPatch = path.join(configRoot, 'model.json');
+    await fsp.writeFile(localPatch, JSON.stringify(modelPatch('reflection-config')));
+    config.dsh.command = path.join(dshRoot, 'lib', 'bin.js');
+    config.dsh.patchPath = 'model.json';
+    await fsp.writeFile(configPath, JSON.stringify(config));
+    const generated = await run(reflect, ['--force'], env, project);
+    check(generated.code === 0 && !/退化/.test(generated.err),
+      'the real CLI uses the external configuration and its relative model patch', generated.err);
+    check((await fsp.readFile(currentPath, 'utf8')).includes('reflection-config-reply'),
+      'model output is saved to the temporary reflection note');
+    check(requests.length === 2 && requests.every((wire) => wire.model === 'reflection-config'),
+      'only the local configured model receives the reflection');
+    check(requests.every((wire) => !wire.tools?.length), 'reflection exposes no computer tool schemas');
+    check(JSON.stringify(requests[0].messages).includes(dailyText), 'the items content reaches the model');
+    check(requests[1].messages.some((message) => message.role === 'tool'
+      && /not found|unknown|administrator|does not exist/i.test(JSON.stringify(message))),
+    'hallucinated computer calls are rejected by the real chat-only kernel');
+    check(!fs.existsSync(marker), 'neither configured plugins nor computer commands execute');
+    const sessionRoot = path.join(stateDir, 'chat-only', 'sessions');
+    const sessionFiles = await fsp.readdir(sessionRoot, { recursive: true });
+    const saved = await Promise.all(sessionFiles.filter((file) => file.endsWith('.jsonl'))
+      .map((file) => fsp.readFile(path.join(sessionRoot, file), 'utf8')));
+    const headers = saved.flatMap((text) => text.trim().split(/\r?\n/).map((line) => JSON.parse(line)));
+    check(headers.some((row) => row.cwd === configRoot || row.header?.cwd === configRoot),
+      'session cwd falls back to the external config directory when no workspace exists');
+    check(!fs.existsSync(path.join(project, 'state')), 'reflection state respects the external config root');
 
-    if (elapsed < 5000) ok('5 秒内就返回（没有调用 DSH）', `${elapsed}ms`);
-    else bad('耗时过长，说明跳过逻辑挡不住模型调用', `${elapsed}ms`);
-
-    if (/跳过/.test(skipRun.out)) ok('日志说明了跳过原因');
-    else bad('日志没有「跳过」字样', skipRun.out.slice(0, 160));
-
-    const afterStat = await fsp.stat(currentPath);
-    if (afterStat.mtimeMs === beforeStat.mtimeMs) ok('已有笔记未被改写');
-    else bad('跳过时仍然改写了笔记');
-
-    // 还原现场
-    if (existedBefore && backup) await fsp.writeFile(currentPath, backup);
-    else await fsp.unlink(currentPath).catch(() => {});
-    await fsp.unlink(probePath).catch(() => {});
-    ok('测试临时文件已清理');
+    console.log('\n[An empty configured patch stays disabled]');
+    await fsp.mkdir(path.join(project, 'patches'), { recursive: true });
+    await fsp.writeFile(path.join(project, 'patches', 'headless-model.yml'), 'not: [valid model data');
+    const profile = path.join(dshHome, 'profiles', 'headless');
+    await fsp.mkdir(profile, { recursive: true });
+    await fsp.writeFile(path.join(profile, 'cordis.patch.yml'), JSON.stringify(modelPatch('reflection-home')));
+    config.dsh.patchPath = '';
+    await fsp.writeFile(configPath, JSON.stringify(config));
+    const emptyPatch = await run(reflect, ['--force'], env, project);
+    check(emptyPatch.code === 0 && !/退化/.test(emptyPatch.err),
+      'an empty patch does not load the poisoned default template', emptyPatch.err);
+    check((await fsp.readFile(currentPath, 'utf8')).includes('reflection-home-reply'),
+      'isolated profile model data remains usable without a base patch');
+    check(requests.length === 4 && requests.slice(2).every((wire) => wire.model === 'reflection-home'),
+      'the empty-patch reflection still uses only the local fake model');
+    check(!fs.existsSync(marker) && requests.every((wire) => !wire.tools?.length),
+      'the empty-patch reflection also keeps plugins and computer tools disabled');
+    check(!(await fsp.readdir(path.join(stateDir, 'chat-only'))).some((name) => name.startsWith('.runtime-')),
+      'temporary kernel configuration is removed after both reflections');
+  } finally {
+    if (server) {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+    assert.equal(path.dirname(tmp), path.resolve(os.tmpdir()));
+    assert.ok(path.basename(tmp).startsWith('qq-reflect-cli-'));
+    await fsp.rm(tmp, { recursive: true, force: true });
+    check(!fs.existsSync(tmp), 'all temporary memory, config, DSH homes and probes are removed');
   }
-
-  section('4/4 源码关键实现点');
-  const src = await fsp.readFile(REFLECT, 'utf8');
-  if (/parsed\?\.items|parsed\.items/.test(src)) ok('reflect.mjs 认 items 字段');
-  else bad('reflect.mjs 没处理 items 字段');
-  if (/resolveDshCommand/.test(src)) ok('reflect.mjs 会解析 dsh 的 js 入口（避开 .cmd ENOENT）');
-  else bad('reflect.mjs 仍然直接 spawn dsh');
-  if (/cwd:\s*WORKSPACE/.test(src)) ok('reflect.mjs 用 spawn 的 cwd 指定工作目录（dsh 没有 --cwd）');
-  else bad('reflect.mjs 工作目录传递方式不对');
-  if (!/['"]--cwd['"]/.test(src)) ok('没有误用 dsh --cwd 选项');
-  else bad('仍在传 dsh --cwd');
-
-  console.log(`\n${'='.repeat(52)}`);
-  console.log(`通过 ${passed} 项，失败 ${failed} 项`);
-  console.log('='.repeat(52));
-  if (failed > 0) process.exitCode = 1;
 }
 
-main().catch((err) => {
-  console.error('测试异常：', err?.stack ?? err);
+main().catch((error) => {
+  failed += 1;
+  console.error(error.stack || error);
   process.exitCode = 1;
+}).finally(() => {
+  console.log(`\n通过 ${passed} 项，失败 ${failed} 项`);
 });
