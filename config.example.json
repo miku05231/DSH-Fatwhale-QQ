@@ -11,6 +11,8 @@
     "desktopBootTimeoutMs": 120000,
     "desktopIdleMs": 900000,
     "fallbackToHeadless": true,
+    "companion": true,
+    "companionDiscovery": "",
     "patchPath": "patches/headless-model.yml",
     "cwd": ".",
     "timeoutMs": 300000,

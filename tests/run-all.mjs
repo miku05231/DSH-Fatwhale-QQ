@@ -73,6 +73,13 @@ const SUITE = [
     note: '安装根/profile 探测、auto/desktop/headless 路由、配置默认值与校验、脱敏、宿主契约',
   },
   {
+    name: '桌面连伴（会话实时可见）',
+    file: 'tests/companion-test.mjs',
+    expect: ['通过'],
+    timeoutMs: 90_000,
+    note: 'discovery/鉴权/HTTP 错误语义、companion 优先路由、安装器安装与卸载、插件源码契约',
+  },
+  {
     name: '群成员对话权限',
     file: 'tests/group-members-test.mjs',
     expect: ['通过'],

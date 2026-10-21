@@ -249,7 +249,7 @@ async function main() {
   const dshMode = resolveAgentMode(config, { cwd: dshCwd, log });
   if (dshMode.mode === 'desktop') {
     const profile = dshMode.probe?.profileDir ?? config?.dsh?.desktopProfile ?? 'desktop';
-    log.info(`DSH 运行模式：desktop（profile：${profile}）—— 首次消息启动宿主，约需十几秒`);
+    log.info(`DSH 运行模式：desktop（profile：${profile}）—— 优先使用桌面端连伴；未安装时由独立宿主接管`);
   } else {
     log.info(`DSH 运行模式：headless（${dshMode.reason}）`);
   }

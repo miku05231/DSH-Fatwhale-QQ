@@ -28,6 +28,10 @@ export const DEFAULTS = deepFreeze({
     desktopIdleMs: 900000,
     // desktop 启动失败时，本条消息是否回退 headless
     fallbackToHeadless: true,
+    // 桌面端装了 qq-bridge-companion 时，优先让桌面宿主自己建会话（列表实时刷新）
+    companion: true,
+    // companion discovery 文件；留空 = <DSH_HOME>/qq-bridge-companion.json
+    companionDiscovery: '',
     patchPath: 'patches/headless-model.yml',
     // '.' = 配置文件所在目录（项目根）；换台电脑、搬目录、进容器都不用改。
     // 想固定一个自己的工作区就写绝对路径，或相对路径（按项目根解析）。
@@ -212,6 +216,7 @@ const OPTIONAL_STRINGS = [
   'onebot.accessToken',
   'dsh.mode',
   'dsh.desktopProfile',
+  'dsh.companionDiscovery',
   'dsh.cwd', // 留空 = 进程当前目录；'.' = 配置文件所在目录
   'dsh.patchPath', // 留空 = 不套补丁（干净的机器、Docker 里默认就没补丁）
   'behavior.queuedNotice',
@@ -277,7 +282,7 @@ function validateConfig(config) {
     invalid('security.rateLimitPerMinute', '必须是数字（小于等于 0 表示不限流）', rate);
   }
 
-  for (const field of ['security.allowGroups', 'behavior.showErrors', 'dsh.fallbackToHeadless']) {
+  for (const field of ['security.allowGroups', 'behavior.showErrors', 'dsh.fallbackToHeadless', 'dsh.companion']) {
     const value = getField(config, field);
     if (typeof value !== 'boolean') invalid(field, '必须是 true 或 false', value);
   }

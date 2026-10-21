@@ -13,14 +13,19 @@
 //   headless 强制 headless。
 //
 // 回退只发生在「会话还没被 desktop host 接受」之前，避免把同一轮对话跑两遍。
+// 装了 companion 插件时优先走 companion：会话由桌面宿主自己创建，桌面端
+// 的会话列表会实时出现；companion 不可用才退回独立宿主/headless。
 
 import process from 'node:process';
 
 import { runDsh } from './dsh.js';
+import { probeCompanion, runCompanionDsh } from './dsh-companion.js';
 import { detectDesktopProfile, runDesktopDsh, shutdownDesktopHost } from './dsh-desktop.js';
 import { redactSecrets } from './redact.js';
 
 export const AGENT_MODES = ['auto', 'desktop', 'headless'];
+
+let lastCompanionState = null;
 
 /**
  * 决定本次（以及启动日志里展示的）运行模式。只读文件系统，不启动进程。
@@ -59,6 +64,32 @@ export async function runAgent(text, options = {}) {
 
   if (resolved.mode === 'headless') {
     return runDsh(text, options);
+  }
+
+  if (cfg?.dsh?.companion !== false) {
+    const probe = await probeCompanion(cfg);
+    if (probe.available) {
+      if (lastCompanionState !== 'ok') {
+        lastCompanionState = 'ok';
+        log?.info?.(
+          `DSH desktop 连伴可用（宿主 pid ${probe.info.pid}），会话将由桌面端实时创建`,
+        );
+      }
+      try {
+        return await runCompanionDsh(text, options);
+      } catch (error) {
+        const wrapped = error instanceof Error ? error : new Error(String(error));
+        const detail = redactSecrets(wrapped.message);
+        if (!wrapped.channelError) {
+          wrapped.message = detail;
+          throw wrapped;
+        }
+        log?.warn?.(`DSH 连伴连接失败，改用独立宿主：${detail}`);
+      }
+    } else if (probe.reason && probe.reason !== lastCompanionState) {
+      lastCompanionState = probe.reason;
+      log?.info?.(`DSH 连伴暂不可用（${probe.reason}），改用独立宿主`);
+    }
   }
 
   try {

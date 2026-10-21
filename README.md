@@ -498,7 +498,9 @@ QQ 里也能直接切（这几个指令不需要 @，主人发才算）：
     "desktopProfile": "desktop",                 // desktop 模式用哪个 profile，也可写绝对路径
     "desktopBootTimeoutMs": 120000,              // 第一条消息等宿主启动的上限（毫秒）
     "desktopIdleMs": 900000,                     // 多久没消息关掉宿主（毫秒，0 = 不关）
-    "fallbackToHeadless": true                   // 桌面宿主起不来时，这条消息回退 headless
+    "fallbackToHeadless": true,                  // 桌面宿主起不来时，这条消息回退 headless
+    "companion": true,                           // 优先使用桌面端内的连伴插件（会话实时可见）
+    "companionDiscovery": ""                     // 连伴 discovery 文件，空 = ~/.dsh/qq-bridge-companion.json
   },
   "persona": {                             // 人格文件（见「一·十二」）
     "enabled": true,
@@ -586,11 +588,22 @@ copy patches\headless-model.yml patches\headless-model.local.yml
 
 `desktop` 模式的行为：
 
-- **会话互通**：会话写进同一个 `~/.dsh/sessions`。QQ 这边新开的会话，桌面端刷新后能在侧栏「未分组」看到，点开就能接着聊。
+- **会话实时可见（推荐装连伴插件）**：装一次 `node tools\install-companion.mjs`，QQ 消息会由**桌面端进程本身**创建/续传会话，并挂进 `qq-bridge\qq-workspace` 工作区。侧栏即时出现，不用刷新，也不会散落在「未分组」。
+  没装插件时会退回到「独立宿主写文件」：会话仍然写进同一个 `~/.dsh/sessions`，但桌面端要刷新（或重开）后才能在「未分组」里看到。
 - **不抢默认模型**：QQ 侧手动指定的模型只作用于当次请求，不会改掉桌面端的默认模型。
-- **宿主复用**：第一条消息等宿主启动（`desktopBootTimeoutMs`，默认 120 秒），之后复用同一个宿主；`desktopIdleMs`（默认 15 分钟）没消息就关掉释放内存，下一条再拉起。
+- **宿主复用**：连伴插件不可用时，第一条消息等独立宿主启动（`desktopBootTimeoutMs`，默认 120 秒），之后复用同一个宿主；`desktopIdleMs`（默认 15 分钟）没消息就关掉释放内存，下一条再拉起。
 - **自动回退**：桌面 profile 不存在、启动失败或超时，这一条消息回退 headless，桥接不会因此不回话；不想回退就把 `fallbackToHeadless` 设成 `false`。
 - **Docker**：镜像里没有桌面 profile，`auto` 会自动走 headless；想省掉探测就写 `"mode": "headless"`。
+
+#### 连伴插件：让 QQ 会话实时出现在桌面端
+
+```powershell
+node tools\install-companion.mjs            # 安装（会先备份 cordis.patch.yml）
+node tools\install-companion.mjs --dry-run  # 只看要改什么
+node tools\install-companion.mjs --remove   # 卸载
+```
+
+安装器只会往 `~/.dsh/profiles/desktop/cordis.patch.yml` 追加一个带标记的 `- insert:` 块（`file:///.../companion/lib/index.js`），不拷贝文件、不装 npm 依赖。装完即生效（实测桌面端会热加载；若没生效，重启一次 DSH）。插件只监听 `127.0.0.1` 随机端口，token 经 `~/.dsh/qq-bridge-companion.json` 交接；桥接连不上就自动退回独立宿主，不会影响 QQ 收发。
 
 > 安全边界不变：两种模式都受 `dsh.permissionMode` 约束，desktop 模式不会额外获得权限。
 
@@ -747,7 +760,7 @@ cd D:\code\qq-bridge
 node tests\run-all.mjs
 ```
 
-它会按顺序跑下面的用例，逐条打勾，最后汇总「通过 N 项，失败 0 项」，同时把结果写进 `state\test-log\<时间戳>.md|.json`（`latest.md` 是最新一轮）；`docs\测试清单.md` 记的是逐条的人工/自动对照表。用例包含表情采集与导入、本地目录打开、UI CDP、真 dsh、干净环境模拟、命令行模式、容器静态校验、托盘外观、EXE 封装、应用更新与公开导出；每轮结果以对应的测试记录为准。
+它会按顺序跑下面的用例，逐条打勾，最后汇总「通过 N 项，失败 0 项」，同时把结果写进 `state\test-log\<时间戳>.md|.json`（`latest.md` 是最新一轮）；`docs\测试清单.md` 记的是逐条的人工/自动对照表。用例包含表情采集与导入、本地目录打开、桌面连伴、UI CDP、真 dsh、干净环境模拟、命令行模式、容器静态校验、托盘外观、EXE 封装、应用更新与公开导出；每轮结果以对应的测试记录为准。
 
 单条单跑：
 
@@ -772,6 +785,7 @@ node tests\tray-appearance-test.mjs # 托盘深浅色、缩放、退出确认与
 node tests\exe-host-test.mjs        # EXE 编译、参数、真实引导路径与发行包（隔离运行）
 node tests\run-all.mjs --only 更新  # 版本检查、下载、安装回滚、HTTP 安全与界面（隔离运行）
 node tests\agent-runner-test.mjs    # DSH 运行模式：安装根/profile 探测 + auto/desktop/headless 路由 + 脱敏（20 项）
+node tests\companion-test.mjs       # 桌面连伴：discovery/鉴权/错误语义 + 安装器装/卸 + 插件源码契约（18 项）
 node tests\wake-word-test.mjs       # 唤醒词语义：私聊免唤醒 / @ 了不受唤醒词限制（5 项）
 node tests\reflect-test.mjs         # 自学习：recent 契约 / 秒跳过 / dsh 入口解析（14 项）
 node tests\reflect-schedule-test.mjs # 反思定时：一天一次 / 关机补跑 / 覆盖前备份 / 锁 / 记账（56 项）

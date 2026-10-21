@@ -1,0 +1,11 @@
+{
+  "name": "qq-bridge-companion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "description": "QQ-DSH 桥接连伴插件：在 DSH Desktop 宿主内创建会话，让 QQ 会话实时出现在桌面端",
+  "exports": {
+    ".": "./lib/index.js"
+  }
+}
