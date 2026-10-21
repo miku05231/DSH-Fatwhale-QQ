@@ -11,13 +11,10 @@
  *   node tests/run-all.mjs --skip-net   # 跳过要联网/要真实 NapCat 的慢测试
  */
 
-import { spawn } from 'node:child_process';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { browserRuntimeEnv, isolatedEnv, prepareIsolatedHome } from './helpers/isolated-fixtures.mjs';
-import { killProcessTree } from '../src/dsh.js';
+import { runTestCase, testCaseRecord } from './helpers/run-test-case.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -33,6 +30,13 @@ const skipNet = argv.includes('--skip-net');
  *  expect：从输出里必须出现的字样（没有就判失败）。
  */
 const SUITE = [
+  {
+    name: '测试运行器（失败与清理）',
+    file: 'tests/run-test-case-test.mjs',
+    expect: ['失败 0 项'],
+    timeoutMs: 60_000,
+    note: '保留子测试错误、隔离清理失败、超时与进程退出顺序',
+  },
   {
     name: '会话窗口（固定时长与桥接）',
     file: 'tests/session-window-test.mjs',
@@ -391,52 +395,6 @@ const SUITE = [
   },
 ];
 
-/** 跑一个 Node 脚本，返回 { code, stdout, stderr, ms } */
-async function runOne(file, timeoutMs) {
-  const isolatedRoot = await mkdtemp(path.join(os.tmpdir(), 'qq-suite-case-'));
-  await prepareIsolatedHome(isolatedRoot);
-  try {
-    return await new Promise((resolve) => {
-    const started = Date.now();
-    const child = spawn(process.execPath, [path.join(ROOT, file)], {
-      cwd: ROOT,
-      windowsHide: true,
-      env: (['tests/dsh-web-test.mjs', 'tests/ui-cdp.mjs', 'tests/updates-ui.mjs'].includes(file)
-        ? browserRuntimeEnv : isolatedEnv)(isolatedRoot, {
-        NODE_NO_WARNINGS: '1', QQ_TEST_REQUIRE_DSH: '1', QQ_TEST_REQUIRE_BROWSER: '1',
-      }),
-    });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      try {
-        killProcessTree(child);
-      } catch {
-        /* ignore */
-      }
-    }, timeoutMs);
-
-    child.stdout.on('data', (d) => (stdout += d.toString('utf8')));
-    child.stderr.on('data', (d) => (stderr += d.toString('utf8')));
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr, ms: Date.now() - started });
-    });
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      resolve({ code: -1, stdout, stderr: String(err?.message ?? err), ms: Date.now() - started });
-    });
-    });
-  } finally {
-    await rm(isolatedRoot, { recursive: true, force: true });
-  }
-}
-
-function tail(text, lines = 6) {
-  const all = String(text ?? '').trimEnd().split(/\r?\n/);
-  return all.slice(-lines).join('\n');
-}
-
 function stamp() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
@@ -468,22 +426,11 @@ async function main() {
   const results = [];
   for (const item of list) {
     process.stdout.write(`▶ ${item.name} … `);
-    const result = await runOne(item.file, item.timeoutMs);
+    const result = await runTestCase(ROOT, item.file, item.timeoutMs);
     const combined = `${result.stdout}\n${result.stderr}`;
-    const missing = item.expect.filter((needle) => !combined.includes(needle));
-    const pass = result.code === 0 && missing.length === 0;
-
-    results.push({
-      name: item.name,
-      file: item.file,
-      note: item.note,
-      pass,
-      code: result.code,
-      ms: result.ms,
-      missing,
-      tail: tail(combined),
-      ...(!pass ? { output: combined.trimEnd() } : {}),
-    });
+    const record = testCaseRecord(item, result);
+    const { pass, missing } = record;
+    results.push(record);
 
     const icon = pass ? '通过' : '失败';
     console.log(`${icon}  ${(result.ms / 1000).toFixed(1)}s`);

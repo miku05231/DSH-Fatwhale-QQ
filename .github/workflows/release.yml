@@ -74,7 +74,7 @@ jobs:
       - name: Test updates, packaging and the executable
         shell: pwsh
         run: |
-          foreach ($taskGroup in @('托盘', '表情', '打开本地', '更新', 'exe', '封装应用', '公开导出', '桌面连伴')) {
+          foreach ($taskGroup in @('测试运行器', '托盘', '表情', '打开本地', '更新', 'exe', '封装应用', '公开导出', '桌面连伴')) {
             node tests/run-all.mjs --only $taskGroup
             if ($LASTEXITCODE -ne 0) { throw "Tests failed: $taskGroup" }
           }

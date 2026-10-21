@@ -3,12 +3,13 @@
  * fixtures; no project services, QQ instances or startup shortcuts are touched.
  */
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { killProcessTree } from '../src/dsh.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PS = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
@@ -23,18 +24,37 @@ function check(label, fn) {
 }
 
 function run(exe, args, options = {}) {
-  const result = spawnSync(exe, args, {
-    encoding: 'utf8',
-    windowsHide: true,
-    timeout: 30_000,
-    ...options,
+  const { timeout = 30_000, ...spawnOptions } = options;
+  return new Promise((resolve, reject) => {
+    const child = spawn(exe, args, { windowsHide: true, ...spawnOptions });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    child.stdout.setEncoding('utf8').on('data', (data) => { stdout += data; });
+    child.stderr.setEncoding('utf8').on('data', (data) => { stderr += data; });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killProcessTree(child);
+    }, timeout);
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', (status, signal) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        const error = new Error(`Command timed out after ${timeout}ms: ${path.basename(exe)}\n${stdout}\n${stderr}`);
+        error.code = 'ETIMEDOUT';
+        reject(error);
+      } else {
+        resolve({ status, signal, stdout, stderr });
+      }
+    });
   });
-  if (result.error) throw result.error;
-  return result;
 }
 
-function successful(exe, args, options = {}) {
-  const result = run(exe, args, options);
+async function successful(exe, args, options = {}) {
+  const result = await run(exe, args, options);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   return result;
 }
@@ -103,6 +123,30 @@ async function waitForFile(file) {
   throw new Error(`Fixture did not write ${file}`);
 }
 
+async function waitForFixtureProcesses(directory) {
+  if (!(await fs.readdir(directory)).length) return;
+  await successful(PS, ['-NoProfile', '-NonInteractive', '-Command', `
+$ErrorActionPreference = 'Stop'
+foreach ($fixtureFile in [IO.Directory]::GetFiles(${psQuote(directory)}, '*.txt')) {
+  $fixtureId = [int][IO.Path]::GetFileNameWithoutExtension($fixtureFile)
+  $fixtureStart = [long][IO.File]::ReadAllText($fixtureFile)
+  try { $fixtureProcess = [Diagnostics.Process]::GetProcessById($fixtureId) }
+  catch [ArgumentException] { continue }
+  try {
+    try { $actualStart = $fixtureProcess.StartTime.ToUniversalTime().Ticks }
+    catch [InvalidOperationException] {
+      if ($fixtureProcess.HasExited) { continue }
+      throw
+    }
+    if ($actualStart -eq $fixtureStart -and -not $fixtureProcess.WaitForExit(10000)) {
+      throw 'An isolated fixture process did not exit.'
+    }
+  } finally { $fixtureProcess.Dispose() }
+}
+exit 0
+`]);
+}
+
 async function main() {
   if (process.platform !== 'win32') {
     console.log('SKIP exe-host-test requires Windows and .NET Framework csc.exe.');
@@ -110,6 +154,9 @@ async function main() {
   }
   const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'qq-exe-host-')));
   const app = path.join(temporary, "app space ' \u6d4b\u8bd5");
+  const fixtureProcesses = path.join(temporary, 'fixture-processes');
+  await fs.mkdir(fixtureProcesses);
+  let failure;
   try {
     await fs.mkdir(path.join(app, 'tools'), { recursive: true });
     await fs.mkdir(path.join(app, 'launcher'), { recursive: true });
@@ -123,6 +170,10 @@ using System.IO;
 using System.Text;
 class FixtureHost {
     static int Main(string[] args) {
+        using (var process = System.Diagnostics.Process.GetCurrentProcess()) {
+            File.WriteAllText(Path.Combine(Environment.GetEnvironmentVariable("QQ_EXE_TEST_PROCESSES"),
+                process.Id + ".txt"), process.StartTime.ToUniversalTime().Ticks.ToString());
+        }
         string[] encoded = Array.ConvertAll(args, value => Convert.ToBase64String(Encoding.UTF8.GetBytes(value)));
         File.WriteAllText(Environment.GetEnvironmentVariable("QQ_EXE_TEST_CAPTURE"), string.Join("\\n", encoded));
         if (Environment.GetEnvironmentVariable("QQ_EXE_TEST_BROWSER") != "1") {
@@ -135,18 +186,18 @@ class FixtureHost {
 }
 `, 'utf8');
     const fakeNode = path.join(temporary, 'fake-node.exe');
-    successful(CSC, ['/nologo', '/target:exe', `/out:${fakeNode}`, fakeSource]);
+    await successful(CSC, ['/nologo', '/target:exe', `/out:${fakeNode}`, fakeSource]);
     const fakeProgramFiles = path.join(temporary, 'fake program files');
     const fakeEdge = path.join(fakeProgramFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe');
     await fs.mkdir(path.dirname(fakeEdge), { recursive: true });
-    successful(CSC, ['/nologo', '/target:winexe', `/out:${fakeEdge}`, fakeSource]);
+    await successful(CSC, ['/nologo', '/target:winexe', `/out:${fakeEdge}`, fakeSource]);
 
     const exe = path.join(app, 'dist', 'qq-bridge.exe');
-    successful(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(ROOT, 'scripts', 'build-exe.ps1'),
+    await successful(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(ROOT, 'scripts', 'build-exe.ps1'),
       '-OutputPath', exe, '-Version', TEST_VERSION]);
     check('The desktop/CLI EXE compiles with the built-in compiler', () => assert.ok(exe));
 
-    const metadataResult = successful(PS, ['-NoProfile', '-Command',
+    const metadataResult = await successful(PS, ['-NoProfile', '-Command',
       `$v = [Diagnostics.FileVersionInfo]::GetVersionInfo(${psQuote(exe)}); $v | Select-Object ProductName,FileDescription,CompanyName,FileVersion,ProductVersion | ConvertTo-Json -Compress`]);
     const metadata = JSON.parse(metadataResult.stdout.replace(/^\uFEFF/, '').trim());
     check('Product, publisher and semantic version metadata are embedded', () => {
@@ -178,12 +229,15 @@ class FixtureHost {
     });
 
     const capture = path.join(temporary, 'argv.txt');
-    const env = { ...process.env, QQ_NODE: fakeNode, QQ_EXE_TEST_CAPTURE: capture, QQ_EXE_TEST_EXIT: '0' };
+    const env = {
+      ...process.env, QQ_NODE: fakeNode, QQ_EXE_TEST_CAPTURE: capture,
+      QQ_EXE_TEST_EXIT: '0', QQ_EXE_TEST_PROCESSES: fixtureProcesses,
+    };
     const cliArgs = [
       'logs', 'bridge', '--lines', '7', '', 'two words', 'literal"quote',
       'C:\\a path\\trailing\\', 'slashes\\\\\\"quote', '\\\\', '\u6d4b\u8bd5',
     ];
-    const cli = successful(exe, cliArgs, { cwd: temporary, env });
+    const cli = await successful(exe, cliArgs, { cwd: temporary, env });
     const forwarded = await captured(capture);
     check('CLI arguments preserve spaces, quotes, backslashes, Unicode and empty values', () => {
       assert.deepEqual(forwarded, [path.join(app, 'tools', 'cli.mjs'), ...cliArgs]);
@@ -192,8 +246,39 @@ class FixtureHost {
       assert.match(cli.stdout, /\[fixture\] stdout/);
       assert.match(cli.stderr, /\[fixture\] stderr/);
     });
-    const failedCli = run(exe, ['status'], { env: { ...env, QQ_EXE_TEST_EXIT: '37' } });
+    const failedCli = await run(exe, ['status'], { env: { ...env, QQ_EXE_TEST_EXIT: '37' } });
     check('CLI child exit codes are preserved', () => assert.equal(failedCli.status, 37));
+
+    const blockedFixture = path.join(temporary, 'blocked-tree.mjs');
+    const blockedPid = path.join(temporary, 'blocked-child.pid');
+    await fs.writeFile(blockedFixture, `
+import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+if (process.argv[2] === 'child') {
+  writeFileSync(${JSON.stringify(blockedPid)}, String(process.pid));
+  console.log('blocked descendant ready');
+} else {
+  const child = spawn(process.execPath, [${JSON.stringify(blockedFixture)}, 'child']);
+  child.stdout.once('data', () => console.log('blocked tree ready'));
+}
+setInterval(() => {}, 1000);
+`);
+    await assert.rejects(run(process.execPath, [blockedFixture], { cwd: app, timeout: 5000 }),
+      (error) => error.code === 'ETIMEDOUT' && error.message.includes('blocked tree ready'));
+    const blockedChildId = Number(await fs.readFile(blockedPid, 'utf8'));
+    const exitDeadline = Date.now() + 5000;
+    let blockedChildExited = false;
+    while (Date.now() < exitDeadline) {
+      try { process.kill(blockedChildId, 0); } catch (error) {
+        if (error.code !== 'ESRCH') throw error;
+        blockedChildExited = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    check('A command timeout reports captured output and stops its isolated descendant', () => {
+      assert.ok(blockedChildExited);
+    });
 
     const bootstrap = path.join(app, 'launcher', 'bootstrap.ps1');
     const bootstrapCapture = path.join(temporary, 'bootstrap.json');
@@ -220,7 +305,7 @@ exit ([int]$env:QQ_EXE_TEST_EXIT)
       QQ_EXE_TEST_BROWSER: '1',
     };
     await fs.rm(capture);
-    const failedDesktop = run(exe, [], { env: { ...desktopEnv, QQ_EXE_TEST_EXIT: '37' } });
+    const failedDesktop = await run(exe, [], { env: { ...desktopEnv, QQ_EXE_TEST_EXIT: '37' } });
     const bootData = JSON.parse(await fs.readFile(bootstrapCapture, 'utf8'));
     check('Double-click runs the existing bootstrap with STA and the project as working directory', () => {
       assert.equal(bootData.script.toLowerCase(), bootstrap.toLowerCase());
@@ -238,8 +323,9 @@ exit ([int]$env:QQ_EXE_TEST_EXIT)
     check('A failed bootstrap never launches the CLI or a browser', () => assert.equal(failedDesktop.stdout, ''));
 
     await fs.writeFile(path.join(app, 'state', 'webui-port.txt'), '5943\n');
-    successful(exe, [], { env: desktopEnv });
+    await successful(exe, [], { env: desktopEnv });
     await waitForFile(capture);
+    await waitForFixtureProcesses(fixtureProcesses);
     const browserArgs = await captured(capture);
     check('Successful desktop startup opens an Edge app at the published console port', () => {
       assert.deepEqual(browserArgs, ['--app=http://127.0.0.1:5943/', '--window-size=1180,820']);
@@ -247,15 +333,16 @@ exit ([int]$env:QQ_EXE_TEST_EXIT)
 
     await fs.rm(capture);
     await fs.writeFile(path.join(app, 'state', 'webui-port.txt'), '999999\n');
-    successful(exe, [], { env: desktopEnv });
+    await successful(exe, [], { env: desktopEnv });
     await waitForFile(capture);
+    await waitForFixtureProcesses(fixtureProcesses);
     const fallbackArgs = await captured(capture);
     check('An invalid console port falls back to 5830', () => {
       assert.deepEqual(fallbackArgs, ['--app=http://127.0.0.1:5830/', '--window-size=1180,820']);
     });
 
     await fs.rm(bootstrap);
-    const missingBootstrap = run(exe, [], { env: desktopEnv });
+    const missingBootstrap = await run(exe, [], { env: desktopEnv });
     check('Incomplete desktop packages fail with a useful diagnostic', () => {
       assert.equal(missingBootstrap.status, 2);
       assert.match(missingBootstrap.stderr, /bootstrap\.ps1/);
@@ -284,6 +371,11 @@ function Get-CimInstance {
     const trayCapture = path.join(temporary, 'tray.json');
     await fs.writeFile(trayFixture, `
 $ErrorActionPreference = 'Stop'
+$fixtureProcess = [Diagnostics.Process]::GetCurrentProcess()
+try {
+  [IO.File]::WriteAllText((Join-Path $env:QQ_EXE_TEST_PROCESSES ($PID.ToString() + '.txt')),
+    $fixtureProcess.StartTime.ToUniversalTime().Ticks.ToString())
+} finally { $fixtureProcess.Dispose() }
 $data = [pscustomobject]@{
   script = $PSCommandPath
   cwd = [Environment]::CurrentDirectory
@@ -294,8 +386,9 @@ $capture = $env:QQ_EXE_TEST_TRAY_CAPTURE
 [IO.File]::WriteAllText(($capture + '.tmp'), ($data | ConvertTo-Json -Compress))
 [IO.File]::Move(($capture + '.tmp'), $capture)
 `, 'utf8');
-    successful(exe, [], { env: { ...desktopEnv, QQ_EXE_TEST_TRAY_CAPTURE: trayCapture } });
+    await successful(exe, [], { env: { ...desktopEnv, QQ_EXE_TEST_TRAY_CAPTURE: trayCapture } });
     await waitForFile(trayCapture);
+    await waitForFixtureProcesses(fixtureProcesses);
     const trayData = JSON.parse(await fs.readFile(trayCapture, 'utf8'));
     check('The real bootstrap launches its tray script from a path with spaces, Unicode and an apostrophe', () => {
       assert.equal(trayData.script.toLowerCase(), trayFixture.toLowerCase());
@@ -311,7 +404,7 @@ $capture = $env:QQ_EXE_TEST_TRAY_CAPTURE
       assert.ok(bootstrapLog.includes('\u542f\u52a8\u6d41\u7a0b\u5b8c\u6210'));
     });
 
-    const invalidBuild = run(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+    const invalidBuild = await run(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
       path.join(ROOT, 'scripts', 'build-exe.ps1'), '-OutputPath', path.join(temporary, 'invalid.exe'),
       '-Version', '1.2.3";[assembly:AssemblyCompany("injected")]']);
     check('Version overrides reject C# attribute injection', () => assert.notEqual(invalidBuild.status, 0));
@@ -327,7 +420,7 @@ $capture = $env:QQ_EXE_TEST_TRAY_CAPTURE
     await fs.writeFile(path.join(sourceDirectory, '.env.example'), 'FIXTURE=1\n');
     const sourceArchive = 'Isolated source archive fixture.\n';
     await fs.writeFile(`${sourceDirectory}.zip`, sourceArchive);
-    successful(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', releaseScript,
+    await successful(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', releaseScript,
       '-Version', TEST_VERSION, '-SkipBuild']);
     const releaseDirectory = path.join(app, 'dist', 'release');
     const releaseNames = await fs.readdir(releaseDirectory);
@@ -352,7 +445,7 @@ $capture = $env:QQ_EXE_TEST_TRAY_CAPTURE
       assert.equal(actualHashes.length, 3);
       for (const [expected, actual] of actualHashes) assert.equal(actual, expected);
     });
-    const zipEntries = successful(PS, ['-NoProfile', '-Command',
+    const zipEntries = await successful(PS, ['-NoProfile', '-Command',
       `[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); Add-Type -AssemblyName System.IO.Compression.FileSystem; $zip = [IO.Compression.ZipFile]::OpenRead(${psQuote(path.join(releaseDirectory, `qq-bridge-${TEST_VERSION}-portable-win64.zip`))}); try { @($zip.Entries | ForEach-Object { $_.FullName }) | ConvertTo-Json -Compress } finally { $zip.Dispose() }`]);
     const entries = JSON.parse(zipEntries.stdout.trim()).map((name) => name.replace(/\\/g, '/'));
     check('The portable archive keeps dotfiles and includes the executable and quick start', () => {
@@ -364,7 +457,7 @@ $capture = $env:QQ_EXE_TEST_TRAY_CAPTURE
     check('Release staging directories are cleaned after packaging', () => {
       assert.ok(stagedEntries.every((name) => !name.startsWith('_stage-')));
     });
-    const staleVersion = run(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', releaseScript,
+    const staleVersion = await run(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', releaseScript,
       '-Version', '1.2.3', '-SkipBuild']);
     check('SkipBuild rejects an executable from another release version', () => {
       assert.notEqual(staleVersion.status, 0);
@@ -373,7 +466,7 @@ $capture = $env:QQ_EXE_TEST_TRAY_CAPTURE
     assert.equal((await fs.readdir(releaseDirectory)).length, 4);
 
     for (const output of ['.', 'dist', 'dist\\..\\..', 'dist\\qq-dsh-bridge-1.2.3']) {
-      const unsafe = run(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', releaseScript,
+      const unsafe = await run(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', releaseScript,
         '-OutDir', output, '-SkipBuild']);
       assert.notEqual(unsafe.status, 0, `Unsafe release output was accepted: ${output}`);
     }
@@ -384,15 +477,24 @@ $capture = $env:QQ_EXE_TEST_TRAY_CAPTURE
     await fs.mkdir(external, { recursive: true });
     await fs.writeFile(path.join(external, 'keep.txt'), 'untouched\n');
     await fs.symlink(external, path.join(app, 'dist', 'junction'), 'junction');
-    const linked = run(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', releaseScript,
+    const linked = await run(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', releaseScript,
       '-OutDir', 'dist\\junction\\release', '-SkipBuild']);
     const untouched = await fs.readFile(path.join(external, 'keep.txt'), 'utf8');
     check('Release cleanup rejects junction paths and preserves the target', () => {
       assert.notEqual(linked.status, 0);
       assert.equal(untouched, 'untouched\n');
     });
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
-    await fs.rm(temporary, { recursive: true, force: true });
+    try {
+      await waitForFixtureProcesses(fixtureProcesses);
+      await fs.rm(temporary, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+    } catch (error) {
+      if (!failure) throw error;
+      console.error(`EXE fixture cleanup also failed:\n${error.stack ?? error}`);
+    }
   }
 }
 
