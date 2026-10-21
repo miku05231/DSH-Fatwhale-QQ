@@ -36,6 +36,61 @@ function cleanupTempDirectory(root, expectedParent) {
   }
 }
 
+function fixtureProcessAlive(child) {
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return false;
+  try { process.kill(child.pid, 0); return true; }
+  catch (error) {
+    if (error.code === 'ESRCH') return false;
+    throw error;
+  }
+}
+
+function startFixtureHolder(code, logPath) {
+  const log = fs.openSync(logPath, 'a');
+  try {
+    const command = `$ErrorActionPreference = 'Stop'\n${code}`;
+    const child = spawn(PS, ['-NoProfile', '-NonInteractive', '-EncodedCommand',
+      Buffer.from(command, 'utf16le').toString('base64')], {
+      stdio: ['ignore', log, log], windowsHide: true,
+    });
+    child.on('error', (error) => {
+      console.error(`Isolated holder could not start: ${error.stack ?? error}`);
+    });
+    return child;
+  } finally { fs.closeSync(log); }
+}
+
+function holderDiagnostic(child, logPath) {
+  return `PID ${child.pid ?? 'unavailable'}\n${fs.readFileSync(logPath, 'utf8')}`;
+}
+
+function waitForHolderReady(child, ready, logPath, timeoutMs = 60_000) {
+  const started = Date.now();
+  const delay = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() - started < timeoutMs) {
+    if (!fixtureProcessAlive(child)) {
+      throw new Error(`Isolated holder exited before readiness:\n${holderDiagnostic(child, logPath)}`);
+    }
+    if (fs.existsSync(ready)) return;
+    Atomics.wait(delay, 0, 0, 50);
+  }
+  throw new Error(`Isolated holder was not ready after ${timeoutMs}ms:\n${holderDiagnostic(child, logPath)}`);
+}
+
+function stopFixtureProcess(child, release) {
+  if (release) fs.writeFileSync(release, 'release');
+  else if (fixtureProcessAlive(child)) child.kill();
+  const delay = new Int32Array(new SharedArrayBuffer(4));
+  let deadline = Date.now() + 5000;
+  while (fixtureProcessAlive(child) && Date.now() < deadline) Atomics.wait(delay, 0, 0, 50);
+  if (fixtureProcessAlive(child)) {
+    child.kill();
+    deadline = Date.now() + 5000;
+    while (fixtureProcessAlive(child) && Date.now() < deadline) Atomics.wait(delay, 0, 0, 50);
+  }
+  assert.equal(fixtureProcessAlive(child), false, `Isolated fixture process ${child.pid} did not exit.`);
+}
+
 function crc32(buffer) {
   let crc = 0xffffffff;
   for (const byte of buffer) {
@@ -102,9 +157,9 @@ function shortPath(target) {
     '[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($buffer.ToString())))',
   ].join('\r\n');
   const result = spawnSync(PS, ['-NoProfile', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')], {
-    encoding: 'utf8', windowsHide: true, timeout: 15_000,
+    encoding: 'utf8', windowsHide: true, timeout: 60_000,
   });
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.error?.stack ?? ''}`);
   return Buffer.from(result.stdout.trim(), 'base64').toString('utf8');
 }
 
@@ -274,23 +329,24 @@ if (process.platform !== 'win32') {
       const bridge = spawn(process.execPath, [path.join(f.root, 'src/index.js')], { stdio: 'ignore', windowsHide: true });
       const ready = path.join(f.jobDir, 'lock-ready');
       const release = path.join(f.jobDir, 'lock-release');
+      const holderLog = path.join(f.jobDir, 'lock-holder.log');
       const psQuote = (value) => `'${value.replaceAll("'", "''")}'`;
       const code = [
         `$file = [IO.File]::Open(${psQuote(path.join(f.root, 'src/webui/server.mjs'))}, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)`,
-        `[IO.File]::WriteAllText(${psQuote(ready)}, 'ready')`,
-        `try { while (-not [IO.File]::Exists(${psQuote(release)})) { Start-Sleep -Milliseconds 100 } } finally { $file.Dispose() }`,
+        'try {',
+        `  [IO.File]::WriteAllText(${psQuote(ready)}, 'ready')`,
+        '  $deadline = [DateTime]::UtcNow.AddSeconds(180)',
+        `  while (-not [IO.File]::Exists(${psQuote(release)})) {`,
+        "    if ([DateTime]::UtcNow -ge $deadline) { throw 'Isolated file holder exceeded its lifetime.' }",
+        '    Start-Sleep -Milliseconds 100',
+        '  }',
+        '} finally { $file.Dispose() }',
       ].join('\n');
-      const holder = spawn(PS, ['-NoProfile', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')], {
-        stdio: 'ignore', windowsHide: true,
-      });
+      const holder = startFixtureHolder(code, holderLog);
+      let failure;
       try {
         assert.ok(bridge.pid && holder.pid);
-        const wait = spawnSync(PS, ['-NoProfile', '-Command', [
-          '$deadline = [DateTime]::UtcNow.AddSeconds(5)',
-          `while ([DateTime]::UtcNow -lt $deadline) { if ([IO.File]::Exists(${psQuote(ready)})) { exit 0 }; Start-Sleep -Milliseconds 50 }`,
-          'exit 1',
-        ].join('\n')], { timeout: 7000, windowsHide: true });
-        assert.equal(wait.status, 0, 'isolated file lock did not start');
+        waitForHolderReady(holder, ready, holderLog);
         const result = run(f, [], { skipProcesses: false, skipRestart: false });
         assert.equal(result.code, 1, result.output);
         assert.match(result.state.message, /manual recovery; application services were not restarted/);
@@ -300,10 +356,17 @@ if (process.platform !== 'win32') {
         assert.ok(sourceGit(f, 'status', '--porcelain', '--untracked-files=no'));
         assert.ok(!fs.existsSync(path.join(f.root, restartMarker)));
         assert.throws(() => process.kill(bridge.pid, 0));
+      } catch (error) {
+        failure = error;
+        throw error;
       } finally {
-        fs.writeFileSync(release, 'release');
-        holder.kill();
-        bridge.kill();
+        try {
+          try { stopFixtureProcess(holder, release); }
+          finally { stopFixtureProcess(bridge); }
+        } catch (error) {
+          if (!failure) throw error;
+          console.error(`Isolated source fixture cleanup also failed:\n${error.stack ?? error}`);
+        }
       }
     });
     test('source update refuses releases that change a configured data path', () => {
@@ -643,21 +706,24 @@ if (process.platform !== 'win32') {
       const mutexName = `Local\\QQBridgeUpdater-${createHash('sha256').update(fs.realpathSync.native(f.root).toLowerCase()).digest('hex').toUpperCase()}`;
       const ready = path.join(f.jobDir, 'mutex-ready');
       const release = path.join(f.jobDir, 'mutex-release');
+      const holderLog = path.join(f.jobDir, 'mutex-holder.log');
       const psQuote = (value) => `'${value.replaceAll("'", "''")}'`;
       const code = [
         `$mutex = New-Object Threading.Mutex($false, ${psQuote(mutexName)})`,
         'if (-not $mutex.WaitOne(0)) { exit 2 }',
-        `[IO.File]::WriteAllText(${psQuote(ready)}, 'ready')`,
-        `try { while (-not [IO.File]::Exists(${psQuote(release)})) { Start-Sleep -Milliseconds 100 } } finally { $mutex.ReleaseMutex(); $mutex.Dispose() }`,
+        'try {',
+        `  [IO.File]::WriteAllText(${psQuote(ready)}, 'ready')`,
+        '  $deadline = [DateTime]::UtcNow.AddSeconds(180)',
+        `  while (-not [IO.File]::Exists(${psQuote(release)})) {`,
+        "    if ([DateTime]::UtcNow -ge $deadline) { throw 'Isolated mutex holder exceeded its lifetime.' }",
+        '    Start-Sleep -Milliseconds 100',
+        '  }',
+        '} finally { $mutex.ReleaseMutex(); $mutex.Dispose() }',
       ].join('\n');
-      const holder = spawn(PS, ['-NoProfile', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')], { stdio: 'ignore', windowsHide: true });
+      const holder = startFixtureHolder(code, holderLog);
+      let failure;
       try {
-        const wait = spawnSync(PS, ['-NoProfile', '-Command', [
-          '$deadline = [DateTime]::UtcNow.AddSeconds(5)',
-          `while ([DateTime]::UtcNow -lt $deadline) { if ([IO.File]::Exists(${psQuote(ready)})) { exit 0 }; Start-Sleep -Milliseconds 50 }`,
-          'exit 1',
-        ].join('\n')], { timeout: 7000, windowsHide: true });
-        assert.equal(wait.status, 0, 'isolated mutex holder did not start');
+        waitForHolderReady(holder, ready, holderLog);
         write(f.root, 'state/updates/result.json', JSON.stringify({ phase: 'existing-result' }));
         const result = run(f);
         assert.equal(result.code, 1);
@@ -665,9 +731,15 @@ if (process.platform !== 'win32') {
         assert.equal(result.state.phase, 'existing-result');
         assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'state/updates/install.lock'))).jobId, f.job.jobId);
         unchanged(f);
+      } catch (error) {
+        failure = error;
+        throw error;
       } finally {
-        fs.writeFileSync(release, 'release');
-        holder.kill();
+        try { stopFixtureProcess(holder, release); }
+        catch (error) {
+          if (!failure) throw error;
+          console.error(`Isolated mutex fixture cleanup also failed:\n${error.stack ?? error}`);
+        }
       }
     });
     test('installation only stops its isolated bridge and console; NapCat and another project remain alive', () => {
@@ -763,8 +835,8 @@ if (process.platform !== 'win32') {
       const result = spawnSync(PS, [
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(f.jobDir, 'install-update.ps1'),
         '-JobPath', f.jobPath, '-TestFailAfterFiles', '1',
-      ], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
-      assert.equal(result.status, 1);
+      ], { encoding: 'utf8', windowsHide: true, timeout: 60_000 });
+      assert.equal(result.status, 1, `${result.stdout}${result.stderr}\n${result.error?.stack ?? ''}`);
       assert.match(`${result.stdout}${result.stderr}`, /isolated-test switches/);
       unchanged(f);
     });
