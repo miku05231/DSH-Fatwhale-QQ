@@ -17,7 +17,7 @@ import { computerSessionKey, qqReplyParams, readComputerAccessConfig } from './c
 import { SerialQueue } from './queue.js';
 import { OneBot } from './onebot.js';
 import { runAgent, resolveAgentMode, shutdownAgentRuntime } from './agent-runner.js';
-import { SessionStore } from './sessions.js';
+import { SessionStore, readSessionWindowMinutes } from './sessions.js';
 import { GroupMemory } from './groupmem.js';
 import { resolveModelPlan } from './model-follow.js';
 import { PluginHost } from './plugins.js';
@@ -162,6 +162,7 @@ async function main() {
   }
 
   const sessions = new SessionStore(stateDir);
+  let sessionWindowMinutes = config.behavior.sessionWindowMinutes;
   const queue = new SerialQueue();
   const limiter = new RateLimiter({ perMinute: config?.security?.rateLimitPerMinute ?? 10 });
 
@@ -662,7 +663,8 @@ async function main() {
       const canUseComputer = isAdministrator(userId, executionConfig);
       const sessionKey = computerSessionKey(msg, executionConfig);
       const grantUnchanged = () => computerSessionKey(msg, accessConfig()) === sessionKey;
-      const sessionId = sessions.get(sessionKey);
+      let sessionId = null;
+      let sessionStartedAt = null;
       let finalText;
       let usedSession;
       const abort = new AbortController();
@@ -722,6 +724,9 @@ async function main() {
           ? buildGroupPrompt(msg, text, `${personaBlock}${memoryBlock}`, `${accessBlock}\n${stickerBlock}`)
           : `${personaBlock}${memoryBlock}${accessBlock}\n\n${stickerBlock ? `${stickerBlock}\n\n` : ''}${text}`;
         if (canUseComputer && !grantUnchanged()) abort.abort();
+        sessionWindowMinutes = readSessionWindowMinutes(configPath, sessionWindowMinutes);
+        sessionStartedAt = Date.now();
+        sessionId = sessions.get(sessionKey, { windowMinutes: sessionWindowMinutes, now: sessionStartedAt });
         const result = await runAgent(dshPrompt, {
           sessionId,
           cfg: executionConfig,
@@ -738,7 +743,7 @@ async function main() {
         usedSession = result.sessionId;
         finalText = result.finalText;
         if (usedSession && usedSession !== sessionId) {
-          sessions.set(sessionKey, usedSession);
+          sessions.set(sessionKey, usedSession, { startedAt: sessionStartedAt });
           log.info(`${isGroup ? `群 ${msg.groupId}` : `用户 ${userId}`} 绑定会话 ${usedSession}`);
         }
       } catch (err) {
@@ -752,6 +757,10 @@ async function main() {
         if (await maybeResetSession(sessionKey, reason)) {
           await sendReply(msg, '上一次会话好像失效了，我已经重置。再发一次试试？');
           return;
+        }
+        // 宿主已经创建会话后模型失败，也保留这次窗口，重试不会再开一个。
+        if (sessionStartedAt !== null && err?.sessionId && err.sessionId !== sessionId) {
+          sessions.set(sessionKey, err.sessionId, { startedAt: sessionStartedAt });
         }
         if (config?.behavior?.showErrors !== false) {
           await sendReply(msg, `出错了：${reason.slice(0, 300)}`);

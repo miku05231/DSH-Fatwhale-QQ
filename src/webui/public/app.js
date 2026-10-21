@@ -241,7 +241,7 @@ const PAGES = {
   memory: { title: '记忆', subtitle: 'Obsidian 风格 Markdown 记忆库' },
   stickers: { title: '表情包', subtitle: '自动收集、自动打标签，随时能找到想发的那张' },
   persona: { title: '人格', subtitle: '存多套人格，随时切换；每个群还能单独指定' },
-  sessions: { title: '会话', subtitle: '每个 QQ 号对应的 DSH 会话' },
+  sessions: { title: '会话', subtitle: '群聊与私聊的 DSH 会话' },
   model: { title: '模型', subtitle: '跟随 DSH 桌面端，或在这里手动指定' },
   plugins: { title: '插件', subtitle: '开关与配置，扩展点不用改主流程' },
   system: { title: '系统', subtitle: '运行信息、日志与行为设置' },
@@ -1963,6 +1963,7 @@ async function loadSettings() {
     const security = data?.security || {};
     const showErrors = $('#setShowErrors');
     const context = $('#setGroupContext');
+    const sessionWindow = $('#setSessionWindowMinutes');
     const wake = $('#setWakeWord');
     const wakeAnywhere = $('#setWakeAnywhere');
     const allowMembers = $('#setAllowGroupMembers');
@@ -1970,6 +1971,9 @@ async function loadSettings() {
     const privatePolicy = $('#setPrivatePolicy');
     if (showErrors) showErrors.checked = Boolean(behavior.showErrors);
     if (context) context.value = String(Number(behavior.groupContextCount) || 0);
+    if (sessionWindow && document.activeElement !== sessionWindow) {
+      sessionWindow.value = String(behavior.sessionWindowMinutes ?? 180);
+    }
     if (wake) wake.value = behavior.wakeWord ?? '';
     if (wakeAnywhere) wakeAnywhere.checked = String(behavior.wakeWordMatch ?? 'prefix').toLowerCase() === 'contains';
     if (allowMembers) allowMembers.checked = Boolean(security.allowGroupMembers);
@@ -1988,6 +1992,12 @@ async function loadSettings() {
 async function saveSettings() {
   const btn = $('#settingsSave');
   if (!btn) return;
+  const sessionWindowMinutes = $('#setSessionWindowMinutes')?.valueAsNumber;
+  if (!Number.isSafeInteger(sessionWindowMinutes) || sessionWindowMinutes < 0 ||
+      !Number.isSafeInteger(sessionWindowMinutes * 60000)) {
+    snackbar('新建会话间隔必须是有效的非负整数分钟');
+    return;
+  }
   const adminUserIds = String($('#setAdminUserIds')?.value ?? '')
     .split(/[\s,，;；]+/).filter(Boolean);
   if (!adminUserIds.every((id) => /^[1-9]\d*$/.test(id))) {
@@ -1998,6 +2008,7 @@ async function saveSettings() {
     behavior: {
       showErrors: Boolean($('#setShowErrors')?.checked),
       groupContextCount: Number($('#setGroupContext')?.value) || 0,
+      sessionWindowMinutes,
       wakeWord: String($('#setWakeWord')?.value ?? ''),
       wakeWordMatch: $('#setWakeAnywhere')?.checked ? 'contains' : 'prefix',
     },
@@ -2018,7 +2029,7 @@ async function saveSettings() {
   try {
     const data = await api('/api/settings', { method: 'PUT', body: JSON.stringify(payload) });
     const count = Object.keys(data?.applied || {}).length;
-    snackbar(count > 0 ? `已保存 ${count} 项设置（管理员权限立即生效，其余设置重启桥接后生效）` : '没有改动');
+    snackbar(count > 0 ? `已保存 ${count} 项设置（会话间隔与管理员权限立即生效，其余设置重启桥接后生效）` : '没有改动');
   } catch (err) {
     snackbar(`保存失败：${err.message}`, { duration: 5200 });
   } finally {

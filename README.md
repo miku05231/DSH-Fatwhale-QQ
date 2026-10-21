@@ -155,12 +155,19 @@
 | 会话 | 列出每个 QQ（私聊/群）对应的 DSH 会话，可单个删除（等于让它忘掉这段对话） |
 | 模型 | 看当前生效的供应商/模型，切「跟随 DSH」或「手动指定」（见一·八） |
 | 插件 | 每个插件一张卡：开关、说明、钩子、按 `configSchema` 自动生成的配置表单、加载失败清单（见一·九） |
-| 系统 | 运行信息、NapCat / 桥接日志切换、行为设置（限流、群上下文条数、唤醒词、群成员能否呼唤它等） |
+| 系统 | 运行信息、NapCat / 桥接日志切换、行为设置（会话间隔、群上下文条数、唤醒词、群成员能否呼唤它等） |
 
 右下角悬浮按钮会按当前页做最常用的事（刷新 / 新记一条 / 新建对话）。
 服务卡上的按钮可以直接启停 NapCat、桥接和 DSH。
 
 **安全**：所有接口只监听 `127.0.0.1`，响应体统一过一遍脱敏（`token=xxx` 会被打码），设置项只接受白名单字段。
+
+在「系统 → 行为设置」调整「新建会话间隔（分钟）」，默认 **180 分钟**，`0` 表示持续复用。
+从首次开始对话计时，窗口内续聊使用同一会话，到期后的下一次对话才新建；持续聊天不会延长窗口。
+保存后下一条消息生效，重启桥接保留原来的起点。群聊、私聊、不同发送人与权限域仍分别隔离，
+不会把普通成员接进管理员的会话。旧版字符串映射第一次使用时补记起点；自动新建与手动清除都保留 DSH 中的历史记录。
+Desktop 和 Web 连伴共用这条规则；受限权限的 headless 管理员模式仍按安全要求每轮新建，详见下文。
+升级连伴代码后需重启 DSH 一次；之后仅调整间隔无需重启。
 
 ---
 
@@ -595,6 +602,7 @@ QQ 里也能直接切（这几个指令不需要 @，主人发才算）：
     "queuedNotice":     "收到，正在处理…",
     "maxReplyChunk":    1200,
     "showErrors":       true,
+    "sessionWindowMinutes": 180,          // 首次对话起的固定窗口（分钟），0 持续复用
     "wakeWord":         "",
     "groupContextCount": 40               // 被 @ 时带上多少条群聊上下文
   },
@@ -766,7 +774,7 @@ qq-bridge\
     status.json           桥接运行时状态（托盘读它）
     webui-port.txt        控制台实际端口
     persona-backup\       人格文件历史备份
-    sessions.json         会话映射（`p:<QQ号>` / `g:<群号>` → DSH sessionId）
+    sessions.json         按聊天/发送人/权限隔离的会话映射（sessionId + startedAt）
     groupmem\             群聊记忆
     launcher.log          托盘自己的日志
   tests\                  回归测试（run-all.mjs 一次跑完并记账）
@@ -826,6 +834,8 @@ node tests\run-all.mjs
 ```powershell
 node tests\onebot-selftest.mjs      # OneBot 客户端行为（15 组断言）
 node tests\smoke-test.mjs           # 会话 / DSH 调用 / 超时（9 项）
+node tests\session-window-test.mjs  # 固定窗口、重启、热设置、旧映射与权限隔离
+node tests\session-settings-test.mjs # 会话间隔输入、严格 API 校验与显示
 node tests\e2e-fake-napcat.mjs      # 假 NapCat 驱动的全链路（8 项）
 node tests\e2e-group.mjs            # 群聊：只记不回 / 越权不理 / @ 才回（9 项）
 node tests\e2e-memory.mjs           # 真跑 DSH：召回 → 回复 → 落盘 → 可检索 → 坏库降级（14 项）
@@ -865,6 +875,25 @@ node tests\personas-test.mjs        # 多套人格：名字清洗 / 库增删改
 node tests\export-public-test.mjs   # 公开导出：产物齐全、无泄漏、自身可跑
 node tests\final-audit.mjs          # 工程审计（文件/编码/BOM/残留/配置/关键实现点）
 ```
+
+真实 Desktop / Web 界面验证使用隔离的 DSH home、本地假模型和独立浏览器目录，不连接 QQ。
+Windows 上可指定已经安装的应用后运行：
+
+```powershell
+$env:QQ_TEST_DESKTOP_EXE = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\DeepSeek Harness.exe"
+$env:QQ_TEST_REQUIRE_DESKTOP = "1"
+node tests\session-window-live-test.mjs
+
+$env:QQ_TEST_BROWSER_EXE = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+$env:QQ_TEST_REQUIRE_DSH = "1"
+$env:QQ_TEST_REQUIRE_BROWSER = "1"
+node tests\run-all.mjs --only "DSH Web"
+```
+
+检查自定义间隔、默认 179/180 分钟边界、窗口内续聊及新会话的真实界面；截图保存在
+`state/session-window-live/`。未指定可执行文件时对应界面检查会跳过，设置 `QQ_TEST_REQUIRE_*`
+则缺少运行环境直接失败。边界判断使用可控时间加速，会话与界面使用真实 DSH；
+Web 测试沿用固定的 DSH `0.2.0-rc.2` 内核。
 
 `tests\ws-harness.mjs` 是一个零依赖的 WebSocket 服务端，用来冒充 NapCat 做 E2E 测试（注意：`createFakeNapCat({token})` 传 `null` 表示不校验 token，传 `''` 会要求空 Bearer，反而连不上）。
 

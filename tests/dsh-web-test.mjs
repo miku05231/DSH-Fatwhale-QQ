@@ -9,6 +9,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveDshInstallRoot } from '../src/dsh-desktop.js';
 import { probeCompanion, runCompanionDsh } from '../src/dsh-companion.js';
+import { SessionStore } from '../src/sessions.js';
+import { BrowserCdp, expandSessionGroups, sessionRows, openSessionRow } from './helpers/browser-cdp.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXPECTED_VERSION = '0.2.0-rc.2';
@@ -32,6 +34,10 @@ const children = new Set();
 const requests = [];
 let passed = 0;
 let modelServer;
+let browser;
+let browserDone;
+let browserCdp;
+let browserOutput = '';
 
 function cleanOutput(value) {
   return String(value)
@@ -99,7 +105,7 @@ function startDsh(args, { ipc = false, env = {} } = {}) {
 async function until(test, label, record, timeoutMs = 60000) {
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
-    const value = test();
+    const value = await test();
     if (value) return value;
     if (record?.closed) {
       throw new Error(`${label}: DSH exited (${record.code ?? record.signal})\n${cleanOutput(record.stderr + record.stdout)}`);
@@ -131,6 +137,83 @@ async function check(label, run) {
   await run();
   passed += 1;
   console.log(`  OK ${label}`);
+}
+
+async function checkBrowser(launchUrl, ids) {
+  const executable = process.env.QQ_TEST_BROWSER_EXE;
+  if (!executable) {
+    if (process.env.QQ_TEST_REQUIRE_BROWSER === '1') throw new Error('Set QQ_TEST_BROWSER_EXE for the real Web frontend test.');
+    console.log('  SKIP optional real Web browser: QQ_TEST_BROWSER_EXE is not set');
+    return;
+  }
+  const userData = path.join(tmp, 'browser');
+  const output = path.join(ROOT, 'state', 'session-window-live');
+  fs.mkdirSync(userData, { recursive: true });
+  fs.mkdirSync(output, { recursive: true });
+  browser = spawn(executable, [
+    `--user-data-dir=${userData}`, '--remote-debugging-port=0', '--headless=new',
+    '--no-first-run', '--disable-gpu', '--disable-extensions', '--disable-background-networking',
+    '--inprivate', '--window-size=1440,1000', launchUrl,
+  ], { cwd: workspace, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  browser.stdout.on('data', (chunk) => { browserOutput += chunk; });
+  browser.stderr.on('data', (chunk) => { browserOutput += chunk; });
+  browserDone = new Promise((resolve, reject) => {
+    browser.once('error', reject);
+    browser.once('close', resolve);
+  });
+  browserDone.catch(() => {});
+  const port = await until(() => {
+    const file = path.join(userData, 'DevToolsActivePort');
+    if (!fs.existsSync(file)) return null;
+    return Number(fs.readFileSync(file, 'utf8').split('\n')[0]);
+  }, 'isolated Web browser DevTools');
+  const target = await until(async () => {
+    const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+    return pages.find((entry) => entry.type === 'page' && entry.url.startsWith(new URL(launchUrl).origin));
+  }, 'real Web frontend target');
+  browserCdp = await BrowserCdp.connect(target.webSocketDebuggerUrl);
+  await browserCdp.send('Page.enable');
+  await browserCdp.send('Runtime.enable');
+  await until(() => browserCdp.evaluate('document.readyState === "complete" && document.body.innerText.length > 100'),
+    'real Web frontend document');
+  const capture = async (name) => {
+    const result = await browserCdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    fs.writeFileSync(path.join(output, name), Buffer.from(result.data, 'base64'));
+  };
+  await capture('web-initial.png');
+  await browserCdp.evaluate(`(() => {
+    const button = [...document.querySelectorAll('button')].find((node) =>
+      /^(继续|Continue)$/.test(node.textContent.trim()));
+    if (button) button.click();
+  })()`);
+  await until(() => browserCdp.evaluate('!document.body.innerText.includes("预览版说明")'),
+    'Web preview notice dismissal');
+  fs.writeFileSync(path.join(output, 'web-before-list.json'), JSON.stringify(await browserCdp.evaluate(`({
+    body: document.body.innerText,
+    links: [...document.querySelectorAll('a')].map((a) => ({text: a.textContent, href: a.getAttribute('href')})),
+    buttons: [...document.querySelectorAll('button')].map((b) => ({text: b.textContent, title: b.title, label: b.getAttribute('aria-label')}))
+  })`), null, 2));
+  await expandSessionGroups(browserCdp);
+  const rows = await until(async () => {
+    const rendered = await sessionRows(browserCdp);
+    return ids.every((id) => rendered.some((row) => row.key.includes(id))) ? rendered : null;
+  }, 'live Web session list');
+  await capture('web-sessions.png');
+  assert(await openSessionRow(browserCdp, ids[0]));
+  await until(() => browserCdp.evaluate(`document.body.innerText.includes('web companion restricted second round') &&
+    document.body.innerText.includes('web-companion-ok')`), 'Web resumed transcript');
+  await capture('web-reused-session.png');
+  assert(await openSessionRow(browserCdp, ids[1]));
+  await until(() => browserCdp.evaluate(`document.body.innerText.includes('web companion next window') &&
+    document.body.innerText.includes('web-companion-ok')`), 'Web new-window transcript');
+  await capture('web-new-session.png');
+  const body = await browserCdp.evaluate('document.body.innerText');
+  fs.writeFileSync(path.join(output, 'web-results.json'), JSON.stringify({
+    at: new Date().toISOString(), isolated: true, ok: true,
+    checks: ['the real Web frontend shows both session IDs', 'the original session contains the continued turn',
+      'the new-window session displays its local model reply'],
+    rows, body, screenshots: ['web-sessions.png', 'web-reused-session.png', 'web-new-session.png'],
+  }, null, 2));
 }
 
 async function askProbe(record, op, extra = {}) {
@@ -296,6 +379,10 @@ try {
   });
 
   let sessionId;
+  let nextWindowSessionId;
+  const windowStart = Date.now();
+  let windowStore = new SessionStore(path.join(tmp, 'bridge-state'));
+  const windowKey = 'g:20001:u:10001:admin:danger-full-access:v1';
   await check('a real Web companion prompt reaches only the isolated local model', async () => {
     const result = await runCompanionDsh('web companion first round', {
       cfg: companionCfg, cwd: workspace,
@@ -303,15 +390,19 @@ try {
     });
     assert.equal(result.finalText, 'web-companion-ok');
     sessionId = result.sessionId;
+    windowStore.set(windowKey, sessionId, { startedAt: windowStart });
     const state = await askProbe(web, 'inspect', { sessionId });
     assert.equal(state.permission.sandbox, 'danger-full-access');
     assert.equal(state.permission.approval, 'never');
     assert(JSON.stringify(state.rows).includes(sessionId), 'Web session listing must include the bridge session');
   });
   await check('resuming that real Web session lowers its previous full-access permission', async () => {
+    windowStore = new SessionStore(path.join(tmp, 'bridge-state'));
+    const savedSession = windowStore.get(windowKey, { windowMinutes: 180, now: windowStart + 179 * 60000 });
+    assert.equal(savedSession, sessionId);
     const result = await runCompanionDsh('web companion restricted second round', {
       cfg: { dsh: { ...companionCfg.dsh, permissionMode: 'read-only' } },
-      cwd: workspace, sessionId,
+      cwd: workspace, sessionId: savedSession,
       model: { provider: 'web-test-local', model: 'web-test' },
     });
     assert.equal(result.sessionId, sessionId);
@@ -320,6 +411,32 @@ try {
     assert.equal(state.permission.sandbox, 'read-only');
     assert.equal(state.permission.approval, 'ask');
   });
+  await check('the fixed window creates a different real Web session at exactly 180 minutes', async () => {
+    const expiredSession = windowStore.get(windowKey, { windowMinutes: 180, now: windowStart + 180 * 60000 });
+    assert.equal(expiredSession, null);
+    const result = await runCompanionDsh('web companion next window', {
+      cfg: companionCfg, cwd: workspace, sessionId: expiredSession,
+      model: { provider: 'web-test-local', model: 'web-test' },
+    });
+    assert.equal(result.finalText, 'web-companion-ok');
+    assert.notEqual(result.sessionId, sessionId);
+    nextWindowSessionId = result.sessionId;
+    windowStore.set(windowKey, result.sessionId, { startedAt: windowStart + 180 * 60000 });
+    const state = await askProbe(web, 'inspect', { sessionId: result.sessionId });
+    assert(JSON.stringify(state.rows).includes(sessionId));
+    assert(JSON.stringify(state.rows).includes(result.sessionId));
+    assert.equal(windowStore.get(windowKey, {
+      windowMinutes: 0, now: windowStart + 365 * 24 * 60 * 60000,
+    }), result.sessionId);
+    assert(requests.length >= 3);
+  });
+  if (process.env.QQ_TEST_BROWSER_EXE || process.env.QQ_TEST_REQUIRE_BROWSER === '1') {
+    await check('the isolated real browser renders the Web sessions and transcripts', async () => {
+      await checkBrowser(launchUrl, [sessionId, nextWindowSessionId]);
+    });
+  } else {
+    console.log('  SKIP optional real Web browser: QQ_TEST_BROWSER_EXE is not set');
+  }
   await check('a real headless CLI can run alongside Web using the isolated DSH home', async () => {
     const headless = startDsh([
       '--profile', 'headless', '--patch', modelPatchPath, '--json', 'headless-parallel',
@@ -344,11 +461,31 @@ try {
   });
   console.log(`\n通过 ${passed} 项真实 DSH Web 兼容性检查（${process.platform} / ${version}）。`);
 } finally {
+  if (browserCdp) {
+    await browserCdp.send('Browser.close').catch(() => {});
+    browserCdp.ws.close();
+  }
+  if (browser && browser.exitCode === null) {
+    if (process.platform === 'win32') {
+      await new Promise((resolve) => {
+        const killer = spawn('taskkill', ['/PID', String(browser.pid), '/T', '/F'],
+          { windowsHide: true, stdio: 'ignore' });
+        killer.on('close', resolve);
+        killer.on('error', resolve);
+      });
+    } else browser.kill('SIGKILL');
+  }
+  if (browserDone) await browserDone.catch(() => {});
+  if (browser) {
+    fs.writeFileSync(path.join(ROOT, 'state', 'session-window-live', 'web-browser.log'), cleanOutput(browserOutput));
+  }
   for (const child of children) child.kill();
   await Promise.allSettled([...children].map((child) => new Promise((resolve) => child.once('close', resolve))));
   if (modelServer) {
     modelServer.closeAllConnections();
     await new Promise((resolve) => modelServer.close(resolve));
   }
+  assert.equal(path.dirname(tmp), path.resolve(os.tmpdir()));
+  assert(path.basename(tmp).startsWith('qq-bridge-real-web-'));
   fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }

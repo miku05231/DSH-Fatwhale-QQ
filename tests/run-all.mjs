@@ -31,6 +31,20 @@ const skipNet = argv.includes('--skip-net');
  */
 const SUITE = [
   {
+    name: '会话窗口（固定时长与桥接）',
+    file: 'tests/session-window-test.mjs',
+    expect: ['失败 0 项'],
+    timeoutMs: 90_000,
+    note: '固定起点、精确到期、旧映射迁移、重启续聊、热设置与权限隔离',
+  },
+  {
+    name: '会话窗口（设置与控制台）',
+    file: 'tests/session-settings-test.mjs',
+    expect: ['session settings checks'],
+    timeoutMs: 90_000,
+    note: '默认180分钟、0持续复用、严格HTTP校验、设置控件与会话列表兼容',
+  },
+  {
     name: 'onebot 协议自检',
     file: 'tests/onebot-selftest.mjs',
     expect: ['通过'],

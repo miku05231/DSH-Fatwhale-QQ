@@ -80,6 +80,7 @@ async function main() {
       mode: 'headless',
       companion: false,
       profile: 'headless',
+      permissionMode: 'danger-full-access',
       patchPath: path.join(PROJECT_ROOT, 'patches', 'headless-model.yml'),
       cwd: PROJECT_ROOT,
       timeoutMs: 240000,
@@ -176,7 +177,7 @@ async function main() {
     const sessions = JSON.parse(await fsp.readFile(sessionsPath, 'utf8'));
     const allowedSessionKey = computerSessionKey({ messageType: 'private', userId: ALLOWED_USER }, config);
     const strangerSessionKey = computerSessionKey({ messageType: 'private', userId: STRANGER_USER }, config);
-    const bound = sessions[allowedSessionKey];
+    const bound = sessions[allowedSessionKey]?.sessionId;
     if (bound && String(bound).startsWith('session-')) {
       ok('会话 id 已落盘', bound);
     } else {

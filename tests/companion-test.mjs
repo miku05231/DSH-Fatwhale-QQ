@@ -129,12 +129,12 @@ function callPlugin(info, pathname, body = {}) {
 
 async function pluginFixture({
   cancel = () => ({ accepted: true }), promptTimeoutMs, idle = false, complete = false, permissionService,
-  historicalSessions, sessionHeaders = {}, resolveModel,
+  historicalSessions, sessionHeaders = {}, resolveModel, resolveSession,
 } = {}) {
   const pluginDiscovery = path.join(tmp, `plugin-${randomUUID()}.json`);
   const calls = {
     cancelled: 0, flushed: 0, prompted: 0, created: 0, permissions: [], warnings: [], attached: [], observed: [],
-    modelSignals: [], selections: [],
+    modelSignals: [], selections: [], restored: [],
   };
   let historyAttached;
   const historyFinished = new Promise((resolve) => { historyAttached = resolve; });
@@ -155,8 +155,13 @@ async function pluginFixture({
   const sessionFlushed = new Promise((resolve) => { flushed = resolve; });
   const events = [];
   const session = { seq: 0, eventAt: (seq) => events[seq] };
+  const agent = { session, whenIdle: () => complete ? Promise.resolve() : new Promise(() => {}) };
   let effectivePermission = 'danger-full-access';
   const controller = {
+    ...(resolveSession ? { resolveAgent: async (sessionId) => {
+      calls.restored.push(sessionId);
+      return await resolveSession(sessionId, agent) ?? agent;
+    } } : {}),
     create: async () => {
       calls.created += 1;
       return { sessionId: 'fixture-session' };
@@ -190,7 +195,7 @@ async function pluginFixture({
       },
     },
     agents: {
-      get: () => ({ session, whenIdle: () => complete ? Promise.resolve() : new Promise(() => {}) }),
+      get: () => agent,
       selectForNextRequest: (_agent, model) => { calls.selections.push(model); },
     },
     llm: {
@@ -661,6 +666,9 @@ await okAsync('真实插件：历史挂载仅包含已存在的桌面会话，�
       old: 'desktop-too-old',
       valid: 'desktop-valid',
       duplicate: 'desktop-valid',
+      timed: { sessionId: 'desktop-timed', startedAt: Date.now() },
+      timedDuplicate: { sessionId: 'desktop-timed', startedAt: Date.now() },
+      timedChat: { sessionId: 'qq-chat-timed', startedAt: Date.now() },
     },
     sessionHeaders: {
       'qq-chat-ordinary-private': { cwd: tmp, createdAt: Date.now() },
@@ -669,11 +677,13 @@ await okAsync('真实插件：历史挂载仅包含已存在的桌面会话，�
       'desktop-other-workspace': { cwd: path.join(tmp, 'other'), createdAt: Date.now() },
       'desktop-too-old': { cwd: tmp, createdAt: Date.now() - 8 * 24 * 60 * 60 * 1000 },
       'desktop-valid': { cwd: tmp, createdAt: Date.now() },
+      'desktop-timed': { cwd: tmp, createdAt: Date.now() },
+      'qq-chat-timed': { cwd: tmp, createdAt: Date.now() },
     },
   });
   try {
     await bounded(fixture.historyFinished);
-    assert.deepEqual(fixture.calls.attached, ['desktop-valid']);
+    assert.deepEqual(fixture.calls.attached, ['desktop-valid', 'desktop-timed']);
     assert.equal(fixture.calls.observed.some((id) => id.startsWith('qq-chat-')), false);
     assert.equal(fixture.calls.created, 0);
     assert.equal(fixture.calls.prompted, 0);
@@ -693,6 +703,47 @@ await okAsync('真实插件：正常完成返回最终文本且不执行取消',
     assert.deepEqual(fixture.calls.permissions, ['workspace-write']);
   } finally {
     fixture.dispose();
+  }
+});
+
+await okAsync('真实插件：已有对话通过宿主恢复，不再调用 create 换 ID', async () => {
+  for (const wrapped of [false, true]) {
+    const fixture = await pluginFixture({
+      complete: true, resolveSession: (_id, agent) => wrapped ? { agent } : agent,
+    });
+    try {
+      const first = await runCompanionDsh('first', { cfg: fixture.cfg });
+      const second = await runCompanionDsh('continue', { cfg: fixture.cfg, sessionId: first.sessionId });
+      assert.equal(second.sessionId, first.sessionId);
+      assert.equal(fixture.calls.created, 1);
+      assert.deepEqual(fixture.calls.restored, [first.sessionId]);
+      assert.deepEqual(fixture.calls.permissions, ['workspace-write', 'workspace-write']);
+      assert.equal(fixture.calls.prompted, 2);
+    } finally {
+      fixture.dispose();
+    }
+  }
+});
+
+await okAsync('真实插件：恢复失败保留宿主错误，不偷偷创建替代会话', async () => {
+  for (const wrapped of [false, true]) {
+    const fixture = await pluginFixture({
+      complete: true, resolveSession: () => {
+        const error = new Error('session/not-found');
+        if (wrapped) return { error };
+        throw error;
+      },
+    });
+    try {
+      await assert.rejects(
+        () => runCompanionDsh('missing', { cfg: fixture.cfg, sessionId: 'missing-session' }),
+        /session\/not-found/,
+      );
+      assert.equal(fixture.calls.created, 0);
+      assert.equal(fixture.calls.prompted, 0);
+    } finally {
+      fixture.dispose();
+    }
   }
 });
 

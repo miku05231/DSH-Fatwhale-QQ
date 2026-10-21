@@ -7,6 +7,7 @@
 
 import fs from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { DEFAULT_SESSION_WINDOW_MINUTES, isValidSessionWindowMinutes } from './sessions.js';
 
 /** 默认配置（与 SPEC §3、config.example.json 完全一致） */
 export const DEFAULTS = deepFreeze({
@@ -59,6 +60,8 @@ export const DEFAULTS = deepFreeze({
     maxReplyChunk: 1200,
     showErrors: true,
     wakeWord: '',
+    // 从首次对话开始的固定窗口，0 持续复用；控制台保存后下一条消息生效。
+    sessionWindowMinutes: DEFAULT_SESSION_WINDOW_MINUTES,
   },
   // 人格：一篇 Markdown。默认在工作区 AGENTS.md（DSH 自己会读，桥接就不重复注入）；
   // 指到别处时由桥接每条消息读出来注入 prompt。
@@ -238,6 +241,10 @@ const POSITIVE_INTEGERS = [
 ];
 
 function validateConfig(config) {
+  if (!isValidSessionWindowMinutes(config?.behavior?.sessionWindowMinutes)) {
+    invalid('behavior.sessionWindowMinutes', '必须是非负整数分钟（0 表示持续复用）',
+      config?.behavior?.sessionWindowMinutes);
+  }
   for (const field of REQUIRED_STRINGS) {
     const value = getField(config, field);
     if (typeof value !== 'string' || value.trim() === '') {

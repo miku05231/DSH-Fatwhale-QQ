@@ -221,7 +221,9 @@ async function attachKnownSessions(ctx, workspace, sessionMapPath, log) {
   }
   const now = Date.now();
   const attached = [];
-  for (const sessionId of new Set(Object.values(mapping ?? {}))) {
+  const sessionIds = Object.values(mapping ?? {}).map((value) =>
+    typeof value === 'string' ? value : value?.sessionId);
+  for (const sessionId of new Set(sessionIds)) {
     if (typeof sessionId !== 'string' || sessionId.length === 0 || /^qq-chat-/i.test(sessionId)) continue;
     try {
       if (workspace.sessionIds.includes(sessionId)) continue;
@@ -312,7 +314,21 @@ export async function apply(ctx, rawConfig) {
 
     const workspace = findWorkspace(registry, workspacePath);
     let created;
-    try {
+    let restoredAgent;
+    if (requestedSessionId && typeof controller.resolveAgent === 'function') {
+      // 新宿主的 create 只复用空白会话，已有对话必须显式恢复。
+      const restored = await controller.resolveAgent(requestedSessionId);
+      if (restored?.error) throw restored.error;
+      restoredAgent = restored?.agent ?? restored;
+      created = { sessionId: requestedSessionId };
+      if (workspace && !workspace.sessionIds.includes(requestedSessionId)) {
+        try {
+          await workspace.attachSession(requestedSessionId);
+        } catch (attachError) {
+          log.warn(`companion: 会话 ${requestedSessionId} 挂载工作区失败：${String(attachError)}`);
+        }
+      }
+    } else try {
       created = workspace
         ? await controller.create({
             workspaceId: workspace.id,
@@ -344,7 +360,7 @@ export async function apply(ctx, rawConfig) {
 
     const sessionId = created.sessionId;
     if (running.has(sessionId)) throw new Error(`会话 ${sessionId} 正在处理上一条消息`);
-    const agent = agents.get(sessionId);
+    const agent = restoredAgent ?? agents.get(sessionId);
     if (!agent) throw new Error(`会话 ${sessionId} 没有可用的 Agent`);
     const abort = new AbortController();
     running.set(sessionId, abort);

@@ -41,6 +41,7 @@
     "queuedNotice": "收到，正在处理…",
     "maxReplyChunk": 1200,
     "showErrors": true,
+    "sessionWindowMinutes": 180,
     "wakeWord": "小助手",
     "wakeWordMatch": "contains",
     "groupContextCount": 40

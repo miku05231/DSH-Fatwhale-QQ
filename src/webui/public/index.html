@@ -407,6 +407,11 @@
           <input class="text-field text-field--num" type="number" id="setGroupContext" min="0" max="200" inputmode="numeric" />
         </label>
         <label class="switch-row">
+          <span class="switch-row__text">新建会话间隔（分钟）</span>
+          <input class="text-field text-field--num" type="number" id="setSessionWindowMinutes" min="0" max="150119987579" step="1" value="180" inputmode="numeric" aria-describedby="sessionWindowHint" />
+        </label>
+        <p class="card__hint" id="sessionWindowHint">从首次对话开始计时，超时后的下一次对话新建会话；持续聊天不会延长。0 表示持续复用，保存后下一条消息生效。</p>
+        <label class="switch-row">
           <span class="switch-row__text">唤醒词</span>
           <input class="text-field" type="text" id="setWakeWord" placeholder="群里没 @ 时用它呼唤我" />
         </label>

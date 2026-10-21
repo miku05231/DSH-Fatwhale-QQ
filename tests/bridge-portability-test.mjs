@@ -258,7 +258,7 @@ async function main() {
       .some((text) => text.includes(doneTag) && text.includes(inputMarker)), 210_000, bridge.child);
     assert.deepEqual(await fs.readFile(outputFile), inputBytes, 'Admin output bytes differ');
     const firstSessions = await readJson(bridge.sessionsFile);
-    const adminSession = firstSessions?.[ADMIN_KEY];
+    const adminSession = firstSessions?.[ADMIN_KEY]?.sessionId;
     assert.ok(typeof adminSession === 'string' && adminSession, 'Missing persisted admin session');
     check('real DSH tools read an undisclosed marker and write exact output bytes');
     await stopBridge(bridge.child);
@@ -267,7 +267,7 @@ async function main() {
 
     phase = 'restart';
     bridge = await launch('synthetic', fakeUrl, '', [ADMIN, MEMBER], [ADMIN]);
-    assert.equal((await readJson(bridge.sessionsFile))?.[ADMIN_KEY], adminSession);
+    assert.equal((await readJson(bridge.sessionsFile))?.[ADMIN_KEY]?.sessionId, adminSession);
     const recallTag = `PROBE_RECALL_${id}`;
     since = fake.state.calls.length;
     fake.sendPrivateMessage({ userId: ADMIN, messageId: 102, text:
@@ -275,7 +275,7 @@ async function main() {
       + `Do not use tools. Reply with ${recallTag} followed by one space and that marker.` });
     await waitFor('admin recall after bridge restart', () => replies(ADMIN, since)
       .some((text) => text.includes(recallTag) && text.includes(inputMarker)), 210_000, bridge.child);
-    assert.equal((await readJson(bridge.sessionsFile))?.[ADMIN_KEY], adminSession);
+    assert.equal((await readJson(bridge.sessionsFile))?.[ADMIN_KEY]?.sessionId, adminSession);
     check('restart retains admin session binding and conversation recall without input files');
 
     phase = 'chat-only';
@@ -284,7 +284,7 @@ async function main() {
     fake.sendPrivateMessage({ userId: MEMBER, messageId: 103, text: `Reply exactly ${chatTag}` });
     await waitFor('chat-only member final reply', () => replies(MEMBER, since)
       .some((text) => text.includes(chatTag)), 210_000, bridge.child);
-    assert.match((await readJson(bridge.sessionsFile))?.[MEMBER_KEY] ?? '', /^qq-chat-/);
+    assert.match((await readJson(bridge.sessionsFile))?.[MEMBER_KEY]?.sessionId ?? '', /^qq-chat-/);
     check('ordinary allowlisted member uses a separate chat-only session');
 
     phase = 'stranger';

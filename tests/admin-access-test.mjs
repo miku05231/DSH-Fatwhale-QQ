@@ -624,8 +624,8 @@ export async function resolve(specifier, context, nextResolve) {
       security: { adminUserIds: [] },
     });
     check('Persisted sessions do not mix administrator and ordinary group conversations',
-      sessions[adminKey] === 'admin-ADMIN_UPLOAD' && sessions[memberKey]?.startsWith('chat-') &&
-      sessions[revokedKey] === 'chat-QUEUED_REVOKE');
+      sessions[adminKey]?.sessionId === 'admin-ADMIN_UPLOAD' && sessions[memberKey]?.sessionId?.startsWith('chat-') &&
+      sessions[revokedKey]?.sessionId === 'chat-QUEUED_REVOKE');
 
     const personaDir = path.join(config.stateDir, 'personas');
     await fsp.mkdir(personaDir, { recursive: true });

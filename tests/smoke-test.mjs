@@ -102,8 +102,8 @@ record('SessionStore：set/get 并持久化到磁盘', () => {
   assert(again.size === 2, `重新加载后应有 2 条，实际 ${again.size}`);
 
   const raw = JSON.parse(fs.readFileSync(again.file, 'utf8'));
-  assert(raw['10001'] === 'session-aaa', '磁盘上的 JSON 内容不对');
-  assert(raw['10002'] === 'session-bbb', '磁盘上的 JSON 内容不对（10002）');
+  assert(raw['10001'].sessionId === 'session-aaa', '磁盘上的 JSON 内容不对');
+  assert(raw['10002'].sessionId === 'session-bbb', '磁盘上的 JSON 内容不对（10002）');
   return `已写入 ${again.size} 条并重新加载验证`;
 });
 

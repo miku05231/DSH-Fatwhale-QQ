@@ -25,6 +25,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createUpdateManager } from '../updates.mjs';
+import { DEFAULT_SESSION_WINDOW_MINUTES, isValidSessionWindowMinutes } from '../sessions.js';
 import { openLocalPath, openExternalUrl } from '../open-path.js';
 import { describeModelState, writeModelState, MODEL_MODES, REASONING_EFFORTS } from '../model-follow.js';
 import { PluginHost, PLUGIN_HOOKS, SCHEMA_TYPES, coerceValue } from '../plugins.js';
@@ -162,6 +163,7 @@ const SETTINGS_SPEC = {
     wakeWord: 'string',
     wakeWordMatch: 'string',
     groupContextCount: 'int',
+    sessionWindowMinutes: 'sessionWindow',
   },
   groupMemory: { limit: 'int' },
   // 表情包库：目录能搬、开关能关、阈值能调（都在控制台「表情」页上）
@@ -1470,7 +1472,9 @@ export function createWebUiServer({
       const key = text(qq);
       if (key === '') return;
       const item = merged.get(key) ?? { qq: key, sessionId: '', sources: [], kind: 'private' };
-      if (!item.sessionId && sessionId) item.sessionId = text(sessionId);
+      const id = typeof sessionId === 'string' ? sessionId : sessionId?.sessionId;
+      if (!item.sessionId && typeof id === 'string') item.sessionId = id;
+      if (/^g:/.test(key)) item.kind = 'group';
       if (!item.sources.includes(source)) item.sources.push(source);
       merged.set(key, item);
     };
@@ -1542,7 +1546,9 @@ export function createWebUiServer({
       out[group] = {};
       for (const key of Object.keys(fields)) {
         const value = cfg?.[group]?.[key];
-        out[group][key] = value === undefined ? null : value;
+        out[group][key] = value === undefined
+          ? group === 'behavior' && key === 'sessionWindowMinutes' ? DEFAULT_SESSION_WINDOW_MINUTES : null
+          : value;
       }
     }
     return out;
@@ -1553,6 +1559,7 @@ export function createWebUiServer({
     if (type === 'probability') {
       return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
     }
+    if (type === 'sessionWindow') return isValidSessionWindowMinutes(value) ? value : null;
     if (type === 'int') {
       const n = Number(value);
       return Number.isFinite(n) ? Math.trunc(n) : null;
@@ -1607,6 +1614,10 @@ export function createWebUiServer({
     if (Object.hasOwn(body?.stickers ?? {}, 'sendProbability') &&
         coerce('probability', body.stickers.sendProbability) === null) {
       return fail(res, 400, '表情发送概率必须是 0–1 之间的数字');
+    }
+    if (Object.hasOwn(body?.behavior ?? {}, 'sessionWindowMinutes') &&
+        coerce('sessionWindow', body.behavior.sessionWindowMinutes) === null) {
+      return fail(res, 400, '新建会话间隔必须是大于等于 0 的整数分钟，且换算为毫秒后不能超出安全整数范围');
     }
     let disk;
     try {
