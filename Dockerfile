@@ -4,7 +4,7 @@
 #  这个镜像只装「桥接 + 控制台」（纯 Node，零第三方依赖，不用 npm install）。
 #  NapCat 和 DSH 不在这里：
 #    · NapCat 用另一个容器（见 docker-compose.yml）或宿主机上现成的；
-#    · DSH 是模型执行端，镜像里没有，需要把宿主机的 DSH 挂进来并设置 DSH_COMMAND。
+#    · DSH 是模型执行端，镜像里没有，需要挂载 Linux 兼容的 DSH 并设置 DSH_COMMAND。
 #
 #  构建：docker build -t qq-dsh-bridge:0.1.0 .
 #  运行：docker compose up -d       （先复制 .env.example 成 .env 改 OWNER_QQ）
@@ -17,6 +17,8 @@ LABEL org.opencontainers.image.title="QQ-DSH Bridge" \
 
 ENV NODE_ENV=production \
     TZ=Asia/Shanghai \
+    WEBUI_HOST=0.0.0.0 \
+    DSH_HOME=/home/bridge/.dsh \
     QQ_BRIDGE_ROOT=/app
 
 WORKDIR /app
@@ -31,11 +33,11 @@ COPY docs ./docs
 COPY docker ./docker
 COPY README.md ./
 
-RUN mkdir -p /app/state /app/logs /app/qq-workspace /app/memory /app/config \
+RUN mkdir -p /app/state /app/logs /app/qq-workspace /app/memory /app/config /config \
  && addgroup -g 10001 bridge \
  && adduser -D -u 10001 -G bridge -h /home/bridge bridge \
  && mkdir -p /home/bridge/.dsh \
- && chown -R bridge:bridge /app /home/bridge \
+ && chown -R bridge:bridge /app /home/bridge /config \
  && chmod +x /app/docker/entrypoint.sh
 
 USER bridge

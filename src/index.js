@@ -249,10 +249,8 @@ async function main() {
 
   // patchPath 默认指向项目自带的 patch（相对项目根），但允许配置覆盖。
   // 相对路径按 configRoot 解析：正常运行时 configRoot === PROJECT_ROOT。
-  const patchPath = resolvePath(
-    configRoot,
-    config?.dsh?.patchPath ?? path.join(PROJECT_ROOT, 'patches', 'headless-model.yml'),
-  );
+  const configuredPatch = config?.dsh?.patchPath ?? path.join(PROJECT_ROOT, 'patches', 'headless-model.yml');
+  const patchPath = configuredPatch ? resolvePath(configRoot, configuredPatch) : '';
   const dshCwd = resolvePath(configRoot, config?.dsh?.cwd ?? PROJECT_ROOT);
 
   // desktop 模式会加载用户安装的 desktop profile（全部插件），会话与桌面端共用；

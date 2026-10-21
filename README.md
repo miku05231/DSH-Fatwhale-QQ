@@ -90,7 +90,7 @@
 
 > 文档里的 `D:\code\qq-bridge` 只是**示例路径**，克隆到哪就是哪；`config.json` 里的账号、群号、路径都是占位值，按自己的改。
 
-> **验证范围**：目前只在 **DSH Desktop**（Windows 桌面版 DeepSeek Harness）上实测跑通。命令行模式、Docker 与其它系统完成了自动测试和静态校验，但没在真机上验证过，第一次跑请先看 `node tools/cli.mjs status` 的输出。
+> **验证范围**：DSH Desktop（Windows 桌面版）已实测。Docker 已在 WSL2 Linux 引擎上完成镜像构建、真实 NapCat 连接、真实 DeepSeek 推理和隔离消息链路验证；默认配置发现的问题与复测结果见 [Docker 验证报告](docs/Docker验证报告.md)。`node tests/docker-runtime-test.mjs` 提供真实容器回归测试；真人 QQ 消息完整收发与其他系统仍需各自验收。
 
 ---
 
@@ -434,14 +434,16 @@ Windows 用 `qq-bridge.cmd start` 效果一样；Linux / macOS 用 `./start.sh s
 ```bash
 cp .env.example .env      # 填 OWNER_QQ（你的 QQ 号）
 mkdir -p data/{config,state,logs,workspace,memory}
+# Linux bind mount 必须让容器 UID 10001 可写；Docker Desktop Windows 不需要此命令
+sudo chown -R 10001:10001 data/{config,state,logs,workspace,memory}
 docker compose up -d
 ```
 
 - 控制台 <http://127.0.0.1:5830/>，NapCat 面板 <http://127.0.0.1:6099/webui/>
-- 数据全在宿主机的 `./data/`（配置、状态、日志、人格、记忆），删容器不丢
-- 镜像里**不带 DSH**（模型执行端体积大、更新快）。要真回话：把宿主机的 DSH 挂进 `/opt/dsh` 并设 `DSH_COMMAND`，细节见 [docs/Docker部署.md](docs/Docker部署.md)
+- 桥接数据在 `./data/`，DSH 会话和凭据在命名卷 `dsh-home`；`docker compose down` 保留两者，备份时须同时备份
+- 镜像里**不带 DSH**。要真回话：挂载 Linux Alpine 兼容的 DSH 运行时，`DSH_COMMAND` 直接填 JS 入口绝对路径，并配置模型凭据；Linux、PowerShell 步骤见 [docs/Docker部署.md](docs/Docker部署.md)
 - 不接 DSH 也能跑：控制台、收消息、记忆、表情包都正常，只是不会回话
-- Docker 里没有桌面 profile，`dsh.mode: auto` 会自动退回 headless；也可显式写 `"mode": "headless"`
+- Docker 首次生成配置固定使用 headless，关闭桌面 companion；`OWNER_QQ` 是聊天白名单，电脑工具须另设 `ADMIN_QQ_IDS`
 
 > 换台机器、换目录、进容器都不用改代码：配置里的 `dsh.cwd` 默认是 `.`（配置文件所在目录），
 > 配置文件本身也支持用环境变量 `QQ_CONFIG` 指到别处。
@@ -658,7 +660,7 @@ QQ 桥接可以与 `dsh --profile web` 并行运行；没有桌面端时，可�
 
 想让管理员的 QQ 会话直接进入 Web 宿主，先启动过一次 Web profile，再执行 `node tools/install-companion.mjs --profile web`，并设置 `dsh.desktopProfile: "web"`、`dsh.mode: "desktop"`、`dsh.companion: true`。重新启动自己的 Web 服务以加载插件。普通成员继续使用隔离的无工具内核。现有模型自动跟随仍读取 desktop profile；只使用 Web 时，应通过 `dsh.patchPath` 显式提供模型配置。
 
-`tests/dsh-web-test.mjs` 使用固定的 DSH `0.2.0-rc.2`、临时 home 和本地假模型，验证真实网页资源、登录及 Host/Origin 保护、Web 连伴对话、会话权限降级，以及并行 headless；不会修改本机 DSH 或连接真实 QQ。Docker 构建和容器运行本次未验证。
+`tests/dsh-web-test.mjs` 使用固定的 DSH `0.2.0-rc.2`、临时 home 和本地假模型，验证真实网页资源、登录及 Host/Origin 保护、Web 连伴对话、会话权限降级，以及并行 headless；不会修改本机 DSH 或连接真实 QQ。Docker 的构建与容器验证单独记录在 [Docker 验证报告](docs/Docker验证报告.md)。
 
 ### dsh.permissionMode 是什么
 

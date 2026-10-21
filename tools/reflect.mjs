@@ -16,6 +16,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config.js';
+import { killProcessTree } from '../src/dsh.js';
 import { runChatOnlyDsh } from '../src/chat-only.js';
 import { resolveModelPlan } from '../src/model-follow.js';
 
@@ -41,11 +42,7 @@ function run(cmd, args, { timeoutMs = 180000, cwd = ROOT } = {}) {
     let out = '';
     let err = '';
     const timer = setTimeout(() => {
-      try {
-        spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
-      } catch {
-        /* 忽略 */
-      }
+      killProcessTree(child);
     }, timeoutMs);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -156,10 +153,14 @@ async function main() {
   console.log('[反思] 调 DSH 生成复盘…');
   let dsh;
   try {
-    const loaded = loadConfig(ROOT, { createIfMissing: false });
+    const loaded = loadConfig(ROOT, {
+      createIfMissing: false,
+      ...(process.env.QQ_CONFIG ? { configFile: process.env.QQ_CONFIG } : {}),
+    });
     const configRoot = path.dirname(loaded.path);
     const stateDir = path.resolve(configRoot, loaded.config.stateDir || 'state');
-    const patchPath = path.resolve(configRoot, loaded.config.dsh.patchPath || PATCH);
+    const configuredPatch = loaded.config.dsh.patchPath ?? PATCH;
+    const patchPath = configuredPatch ? path.resolve(configRoot, configuredPatch) : '';
     const modelPlan = resolveModelPlan({ stateDir, basePatchPath: patchPath });
     // 对话日志包含普通群成员的输入；总结时一律禁用电脑工具。
     const result = await runChatOnlyDsh(prompt, {

@@ -1,8 +1,8 @@
 /**
  * docker-test.mjs —— 容器化与三种启动方式的静态校验。
  *
- * 本机没装 Docker（`docker --version` 报 command not found），所以这里不做真构建，
- * 而是把「能真跑起来需要成立的每一件事」逐条检查一遍：
+ * 此脚本无需 Docker；实际构建和启动验收见 docker-runtime-test.mjs。
+ * 检查配置生成和部署文件的基本约定：
  *
  *   1) Dockerfile：基础镜像、非 root 用户、EXPOSE、HEALTHCHECK、ENTRYPOINT、
  *      COPY 的每一项在仓库里真的存在；
@@ -82,7 +82,10 @@ check(/trap term INT TERM/.test(entry), '收到 INT/TERM 会收尾两个进程')
 check(/wait "\$BRIDGE_PID"/.test(entry), '以桥接为主进程（它退出容器跟着退）');
 check(/AGENTS\.md/.test(entry), '缺人格文件时自动生成一份');
 check(/没找到 DSH 命令|没找到 DSH/.test(entry), '没接 DSH 时给出提示而不是崩');
-check(!/set -e\n[\s\S]*?NODE\n\s*fi[\s\S]*?command -v/.test(entry) || true, '（语法细节由 sh -n 兜底）');
+check(/while kill -0 "\$BRIDGE_PID"[\s\S]*kill -0 "\$CONSOLE_PID"/.test(entry)
+  && /wait "\$CONSOLE_PID" \|\| STATUS=\$\?/.test(entry)
+  && /wait "\$BRIDGE_PID" \|\| STATUS=\$\?/.test(entry),
+'监控两个子进程，非零退出不被 set -e 吞掉');
 
 const shell = spawnSync('sh', ['-n', path.join(ROOT, 'docker', 'entrypoint.sh')], { encoding: 'utf8' });
 if (shell.error && shell.error.code === 'ENOENT') {
@@ -123,12 +126,29 @@ try {
       check(Array.isArray(parsed?.security?.allowFrom) && parsed.security.allowFrom[0] === 10001, 'OWNER_QQ 变成白名单', JSON.stringify(parsed?.security?.allowFrom));
       check(parsed?.onebot?.url === 'ws://napcat:3001', 'ONE_BOT_URL 生效');
       check(parsed?.dsh?.command === 'dsh', 'DSH_COMMAND 生效');
+      check(parsed?.dsh?.mode === 'headless' && parsed?.dsh?.companion === false, '容器固定 headless，不探测桌面');
+      check(parsed?.dsh?.patchPath === '', '空补丁保持关闭');
+      check(parsed?.stateDir === '/app/state' && parsed?.logDir === '/app/logs', '运行目录与挂载点一致');
+      check(parsed?.persona?.dir === '/app/state/personas', '人格库使用挂载 state');
+      check(parsed?.stickers?.root === '/app/state/stickers', '表情库使用挂载 state');
+      check(parsed?.plugins?.dir === '/app/src/plugins', '插件从镜像源码目录加载');
+      check(parsed?.security?.adminUserIds?.length === 0, '白名单不自动授予电脑权限');
       check(!/C:\\\\D\\\\DSH/i.test(raw), '生成的配置里没有作者路径');
       const { loadConfig } = await import('../src/config.js');
       const loaded = loadConfig(tmpDir, { configFile: target, createIfMissing: false });
       check(loaded.config.security.allowFrom[0] === 10001, 'loadConfig 能读回这份配置');
       check(loaded.config.dsh.cwd === '/app/qq-workspace', 'DSH_CWD 生效', loaded.config.dsh.cwd);
     }
+    const multi = spawnSync(process.execPath, [runner, target], {
+      encoding: 'utf8', env: { ...process.env, OWNER_QQ: '10001,10002', ADMIN_QQ_IDS: '10002' },
+    });
+    const multiConfig = JSON.parse(readFileSync(target, 'utf8'));
+    check(multi.status === 0 && JSON.stringify(multiConfig.security.allowFrom) === '[10001,10002]', '多个 QQ 号不被错误拼接');
+    check(JSON.stringify(multiConfig.security.adminUserIds) === '[10002]', '管理员必须单独显式配置');
+    const invalid = spawnSync(process.execPath, [runner, target], {
+      encoding: 'utf8', env: { ...process.env, OWNER_QQ: '10001abc' },
+    });
+    check(invalid.status !== 0, '非法 QQ 号被拒绝');
   }
 } finally {
   const { rmSync } = await import('node:fs');
@@ -150,6 +170,11 @@ check(/5830:5830|5830\}:5830/.test(compose), '控制台端口映射');
 check(/6099:6099|6099\}:6099/.test(compose), 'NapCat 面板端口映射');
 check(/env_file:/.test(compose) && /\.env/.test(compose), '从 .env 读环境变量');
 check(/restart: unless-stopped/.test(compose), '挂了自动拉起');
+check(/init: true/.test(compose), '启用容器 init 回收子进程');
+check(/dsh-home:\/home\/bridge\/\.dsh/.test(compose), 'DSH 会话与凭据使用持久化卷');
+check(/127\.0\.0\.1:\$\{CONSOLE_PORT/.test(compose), '控制台仅向宿主本机发布');
+check(/127\.0\.0\.1:\$\{NAPCAT_WEBUI_PORT/.test(compose), 'NapCat 面板仅向宿主本机发布');
+check(/WEBUI_HOST=0\.0\.0\.0/.test(dockerfile), '容器内监听地址支持端口映射');
 check(/mlikiowa\/napcat-docker/.test(compose), 'NapCat 用官方镜像');
 check(!/C:\\\\D\\\\DSH|C:\/D\/DSH/i.test(compose), 'compose 里没有作者机器路径');
 // 简单的 YAML 结构自检：缩进两格的服务名不能重复、键值行不能有 tab

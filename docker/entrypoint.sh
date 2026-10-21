@@ -6,7 +6,8 @@
 #  （想改配置：删掉 config/config.json 重新起，或者直接改挂出来的那个文件）。
 #
 #  环境变量：
-#    OWNER_QQ        必填，你的 QQ 号（只有它能让机器人干活，别留空）
+#    OWNER_QQ        聊天白名单，多个 QQ 号用英文逗号分隔；空则拒绝所有人
+#    ADMIN_QQ_IDS    电脑工具管理员，必须另行显式配置
 #    ONE_BOT_URL     NapCat 的 OneBot 地址，默认 ws://napcat:3001
 #    ONE_BOT_TOKEN   和 NapCat 那边配置的 token 一致；没设就空着
 #    DSH_COMMAND     DSH 的可执行命令，默认 dsh（镜像里没有，要自己挂进来）
@@ -22,8 +23,27 @@ set -eu
 
 APP_ROOT=/app
 CONFIG_FILE="${QQ_CONFIG:-$APP_ROOT/config.json}"
-mkdir -p "$APP_ROOT/state" "$APP_ROOT/logs" "$APP_ROOT/qq-workspace" "$APP_ROOT/memory"
+DSH_WORKSPACE="${DSH_CWD:-$APP_ROOT/qq-workspace}"
+export DSH_HOME="${DSH_HOME:-/home/bridge/.dsh}"
+cd "$APP_ROOT"
+mkdir -p "$APP_ROOT/state" "$APP_ROOT/logs" "$DSH_WORKSPACE" "$APP_ROOT/memory" "$DSH_HOME"
 mkdir -p "$(dirname "$CONFIG_FILE")"
+for dir in "$(dirname "$CONFIG_FILE")" "$APP_ROOT/state" "$APP_ROOT/logs" "$DSH_WORKSPACE" "$APP_ROOT/memory" "$DSH_HOME"; do
+  if [ ! -w "$dir" ]; then
+    echo "[entrypoint] 目录不可写：$dir；请给宿主挂载目录的 uid $(id -u) 写权限（见 docs/Docker部署.md）。" >&2
+    exit 1
+  fi
+done
+
+if [ -n "${DSH_CREDENTIALS_FILE:-}" ]; then
+  node - "$DSH_CREDENTIALS_FILE" "$DSH_HOME/.credentials.yaml" <<'NODE'
+const fs = require('node:fs');
+const [source, target] = process.argv.slice(2);
+const temporary = `${target}.tmp-${process.pid}`;
+fs.writeFileSync(temporary, fs.readFileSync(source), { mode: 0o600, flag: 'wx' });
+fs.renameSync(temporary, target);
+NODE
+fi
 
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "[entrypoint] 没找到 config.json，按环境变量生成一份"
@@ -32,9 +52,15 @@ const fs = require('node:fs');
 const file = process.argv[2];
 const env = process.env;
 
-const ownerRaw = String(env.OWNER_QQ || '').replace(/\D/g, '');
-const allowFrom = ownerRaw ? [Number(ownerRaw)] : [];
-if (!ownerRaw) {
+function qqIds(value, name) {
+  const ids = String(value || '').split(',').map((id) => id.trim()).filter(Boolean);
+  if (ids.some((id) => !/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))) {
+    throw new Error(`${name} 必须是英文逗号分隔的有效 QQ 号`);
+  }
+  return [...new Set(ids.map(Number))];
+}
+const allowFrom = qqIds(env.OWNER_QQ, 'OWNER_QQ');
+if (!allowFrom.length) {
   console.warn('[entrypoint] 警告：没设 OWNER_QQ，白名单是空的 —— 机器人不会理任何人。');
 }
 
@@ -45,6 +71,8 @@ const config = {
   },
   dsh: {
     command: env.DSH_COMMAND || 'dsh',
+    mode: 'headless',
+    companion: false,
     profile: env.DSH_PROFILE || 'headless',
     patchPath: env.DSH_PATCH || '',
     cwd: env.DSH_CWD || '/app/qq-workspace',
@@ -55,11 +83,12 @@ const config = {
     enabled: true,
     path: (env.DSH_CWD || '/app/qq-workspace') + '/AGENTS.md',
     maxChars: 8000,
-    dir: 'state/personas',
+    dir: '/app/state/personas',
     active: '',
   },
   security: {
     allowFrom,
+    adminUserIds: qqIds(env.ADMIN_QQ_IDS, 'ADMIN_QQ_IDS'),
     allowGroups: String(env.ALLOW_GROUPS || 'true') !== 'false',
     allowGroupMembers: false,
     allowGroupIds: [],
@@ -90,7 +119,7 @@ const config = {
   },
   stickers: {
     enabled: true,
-    root: 'state/stickers',
+    root: '/app/state/stickers',
     autoCollect: true,
     autoTag: true,
     maxBytes: 5242880,
@@ -98,8 +127,9 @@ const config = {
     maxPerMessage: 3,
     perMinute: 20,
   },
-  logDir: 'logs',
-  stateDir: 'state',
+  plugins: { enabled: true, dir: '/app/src/plugins' },
+  logDir: '/app/logs',
+  stateDir: '/app/state',
 };
 
 fs.writeFileSync(file, JSON.stringify(config, null, 2) + '\n', 'utf8');
@@ -107,8 +137,8 @@ console.log(`[entrypoint] 配置已写入 ${file}`);
 NODE
 fi
 
-if [ ! -f "$APP_ROOT/qq-workspace/AGENTS.md" ]; then
-  cat > "$APP_ROOT/qq-workspace/AGENTS.md" <<'MD'
+if [ ! -f "$DSH_WORKSPACE/AGENTS.md" ]; then
+  cat > "$DSH_WORKSPACE/AGENTS.md" <<'MD'
 # 人格
 
 你是一个在 QQ 上聊天的助手。
@@ -124,11 +154,17 @@ MD
   echo "[entrypoint] 生成了一份默认人格：qq-workspace/AGENTS.md（挂载你自己的会被直接使用）"
 fi
 
-DSH_BIN=$(printf '%s' "${DSH_COMMAND:-dsh}" | awk '{print $1}')
-if ! command -v "$DSH_BIN" >/dev/null 2>&1; then
-  echo "[entrypoint] 提醒：没找到 DSH 命令（${DSH_COMMAND:-dsh}）。"
-  echo "[entrypoint]      控制台和收消息都能用，但真正回话需要 DSH：把宿主机的 DSH 挂进来并设 DSH_COMMAND。"
-fi
+node --input-type=module - "$CONFIG_FILE" <<'NODE'
+import fs from 'node:fs';
+import { resolveCommandPlan } from '/app/src/dsh.js';
+const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const command = config.dsh?.command || 'dsh';
+const plan = resolveCommandPlan(command, config.dsh?.cwd || '/app');
+if (plan.error) {
+  console.warn(`[entrypoint] 提醒：没找到 DSH 命令（${command}）：${plan.error}`);
+  console.warn('[entrypoint] 控制台仍可用；请挂载 DSH，DSH_COMMAND 填入口文件路径，不要加 node 前缀。');
+}
+NODE
 
 echo "[entrypoint] 启动控制台（:5830）与桥接…"
 node "$APP_ROOT/src/webui/server.mjs" &
@@ -146,9 +182,18 @@ term() {
 }
 trap term INT TERM
 
-# 桥接是主体：它退出就整容器退出（compose 里配 restart 会拉起来）
-wait "$BRIDGE_PID"
-STATUS=$?
-echo "[entrypoint] 桥接退出了（code=$STATUS），容器跟着退出"
-kill -TERM "$CONSOLE_PID" 2>/dev/null || true
+# Alpine ash 的 wait -n 可能漏掉被信号终止的子进程。
+while kill -0 "$BRIDGE_PID" 2>/dev/null && kill -0 "$CONSOLE_PID" 2>/dev/null; do
+  sleep 1
+done
+STATUS=0
+if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
+  wait "$BRIDGE_PID" || STATUS=$?
+else
+  wait "$CONSOLE_PID" || STATUS=$?
+fi
+echo "[entrypoint] 子进程退出了（code=$STATUS），容器跟着退出"
+kill -TERM "$BRIDGE_PID" "$CONSOLE_PID" 2>/dev/null || true
+wait "$BRIDGE_PID" 2>/dev/null || true
+wait "$CONSOLE_PID" 2>/dev/null || true
 exit "$STATUS"

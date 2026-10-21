@@ -1,4 +1,4 @@
-// src/webui/server.mjs —— 本地控制台 Web 服务（零依赖，只绑 127.0.0.1）
+// src/webui/server.mjs —— 本地控制台 Web 服务（零依赖，默认只绑 127.0.0.1）
 //
 // 契约见 SPEC-2 §5.1 / §5.2：
 //   createWebUiServer({ config, configRoot, log, port }) → { start, stop, url }
@@ -535,7 +535,7 @@ export function resolveNotePath(root, rawPath) {
 // ------------------------------------------------------------ 主工厂
 
 /**
- * @param {{config?: object, configRoot?: string, log?: object, port?: number}} opts
+ * @param {{config?: object, configRoot?: string, log?: object, port?: number, host?: string}} opts
  * @returns {{start: Function, stop: Function, url: string, port: number}}
  */
 /**
@@ -583,7 +583,7 @@ function configFileOf(root) {
 }
 
 export function createWebUiServer({
-  config = {}, configRoot, log, port = DEFAULT_PORT, updateManager,
+  config = {}, configRoot, log, port = DEFAULT_PORT, host = '127.0.0.1', updateManager,
   openPath = openLocalPath, openUrl = openExternalUrl,
 } = {}) {
   const root = path.resolve(text(configRoot) || PROJECT_ROOT);
@@ -610,7 +610,8 @@ export function createWebUiServer({
 
 
   // 基础 patch（与 src/index.js 同一套解析规则）；模型跟随拿它当兜底。
-  const basePatchPath = resolveFrom(root, config?.dsh?.patchPath ?? path.join('patches', 'headless-model.yml'));
+  const configuredPatch = config?.dsh?.patchPath ?? path.join('patches', 'headless-model.yml');
+  const basePatchPath = configuredPatch ? resolveFrom(root, configuredPatch) : '';
 
   const onebotPort = Number(config?.onebot?.port) || portFromUrl(config?.onebot?.url) || 3001;
   const napcatWebUi = normalizeNapcatWebUi(config?.napcat?.webui);
@@ -2376,7 +2377,7 @@ export function createWebUiServer({
       s.once('error', onError);
       s.once('listening', onListening);
       try {
-        s.listen(targetPort, '127.0.0.1');
+        s.listen(targetPort, host);
       } catch (err) {
         onError(err);
       }
@@ -2508,6 +2509,7 @@ async function main() {
     config,
     configRoot: PROJECT_ROOT,
     log,
+    host: process.env.WEBUI_HOST?.trim() || '127.0.0.1',
     ...(Number.isInteger(envPort) && envPort > 0 && envPort < 65536 ? { port: envPort } : {}),
   });
   const { port } = await instance.start();

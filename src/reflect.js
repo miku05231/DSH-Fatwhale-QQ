@@ -19,6 +19,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
+import { killProcessTree } from './dsh.js';
 
 /** 默认设置（与 src/config.js 的 DEFAULTS.memory.reflect* 保持一致） */
 export const REFLECT_DEFAULTS = Object.freeze({
@@ -324,11 +325,7 @@ export function runReflectScript({ projectRoot, force = false, days = REFLECT_DE
 
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
-      } catch {
-        /* 杀不掉就等它自己退出 */
-      }
+      killProcessTree(child);
     }, Math.max(5000, Number(timeoutMs) || 420000));
 
     child.stdout?.setEncoding('utf8');

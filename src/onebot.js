@@ -394,7 +394,13 @@ export class OneBot extends EventEmitter {
         : new Error(event?.message || `与 OneBot 服务端的 WebSocket 连接出错（${this.#url}）`);
     this.#log.warn(`[onebot] WebSocket 错误: ${err.message}`);
     this.#reportError(err);
-    // 之后必然跟随 close 事件，重连在那里统一处理
+    // Node 的内置 WebSocket 在握手失败时可能只发 error，不发 close。
+    this.#onClose(ws, { code: 1006, reason: err.message });
+    try {
+      ws.close();
+    } catch {
+      /* 旧连接的延迟 close/error 会由引用检查忽略 */
+    }
   }
 
   #onClose(ws, event) {
