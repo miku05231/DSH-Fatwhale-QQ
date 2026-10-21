@@ -50,7 +50,7 @@ jobs:
       - name: Test updates, packaging and the executable
         shell: pwsh
         run: |
-          foreach ($taskGroup in @('更新', 'exe', '封装应用', '公开导出')) {
+          foreach ($taskGroup in @('表情', '打开本地', '更新', 'exe', '封装应用', '公开导出')) {
             node tests/run-all.mjs --only $taskGroup
             if ($LASTEXITCODE -ne 0) { throw "Tests failed: $taskGroup" }
           }

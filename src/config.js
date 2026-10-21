@@ -82,7 +82,7 @@ export const DEFAULTS = deepFreeze({
   },
   logDir: 'logs',
   stateDir: 'state',
-  // 表情包库（src/stickers.js）：自动采集对话里的图片、打标签、建索引。
+  // 表情包库（src/stickers.js）：只自动采集有 QQ 表情元数据的图片、打标签、建索引。
   // root 可以指到任意位置（控制台「表情」页能改，也能一键迁移）；相对路径按项目根解析。
   stickers: {
     enabled: true,

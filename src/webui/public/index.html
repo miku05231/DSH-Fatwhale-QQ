@@ -141,7 +141,7 @@
       </section>
 
       <div class="sticker-grid" id="stickerGrid"></div>
-      <p class="empty" id="stickerEmpty" hidden>还没有表情包。群里有人发表情、你发图给它，都会自动收进来。</p>
+      <p class="empty" id="stickerEmpty" hidden>还没有表情包。收到 QQ 自定义表情或商城表情后会自动收集，普通图片不会自动保存。</p>
 
       <section class="card card--pad">
         <div class="row-between">
@@ -151,7 +151,7 @@
         <label class="field-label" for="stickerRoot">存放目录</label>
         <input class="text-field" type="text" id="stickerRoot" spellcheck="false" placeholder="state\stickers" />
         <label class="switch-row">
-          <span class="switch-row__text">自动采集对话里的表情包（不用 @ 我，群里发的图也收）</span>
+          <span class="switch-row__text">自动采集 QQ 表情（无需 @，跳过普通图片）</span>
           <input class="switch" type="checkbox" id="stickerAutoCollect" />
         </label>
         <label class="switch-row">

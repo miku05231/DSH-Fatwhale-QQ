@@ -83,6 +83,11 @@ try {
     installed.phase === 'complete' && installed.version === version);
   check('The installed package has the release version',
     JSON.parse(await readFile(path.join(temporary, 'package.json'), 'utf8')).version === version);
+  for (const relative of ['src/open-path.ps1', 'src/open-path.js', 'src/sticker-prompt.js']) {
+    const expected = (await readFile(path.join(root, relative), 'utf8')).replace(/^\uFEFF/, '');
+    const actual = (await readFile(path.join(temporary, relative), 'utf8')).replace(/^\uFEFF/, '');
+    check(`The installed package contains the complete current source: ${relative}`, actual === expected);
+  }
   for (const [relative, content] of Object.entries(preserved)) {
     check(`Local data survives the real package: ${relative}`,
       await readFile(path.join(temporary, relative), 'utf8') === content);

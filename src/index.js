@@ -34,6 +34,7 @@ import {
   setChatPersona,
 } from './personas.js';
 import { createReflectScheduler } from './reflect.js';
+import { buildStickerPrompt } from './sticker-prompt.js';
 import {
   createStickerCollector,
   loadIndex,
@@ -281,7 +282,7 @@ async function main() {
   }
 
   // ------------------------------------------------------ 表情包库
-  // 对话里冒出来的图片顺手收进库并打标签（不需要 @ 它），DSH 想回表情时
+  // 对话里带 QQ 表情标记的图片收进库并打标签（不需要 @ 它），DSH 想回表情时
   // 用 tools/stickers.mjs 挑一张发出去。采集失败只写 debug 日志，绝不影响回消息。
   const stickerCfg = normalizeStickerSettings(config?.stickers ?? {});
   const stickerRoot = stickerRootDir({ configRoot, config });
@@ -312,7 +313,7 @@ async function main() {
       stickerTargetTimer = setInterval(refreshStickerTarget, 15_000);
       stickerTargetTimer.unref?.();
       log.info(
-        `表情包库就绪：${stickerRoot}` + (stickerCfg.autoCollect ? '（自动采集对话里的图片）' : '（自动采集已关）'),
+        `表情包库就绪：${stickerRoot}` + (stickerCfg.autoCollect ? '（自动采集 QQ 表情）' : '（自动采集已关）'),
       );
     } catch (err) {
       stickerCollector = null;
@@ -322,34 +323,22 @@ async function main() {
     log.info('表情包库已关闭（stickers.enabled=false）');
   }
 
-  // 表情包提示：库里有图才在 prompt 里提一句，空库不浪费 token。
-  // 一分钟缓存一次 —— 不该为了这一行提示每条消息都读一遍索引。
-  let stickerHintCache = { at: 0, text: '' };
+  // 空库也提示搜索后的入库方法；目录迁移时立即重建提示。
+  let stickerHintCache = { at: 0, root: '', text: '' };
   async function stickerPromptHint() {
-    if (!stickerCollector) return '';
+    if (!stickerTarget.settings.enabled) return '';
     const now = Date.now();
-    if (now - stickerHintCache.at < 60_000) return stickerHintCache.text;
-    let text = '';
+    const root = stickerTarget.root;
+    if (stickerHintCache.root === root && now - stickerHintCache.at < 60_000) return stickerHintCache.text;
+    let stats;
     try {
-      const index = await loadIndex(stickerTarget.root);
-      if (index.items.length > 0) {
-        const stats = storeStats(index);
-        const topTags = stats.tags
-          .filter((entry) => !entry.tag.startsWith('月份:'))
-          .slice(0, 4)
-          .map((entry) => entry.tag)
-          .join('、');
-        text =
-          `[表情包库] 攒了 ${stats.count} 张（动图 ${stats.animated} 张），常用标签：${topTags || '暂无'}。` +
-          '想回一张表情：先 `node C:\\D\\DSH\\qq-bridge\\tools\\stickers.mjs pick --tag 类型:动图` ' +
-          '（或 --query 关键词）拿到本地图片路径，再用 qq.mjs 发出去；' +
-          '想给某张补标签或看全部用法跑 `node C:\\D\\DSH\\qq-bridge\\tools\\stickers.mjs --help`。';
-      }
+      const index = await loadIndex(root);
+      stats = storeStats(index);
     } catch (err) {
       log.debug('读表情包索引失败：', err?.message ?? err);
-      text = '';
     }
-    stickerHintCache = { at: now, text };
+    const text = buildStickerPrompt({ projectRoot: PROJECT_ROOT, configPath, root, stats });
+    stickerHintCache = { at: now, root, text };
     return text;
   }
 
@@ -579,7 +568,7 @@ async function main() {
       return;
     }
 
-    // 表情包采集：群/人都过了准入就把图片收进库，不需要 @ 它 ——
+    // 表情包采集：群/人过了准入后，只收带 QQ 表情标记的图片，不需要 @ 它 ——
     // 群里没人 @ 的时候恰恰是表情包最多的时候。后台排队 + 每分钟限量，这里不等。
     if (stickerCollector) void stickerCollector.push(msg);
 

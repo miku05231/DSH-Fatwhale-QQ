@@ -8,15 +8,11 @@
  * 全在临时目录里跑，结束删干净；不碰真实的 config.json / 表情包库。
  */
 
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { fileURLToPath } from 'node:url';
-
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = path.resolve(HERE, '..');
 
 let passed = 0;
 let failed = 0;
@@ -127,6 +123,7 @@ async function moduleTests(tmpRoot) {
     autoTagsFor,
     upsertSticker,
     loadIndex,
+    saveIndex,
     listStickers,
     pickSticker,
     updateTags,
@@ -135,6 +132,8 @@ async function moduleTests(tmpRoot) {
     resolveStickerFile,
     migrateStore,
     storeStats,
+    extractImageSegments,
+    isQQStickerSegment,
     collectFromMessage,
     createStickerCollector,
   } = mod;
@@ -187,6 +186,52 @@ async function moduleTests(tmpRoot) {
   eq(again.duplicate, true, '同一张图第二次是重复');
   eq(again.item.seen, 2, '重复计数 +1');
   eq((await loadIndex(store)).items.length, 1, '库里还是只有一张');
+  await rm(path.join(store, first.item.file));
+  const restored = await upsertSticker({ root: store, buffer: png, settings: loose });
+  truthy(restored.duplicate, '文件丢失后重新导入仍命中原表情');
+  eq(restored.item.file, first.item.file, '恢复到索引记录的原库内路径');
+  truthy((await readFile(path.join(store, restored.item.file))).equals(png), '丢失的表情文件按原内容完整恢复');
+  eq((await loadIndex(store)).items.length, 1, '恢复文件不会重复添加索引');
+
+  const unsafeRoot = path.join(tmpRoot, 'unsafe-duplicate');
+  await upsertSticker({ root: unsafeRoot, buffer: png, settings: loose });
+  const unsafeIndex = await loadIndex(unsafeRoot);
+  const escaped = path.join(tmpRoot, 'escaped.png');
+  for (const invalidFile of ['../escaped.png', escaped]) {
+    unsafeIndex.items[0].file = invalidFile;
+    await saveIndex(unsafeRoot, unsafeIndex);
+    try {
+      await upsertSticker({ root: unsafeRoot, buffer: png, settings: loose });
+      bad('重复记录的库外恢复路径未被拒绝');
+    } catch (err) {
+      truthy(/越界/.test(err.message), '重复记录恢复前拒绝库外路径', err.message);
+    }
+  }
+  eq(existsSync(escaped), false, '拒绝恢复后没有写入库外文件');
+
+  const outsideDir = path.join(tmpRoot, 'outside-stickers');
+  await mkdir(outsideDir);
+  await symlink(outsideDir, path.join(unsafeRoot, 'redirect'), process.platform === 'win32' ? 'junction' : 'dir');
+  unsafeIndex.items[0].file = 'redirect/escaped.png';
+  await saveIndex(unsafeRoot, unsafeIndex);
+  try {
+    await upsertSticker({ root: unsafeRoot, buffer: png, settings: loose });
+    bad('重复记录的链接恢复路径未被拒绝');
+  } catch (err) {
+    truthy(/链接/.test(err.message), '重复记录不能通过链接恢复到库外', err.message);
+  }
+  eq(existsSync(path.join(outsideDir, 'escaped.png')), false, '链接目标目录没有被写入');
+
+  unsafeIndex.items[0].file = 'directory.png';
+  await saveIndex(unsafeRoot, unsafeIndex);
+  await mkdir(path.join(unsafeRoot, 'directory.png'));
+  try {
+    await upsertSticker({ root: unsafeRoot, buffer: png, settings: loose });
+    bad('重复记录的非文件目标未被拒绝');
+  } catch (err) {
+    truthy(/普通文件/.test(err.message), '非 ENOENT 的文件错误不会被吞掉', err.message);
+  }
+  eq((await loadIndex(unsafeRoot)).items[0].seen, 1, '恢复失败不会增加已见计数');
 
   const small = await upsertSticker({ root: store, buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47]), settings: { ...loose, minBytes: 999 } });
   eq(small.reason, '太小', '小图被拒：太小');
@@ -245,12 +290,66 @@ async function moduleTests(tmpRoot) {
   eq((await loadIndex(newStore)).items.length, 1, '索引里只剩 1 张');
 
   section('5/6 采集器（注入 fetch，不联网）');
-  const fetchImpl = async () => ({ ok: true, status: 200, arrayBuffer: async () => png });
+  let fetchCalls = 0;
+  const fetchImpl = async () => {
+    fetchCalls += 1;
+    return { ok: true, status: 200, arrayBuffer: async () => png };
+  };
+  for (const [field, value] of [['sub_type', 1], ['sub_type', '1'], ['subType', 1], ['subType', '1']]) {
+    truthy(isQQStickerSegment({ type: 'image', data: { [field]: value } }), `QQ 表情识别 ${field}=${JSON.stringify(value)}`);
+  }
+  for (const [label, data] of [
+    ['无元数据', {}],
+    ['普通图片', { sub_type: 0, summary: '[动画表情]' }],
+    ['其他图片子类型', { sub_type: 2 }],
+    ['未知图片子类型', { sub_type: 99 }],
+    ['不把布尔值当子类型', { sub_type: true }],
+    ['不把近似字符串当子类型', { sub_type: '1foo' }],
+    ['不按摘要猜测', { summary: '[表情包]' }],
+    ['不按文件名猜测', { file: 'emoji-sticker.gif' }],
+    ['不按单个商城字段猜测', { emoji_id: 'a'.repeat(32) }],
+    ['不按不完整商城标识猜测', { emoji_id: 'not-an-emoji', emoji_package_id: 42 }],
+  ]) {
+    eq(isQQStickerSegment({ type: 'image', data }), false, `${label}不自动采集`);
+  }
+  eq(isQQStickerSegment({ type: 'face', data: { id: '1' } }), false, 'QQ 内置 face 无图片文件，不当作可下载表情');
+  eq(isQQStickerSegment({ type: 'mface', data: null }), false, '畸形商城表情段不采集');
+  const marketId = 'aabbccddeeff00112233445566778899';
+  const marketData = { emoji_id: marketId, emoji_package_id: 42, key: 'test-key' };
+  truthy(isQQStickerSegment({ type: 'image', data: marketData }), 'NapCat 转换为 image 的商城表情仍可识别');
+  truthy(isQQStickerSegment({ type: 'image', data: { ...marketData, emoji_package_id: '42' } }), '商城表情包 ID 兼容字符串');
+  truthy(isQQStickerSegment({ type: 'mface', data: marketData }), '显式 mface 商城表情可识别');
+  eq(
+    extractImageSegments({ message: [{ type: 'mface', data: marketData }] })[0]?.url,
+    `https://gxh.vip.qq.com/club/item/parcel/item/aa/${marketId}/raw300.gif`,
+    '商城表情可按官方 emoji_id 解析 QQ 资源地址',
+  );
+
+  const photoStore = path.join(tmpRoot, 'ordinary-images');
+  const ordinary = await collectFromMessage({
+    root: photoStore,
+    msg: {
+      raw: {
+        message: [
+          { type: 'image', data: { url: 'https://example.invalid/photo.jpg', sub_type: 0, summary: '[动画表情]' } },
+          { type: 'image', data: { url: 'https://example.invalid/tiny-emoji.gif' } },
+          { type: 'image', data: { url: 'https://example.invalid/unknown.png', sub_type: 99 } },
+        ],
+      },
+      messageType: 'group',
+    },
+    settings: loose,
+    fetchImpl,
+  });
+  eq(ordinary.added, 0, '普通和未知图片没有被自动保存');
+  eq(fetchCalls, 0, '普通图片筛选发生在下载之前');
+  eq(existsSync(photoStore), false, '普通图片不创建表情包目录或索引');
+
   const collected = await collectFromMessage({
     root: path.join(tmpRoot, 'collected'),
     msg: {
       raw: {
-        message: [{ type: 'image', data: { url: 'https://example.invalid/a.png', summary: '动画表情' } }],
+        message: [{ type: 'image', data: { url: 'https://example.invalid/a.png', sub_type: 1, summary: '动画表情' } }],
         sender: { card: '小明小明', nickname: '小明' },
       },
       messageType: 'group',
@@ -268,10 +367,30 @@ async function moduleTests(tmpRoot) {
     '发言人名从 raw.sender 里取（归一化消息不带 nickname）',
     (collected.items[0]?.tags ?? []).join(' / '),
   );
+  const afterFirst = fetchCalls;
+  const mixed = await collectFromMessage({
+    root: path.join(tmpRoot, 'mixed-collection'),
+    msg: {
+      raw: {
+        message: [
+          { type: 'image', data: { url: 'https://example.invalid/photo.jpg', sub_type: 0 } },
+          { type: 'image', data: { url: 'https://example.invalid/alias.png', subType: '1' } },
+          { type: 'image', data: { ...marketData, url: 'https://example.invalid/market.gif' } },
+          { type: 'mface', data: marketData },
+        ],
+      },
+      messageType: 'private',
+    },
+    settings: { ...loose, maxPerMessage: 3 },
+    fetchImpl,
+  });
+  eq(fetchCalls - afterFirst, 3, '混合消息先过滤普通图片，再应用每条三张的采集上限');
+  eq(mixed.added, 1, '静态 QQ 表情和商城表情进入相同表情库');
+  eq(mixed.duplicate, 2, '不同类型表情仍按内容去重');
 
   const collector = createStickerCollector({ root: path.join(tmpRoot, 'queued'), settings: loose, fetchImpl, now: () => Date.now() });
   const pushed = await collector.push({
-    raw: { message: [{ type: 'image', data: { url: 'https://example.invalid/b.png', summary: '' } }] },
+    raw: { message: [{ type: 'image', data: { url: 'https://example.invalid/b.png', sub_type: '1', summary: '' } }] },
     messageType: 'private',
     nickname: '小红',
     text: '哈哈哈',
@@ -283,6 +402,29 @@ async function moduleTests(tmpRoot) {
 
   const quiet = await collector.push({ raw: { message: [{ type: 'text', data: { text: '纯文字' } }] }, messageType: 'private' });
   eq(quiet, null, '纯文字消息不采集');
+  const limited = createStickerCollector({
+    root: path.join(tmpRoot, 'limited'),
+    settings: { ...loose, perMinute: 1 },
+    fetchImpl,
+    now: () => 120_000,
+  });
+  const ignoredPhoto = await limited.push({
+    raw: { message: [{ type: 'image', data: { url: 'https://example.invalid/photo.gif', sub_type: 0 } }] },
+    messageType: 'group',
+  });
+  eq(ignoredPhoto, null, '队列入口直接跳过普通图片');
+  const afterPhoto = await limited.push({
+    raw: { message: [{ type: 'image', data: { url: 'https://example.invalid/sticker.png', sub_type: 1 } }] },
+    messageType: 'group',
+  });
+  eq(afterPhoto?.added, 1, '普通图片不会消耗 QQ 表情采集限额');
+  const disabled = await collectFromMessage({
+    root: path.join(tmpRoot, 'disabled'),
+    msg: { raw: { message: [{ type: 'mface', data: marketData }] } },
+    settings: { ...loose, autoCollect: false },
+    fetchImpl,
+  });
+  eq(disabled.added, 0, '关闭自动收集后明确 QQ 表情也不入库');
 
   section('6/6 坏索引自愈');
   const brokenDir = path.join(tmpRoot, 'broken');
@@ -302,7 +444,7 @@ async function moduleTests(tmpRoot) {
 
 async function httpTests(tmpRoot) {
   const { createWebUiServer } = await import('../src/webui/server.mjs');
-  const { loadConfig } = await import('../src/config.js');
+  const { DEFAULTS } = await import('../src/config.js');
   const { ...stickers } = await import('../src/stickers.js');
 
   const stateDir = path.join(tmpRoot, 'state');
@@ -312,9 +454,8 @@ async function httpTests(tmpRoot) {
   await mkdir(logDir, { recursive: true });
   await mkdir(storeDir, { recursive: true });
 
-  const { config } = loadConfig(PROJECT_ROOT, { createIfMissing: false });
   const tempConfig = {
-    ...config,
+    ...structuredClone(DEFAULTS),
     stateDir,
     logDir,
     stickers: { ...stickers.STICKER_DEFAULTS, root: storeDir, minBytes: 0 },

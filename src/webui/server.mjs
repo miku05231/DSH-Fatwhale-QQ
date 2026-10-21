@@ -25,6 +25,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createUpdateManager } from '../updates.mjs';
+import { openLocalPath, openExternalUrl } from '../open-path.js';
 import { describeModelState, writeModelState, MODEL_MODES, REASONING_EFFORTS } from '../model-follow.js';
 import { PluginHost, PLUGIN_HOOKS, SCHEMA_TYPES, coerceValue } from '../plugins.js';
 import { resolvePersonaPath, resolveMemoryRoot, resolveWorkspace, expandPath } from '../persona.js';
@@ -579,7 +580,10 @@ function configFileOf(root) {
   return raw === '' ? path.join(root, 'config.json') : path.resolve(raw);
 }
 
-export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT_PORT, updateManager } = {}) {
+export function createWebUiServer({
+  config = {}, configRoot, log, port = DEFAULT_PORT, updateManager,
+  openPath = openLocalPath, openUrl = openExternalUrl,
+} = {}) {
   const root = path.resolve(text(configRoot) || PROJECT_ROOT);
   const basePort = Number.isInteger(Number(port)) && Number(port) > 0 ? Number(port) : DEFAULT_PORT;
 
@@ -1901,7 +1905,7 @@ export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT
       if (!fs.existsSync(memoryRootDir())) return fail(res, 404, `记忆库还不存在：${memoryRootDir()}`);
       if (target === 'memory') {
         try {
-          spawn('explorer.exe', [memoryRootDir()], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+          await openPath(memoryRootDir());
         } catch (err) {
           return fail(res, 500, `打开文件夹失败：${err?.message ?? err}`);
         }
@@ -1911,7 +1915,7 @@ export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT
       if (!fs.existsSync(indexFile)) return fail(res, 404, `记忆库索引不存在：${indexFile}`);
       try {
         const url = `obsidian://open?path=${encodeURIComponent(indexFile)}`;
-        spawn('cmd.exe', ['/c', 'start', '""', url], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+        await openUrl(url);
         return ok(res, { opened: 'memory-obsidian', path: indexFile });
       } catch (err) {
         return fail(res, 500, `调起 Obsidian 失败：${err?.message ?? err}`);
@@ -1924,7 +1928,7 @@ export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT
       if (!file) return fail(res, 404, '记忆库根目录还没配置');
       if (fs.existsSync(file)) {
         try {
-          spawn('explorer.exe', [`/select,${file}`], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+          await openPath(file, { select: true });
           return ok(res, { opened: 'reflection', path: file, selected: true });
         } catch (err) {
           return fail(res, 500, `打开反思文件失败：${err?.message ?? err}`);
@@ -1933,7 +1937,7 @@ export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT
       const dir = path.dirname(file);
       if (!fs.existsSync(dir)) return fail(res, 404, '还没有写过反思，点「立即反思」生成第一篇');
       try {
-        spawn('explorer.exe', [dir], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+        await openPath(dir);
         return ok(res, { opened: 'reflection', path: dir, selected: false });
       } catch (err) {
         return fail(res, 500, `打开反思目录失败：${err?.message ?? err}`);
@@ -1945,7 +1949,7 @@ export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT
       const dir = stickerDir();
       try {
         await fsp.mkdir(dir, { recursive: true });
-        spawn('explorer.exe', [dir], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+        await openPath(dir);
         return ok(res, { opened: 'stickers', path: dir });
       } catch (err) {
         return fail(res, 500, `打开表情包目录失败：${err?.message ?? err}`);
@@ -1958,7 +1962,7 @@ export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT
         // 地址带上 webui.json 里的 token，NapCat 的 /web_login 会用 ?token= 自动登录。
         const url = napcatWebuiLaunchUrl();
         const tokenAttached = url !== napcatWebUi;
-        spawn('cmd.exe', ['/c', 'start', '""', url], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+        await openUrl(url);
         return ok(res, { opened: 'napcat-webui', path: maskTokenUrl(url), tokenAttached });
       } catch (err) {
         return fail(res, 500, `打开 NapCat WebUI 失败：${err?.message ?? err}`);
@@ -1969,7 +1973,7 @@ export function createWebUiServer({ config = {}, configRoot, log, port = DEFAULT
       const dir = target === 'workspace' ? workspaceDir() : path.dirname(personaFilePath());
       if (!fs.existsSync(dir)) return fail(res, 404, `目录还不存在：${dir}`);
       try {
-        spawn('explorer.exe', [dir], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+        await openPath(dir);
         return ok(res, { opened: target, path: dir });
       } catch (err) {
         return fail(res, 500, `打开文件夹失败：${err?.message ?? err}`);

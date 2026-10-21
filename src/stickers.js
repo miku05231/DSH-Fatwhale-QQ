@@ -1,7 +1,7 @@
 // src/stickers.js —— 表情包库：自动采集 / 打标签 / 索引 / 迁移（零依赖）
 //
 // 为什么单独一个模块：三拨人要用同一个库 ——
-//   1) 桥接（src/index.js）收到群消息/私聊里的图片时要把「表情包」抠下来存盘；
+//   1) 桥接（src/index.js）收到群消息/私聊里的 QQ 表情时把它存盘；
 //   2) 控制台（src/webui/server.mjs）要列出来、按标签筛、改标签、重建索引、迁移目录；
 //   3) 命令行（tools/stickers.mjs）让 DSH 自己在对话里挑一张发出去、或者补标签。
 // 所以这里只做纯文件/纯函数的事，不认识 OneBot、不认识 HTTP。
@@ -30,7 +30,7 @@ export const STICKER_DEFAULTS = Object.freeze({
   root: path.join('state', 'stickers'),
   autoCollect: true,
   autoTag: true,
-  // 单张上限 5MB：再大基本是照片/长图，不是表情包，存了也占地方
+  // 单张上限 5MB，限制表情包或手动导入图片的存储开销
   maxBytes: 5 * 1024 * 1024,
   // 小于 200 字节的图片是坏图/占位符，别收
   minBytes: 200,
@@ -512,9 +512,34 @@ export function findById(index, id) {
   return (index?.items ?? []).find((item) => item.id === key) ?? null;
 }
 
+async function restoreMissingStickerFile(root, file, buffer) {
+  if (path.isAbsolute(file) || path.win32.isAbsolute(file)) throw new Error('文件路径越界');
+  const abs = resolveStickerFile(root, file);
+  const parent = path.dirname(abs);
+  let dir = path.resolve(root);
+  for (const part of path.relative(dir, parent).split(path.sep).filter(Boolean)) {
+    dir = path.join(dir, part);
+    try {
+      const info = await fsp.lstat(dir);
+      if (info.isSymbolicLink() || !info.isDirectory()) throw new Error('表情包文件路径包含链接或非目录');
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
+      break;
+    }
+  }
+  try {
+    const info = await fsp.lstat(abs);
+    if (!info.isFile()) throw new Error('表情包文件路径不是普通文件');
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+    await fsp.mkdir(parent, { recursive: true });
+    await fsp.writeFile(abs, buffer, { flag: 'wx' });
+  }
+}
+
 /**
  * 把一张图收进库。
- * 同一张图（sha 相同）不会重复写文件，只把 seen+1、lastAt 刷新、缺的标签补上。
+ * 同一张图（sha 相同）只更新计数、时间、标签；物理文件丢失时用本次内容恢复。
  * @param {{root:string, buffer:Buffer, source?:object, text?:string, summary?:string,
  *          tags?:string[], settings?:object, now?:number, force?:boolean}} input
  * @returns {Promise<{added:boolean, duplicate:boolean, item:object, reason?:string}>}
@@ -546,6 +571,7 @@ export async function upsertSticker({
     const index = await loadIndex(root);
     const existing = findBySha(index, sha);
     if (existing && !force) {
+      await restoreMissingStickerFile(root, existing.file, buffer);
       existing.seen += 1;
       existing.lastAt = stamp;
       if (!existing.firstAt) existing.firstAt = stamp;
@@ -840,18 +866,56 @@ export async function migrateStore({ fromRoot, toRoot, onProgress = () => {} }) 
 
 // ---------------------------------------------------------------- 从消息里采集
 
-/** 把 OneBot 消息段里的图片段挑出来（data 里可能有 url / file / base64） */
+function stickerSubType(data) {
+  const value = data?.sub_type ?? data?.subType;
+  if (typeof value === 'number' && Number.isInteger(value)) return value;
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) return Number(value.trim());
+  return null;
+}
+
+function marketEmojiId(data) {
+  return typeof data?.emoji_id === 'string' && /^[a-f0-9]{32}$/i.test(data.emoji_id.trim())
+    ? data.emoji_id.trim()
+    : '';
+}
+
+function hasMarketEmojiMetadata(data) {
+  const packageId = data?.emoji_package_id;
+  const validPackage = (typeof packageId === 'number' && Number.isInteger(packageId) && packageId > 0) ||
+    (typeof packageId === 'string' && /^\d+$/.test(packageId.trim()) && Number(packageId) > 0);
+  return Boolean(marketEmojiId(data) && validPackage);
+}
+
+/**
+ * NapCat 的 KCUSTOM=1 是 QQ 自定义表情；商城表情接收时也可能转换成 image。
+ * 不根据摘要、后缀、尺寸或动图猜测，缺少明确元数据的图片留给手动导入。
+ */
+export function isQQStickerSegment(segment) {
+  if (!segment || !segment.data || typeof segment.data !== 'object' || Array.isArray(segment.data)) return false;
+  if (segment.type === 'mface') return true;
+  return segment.type === 'image' &&
+    (stickerSubType(segment.data) === 1 || hasMarketEmojiMetadata(segment.data));
+}
+
+/** 挑出图片和商城表情段，保留是否为 QQ 表情的元数据（不在这里下载）。 */
 export function extractImageSegments(raw) {
   const message = Array.isArray(raw?.message) ? raw.message : [];
   const out = [];
   for (const segment of message) {
-    if (!segment || segment.type !== 'image') continue;
-    const data = segment.data ?? {};
+    if (!segment || !['image', 'mface'].includes(segment.type)) continue;
+    const data = segment.data && typeof segment.data === 'object' ? segment.data : {};
+    const isSticker = isQQStickerSegment(segment);
+    const emojiId = marketEmojiId(data);
+    // 与 NapCat marketFaceElement 使用相同的 QQ 官方资源地址。
+    const marketUrl = isSticker && emojiId
+      ? `https://gxh.vip.qq.com/club/item/parcel/item/${emojiId.slice(0, 2)}/${emojiId}/raw300.gif`
+      : '';
     out.push({
-      url: typeof data.url === 'string' && /^https?:\/\//i.test(data.url) ? data.url : '',
+      url: typeof data.url === 'string' && /^https?:\/\//i.test(data.url) ? data.url : marketUrl,
       file: typeof data.file === 'string' ? data.file : '',
       summary: typeof data.summary === 'string' ? data.summary : '',
-      subType: Number(data.sub_type) || 0,
+      subType: stickerSubType(data),
+      isSticker,
     });
   }
   return out;
@@ -898,7 +962,7 @@ export async function collectFromMessage({
   const result = { added: 0, duplicate: 0, skipped: 0, items: [], reasons: [] };
   if (!cfg.enabled || !cfg.autoCollect) return result;
 
-  const segments = extractImageSegments(msg?.raw).slice(0, cfg.maxPerMessage);
+  const segments = extractImageSegments(msg?.raw).filter((segment) => segment.isSticker).slice(0, cfg.maxPerMessage);
   if (segments.length === 0) return result;
 
   const source = sourceOverride ?? {
@@ -1000,7 +1064,7 @@ export function createStickerCollector({
   function push(msg) {
     const cur = current();
     if (!cur.settings.enabled || !cur.settings.autoCollect) return Promise.resolve(null);
-    if (extractImageSegments(msg?.raw).length === 0) return Promise.resolve(null);
+    if (!extractImageSegments(msg?.raw).some((segment) => segment.isSticker)) return Promise.resolve(null);
     if (!allow(cur.settings.perMinute)) {
       stats.skipped += 1;
       log?.debug?.('表情包采集已达每分钟上限，跳过');

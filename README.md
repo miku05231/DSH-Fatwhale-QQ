@@ -194,12 +194,13 @@ node tools\reflect.mjs --force
 
 ## 一·七、表情包（自动收集、打标签、搬家）
 
-群里谁发表情、你给它发图，**不用 @ 它**，桥接都会顺手收进表情包库（默认 `state\stickers`，可在控制台「表情」页改到 D 盘等任意位置）。收之前先看图片头：是 PNG / GIF / WebP / JPEG / BMP、宽高多少、动图还是静态，再按内容自动打标签——来源（群/私聊）、群号、谁发的、聊天里出现的关键词、`标记:`（QQ 自带的「动画表情」之类）、`类型:动图|静态`、`尺寸:小图|中图|大图`、`月份:YYYY-MM`。
+在允许接收的群聊或私聊中，QQ 自定义表情和商城表情**不用 @ 它**也会自动收进表情包库；普通照片、截图以及没有明确 QQ 表情标记的图片不会自动保存。默认目录为 `state\stickers`，可在控制台「表情」页改到任意位置。收之前先检查 PNG / GIF / WebP / JPEG / BMP 图片头，再按来源、发送者、聊天关键词、QQ 标记、动静态、尺寸和月份自动打标签。
 
 - 同一张图重复出现不会存两份（按 sha256 认图），只把「见过几次」和最近出现时间 +1。
 - 索引是 `<库目录>\index.json`，图片按 `YYYY-MM\<sha 前 16 位>.<ext>` 落盘；只收 200 B–5 MB 的图片，每分钟最多 20 张、一条消息最多 3 张（都能在控制台改）。
 - 控制台「表情」页：网格浏览、按标签筛、搜索（标签/文字/谁发的）、点开大图改标签或删掉、**重建索引**（索引丢了或你手往目录里塞了图，扫一遍就回来）、**迁移**（逐张复制并校验到新目录，自动改写 `stickers.root`，旧目录留着不删），还能一键打开库目录。
-- 它在对话里想发表情时，会先跑 `node tools\stickers.mjs pick --tag 猫` 拿到本地图片路径，再用 QQ 图片段发出去；库里的常用标签会以 `[表情包库] …` 的形式提示给它。
+- 它在对话里想发表情时，会先跑 `node tools\stickers.mjs pick --tag 猫` 拿到本地图片路径，再用 QQ 图片段发出去。空库也会收到 `[表情包库]` 提示，其中包含当前工具和表情库的绝对路径。
+- 让机器人上网寻找表情后，它需要用 `add <本地图片或图片直链>` 入库，并核对返回的 `root`、`path` 和 `item`。只下载到工作区不会出现在控制台；请使用复数工具名 `stickers.mjs`。手动导入不受 QQ 自动采集筛选影响。
 - 索引坏了（半截 JSON）会自动改名 `index.json.bad-<时间戳>` 再扫盘重建，不会把桥接搞挂。
 
 命令行速查：
@@ -208,12 +209,15 @@ node tools\reflect.mjs --force
 node tools\stickers.mjs list --tag 猫
 node tools\stickers.mjs pick --tag 猫 --json
 node tools\stickers.mjs add D:/表情包/1.gif --tag 猫
+node tools\stickers.mjs add https://example.com/cat.gif --tag 猫 --json
+node tools\stickers.mjs import-manifest qq-workspace/assets/stickers/manifest.json --dry-run --json
+node tools\stickers.mjs import-manifest qq-workspace/assets/stickers/manifest.json --json
 node tools\stickers.mjs tag <id> --add 搞笑 --remove 旧标签
 node tools\stickers.mjs rebuild
 node tools\stickers.mjs migrate D:\表情包
 ```
 
-> 换目录不用重启：桥接每 15 秒重读一次 `config.json`，「迁移」也会顺手改配置；想立刻生效就在控制台点一次「保存设置」。
+> 换目录不用重启：桥接每 15 秒重读一次 `config.json`，「迁移」也会顺手改配置。`import-manifest` 仅导入清单明确列出的本地图片，保留场景、情绪和文字信息，不扫描工作区的其他图片，也不删除旧文件。
 
 ---
 
@@ -743,7 +747,7 @@ cd D:\code\qq-bridge
 node tests\run-all.mjs
 ```
 
-它会按顺序跑下面的用例，逐条打勾，最后汇总「通过 N 项，失败 0 项」，同时把结果写进 `state\test-log\<时间戳>.md|.json`（`latest.md` 是最新一轮）；`docs\测试清单.md` 记的是逐条的人工/自动对照表。共 38 组用例，包含 UI CDP、真 dsh、干净环境模拟、命令行模式、容器静态校验、托盘外观、EXE 封装、应用更新与公开导出；每轮结果以对应的测试记录为准。
+它会按顺序跑下面的用例，逐条打勾，最后汇总「通过 N 项，失败 0 项」，同时把结果写进 `state\test-log\<时间戳>.md|.json`（`latest.md` 是最新一轮）；`docs\测试清单.md` 记的是逐条的人工/自动对照表。用例包含表情采集与导入、本地目录打开、UI CDP、真 dsh、干净环境模拟、命令行模式、容器静态校验、托盘外观、EXE 封装、应用更新与公开导出；每轮结果以对应的测试记录为准。
 
 单条单跑：
 

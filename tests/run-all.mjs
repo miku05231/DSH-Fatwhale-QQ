@@ -228,6 +228,13 @@ const SUITE = [
     note: '图片嗅探 / 自动标签 / 去重 / 锁 / 重建索引 / 搬家 / /api/stickers 全套',
   },
   {
+    name: '表情包工具（下载 / 入库 / 旧库导入 / 提示）',
+    file: 'tests/sticker-tools-test.mjs',
+    expect: ['失败 0 项'],
+    timeoutMs: 120_000,
+    note: '隔离配置、空库提示、图片直链下载限制、清单导入与路径校验',
+  },
+  {
     name: '多套人格（库 / 会话覆盖 / 热切换）',
     file: 'tests/personas-test.mjs',
     expect: ['失败 0 项'],
@@ -262,6 +269,13 @@ const SUITE = [
     timeoutMs: 240_000,
     note: '真跑一次 dsh headless，验证 cwd 与 patch',
     network: true,
+  },
+  {
+    name: '打开本地文件夹（隔离）',
+    file: 'tests/open-path-test.mjs',
+    expect: ['失败 0 项'],
+    timeoutMs: 60_000,
+    note: '可见 Explorer、异步启动错误与既有打开目标；不调用真实桌面程序',
   },
   {
     name: '控制台接口',

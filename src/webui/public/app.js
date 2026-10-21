@@ -754,7 +754,7 @@ async function saveReflectSettings() {
 async function openReflection() {
   try {
     const data = await api('/api/open', { method: 'POST', body: JSON.stringify({ target: 'reflection' }) });
-    snackbar(data.selected ? `已定位：${data.path}` : `已打开：${data.path}`, { duration: 3600 });
+    snackbar(data.selected ? `已请求定位：${data.path}` : `已请求打开：${data.path}`, { duration: 3600 });
   } catch (err) {
     snackbar(err.message, { duration: 5200 });
   }
@@ -1085,7 +1085,7 @@ async function saveStickerSettings() {
 async function openStickersDir() {
   try {
     const data = await api('/api/open', { method: 'POST', body: JSON.stringify({ target: 'stickers' }) });
-    snackbar(`已打开：${data.path}`, { duration: 3600 });
+    snackbar(`已请求打开：${data.path}`, { duration: 3600 });
   } catch (err) {
     snackbar(err.message, { duration: 5200 });
   }
@@ -2342,7 +2342,7 @@ function initEvents() {
     try {
       const data = await api('/api/open', { method: 'POST', body: JSON.stringify({ target: 'napcat-webui' }) });
       const hint = data.tokenAttached ? '已带上登录 token' : '没找到 token，可能需要手动输入';
-      snackbar(`已打开 NapCat WebUI（${hint}）：${data.path ?? url}`, { duration: 4200 });
+      snackbar(`已请求打开 NapCat WebUI（${hint}）：${data.path ?? url}`, { duration: 4200 });
     } catch (err) {
       window.open(url, '_blank', 'noopener');
       snackbar(`没能自动打开，请手动复制：${url}`, { duration: 6000 });
@@ -2363,7 +2363,7 @@ function initEvents() {
   $('#pathsOpen')?.addEventListener('click', async () => {
     try {
       const data = await api('/api/open', { method: 'POST', body: JSON.stringify({ target: 'workspace' }) });
-      snackbar(`已打开：${data.path}`, { duration: 3200 });
+      snackbar(`已请求打开：${data.path}`, { duration: 3200 });
     } catch (err) {
       snackbar(`打开失败：${err.message}`, { duration: 4800 });
     }
@@ -2382,7 +2382,7 @@ function initEvents() {
   $('#memoryOpenDir')?.addEventListener('click', async () => {
     try {
       const data = await api('/api/open', { method: 'POST', body: JSON.stringify({ target: 'memory' }) });
-      snackbar(`已打开：${data.path}`, { duration: 3200 });
+      snackbar(`已请求打开：${data.path}`, { duration: 3200 });
     } catch (err) {
       snackbar(`打开失败：${err.message}`, { duration: 5200 });
     }
@@ -2390,7 +2390,7 @@ function initEvents() {
   $('#memoryOpenObsidian')?.addEventListener('click', async () => {
     try {
       await api('/api/open', { method: 'POST', body: JSON.stringify({ target: 'memory-obsidian' }) });
-      snackbar('已在 Obsidian 中打开记忆库');
+      snackbar('已请求在 Obsidian 中打开记忆库');
     } catch (err) {
       snackbar(`打开失败：${err.message}`, { duration: 5200 });
     }
