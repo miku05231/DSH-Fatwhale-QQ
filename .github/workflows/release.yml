@@ -92,6 +92,8 @@ jobs:
       - name: Test conversation, voice and platform automation
         shell: pwsh
         env:
+          QQ_TEST_DSH_COMMAND: ${{ github.workspace }}/state/test-dsh/node_modules/@deepseek-ai/dsh/lib/bin.js
+          QQ_TEST_REQUIRE_DSH: '1'
           QQ_PLATFORM_BROWSER_TEST: '1'
         run: |
           foreach ($taskFile in @(
