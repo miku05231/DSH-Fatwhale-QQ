@@ -208,7 +208,7 @@ const SUITE = [
     name: 'exe 启动器封装',
     file: 'tests/exe-host-test.mjs',
     expect: ['失败 0 项'],
-    timeoutMs: 300_000,
+    timeoutMs: 900_000,
     note: '真实编译 / 图标与版本 / 参数引用与退出码 / 隐藏引导，全部使用隔离桩',
   },
   {

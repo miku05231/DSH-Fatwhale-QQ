@@ -46,7 +46,7 @@ jobs:
     if: github.repository == 'miku05231/DSH-Fatwhale-QQ'
     needs: linux-compatibility
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: write
     env:
