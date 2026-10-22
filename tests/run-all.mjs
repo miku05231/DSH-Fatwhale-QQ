@@ -231,6 +231,12 @@ const SUITE = [
     expect: ['失败 0 项'],
     timeoutMs: 900_000,
     note: '临时目录真实解包、保留用户数据、拒绝危险路径、失败回滚，不启动真实服务',
+    groups: [
+      { name: '应用更新（安装 1/4）', args: ['--group', '1'] },
+      { name: '应用更新（安装 2/4）', args: ['--group', '2'] },
+      { name: '应用更新（安装 3/4）', args: ['--group', '3'] },
+      { name: '应用更新（安装 4/4）', args: ['--group', '4'] },
+    ],
   },
   {
     name: '应用更新（控制台界面）',
@@ -414,6 +420,9 @@ async function main() {
   let list = SUITE;
   if (only) list = list.filter((t) => t.name.toLowerCase().includes(only) || t.file.toLowerCase().includes(only));
   if (skipNet) list = list.filter((t) => !t.network);
+  list = list.flatMap((item) => item.groups
+    ? item.groups.map((group) => ({ ...item, name: group.name, args: group.args }))
+    : [item]);
 
   if (list.length === 0) {
     console.error('没有匹配的测试');
@@ -426,7 +435,7 @@ async function main() {
   const results = [];
   for (const item of list) {
     process.stdout.write(`▶ ${item.name} … `);
-    const result = await runTestCase(ROOT, item.file, item.timeoutMs);
+    const result = await runTestCase(ROOT, item.file, item.timeoutMs, { args: item.args ?? [] });
     const combined = `${result.stdout}\n${result.stderr}`;
     const record = testCaseRecord(item, result);
     const { pass, missing } = record;

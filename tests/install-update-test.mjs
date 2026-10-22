@@ -14,8 +14,22 @@ const TEMP = fs.mkdtempSync(path.join(os.tmpdir(), "qq-update-中文 space's-"))
 const TEMP_PARENT = fs.realpathSync.native(path.dirname(TEMP));
 const onlyIndex = process.argv.indexOf('--only');
 const only = onlyIndex < 0 ? '' : String(process.argv[onlyIndex + 1] ?? '');
+const groupIndex = process.argv.indexOf('--group');
+const group = groupIndex < 0 ? '' : String(process.argv[groupIndex + 1] ?? '');
+const GROUPS = {
+  '1': { start: 1, end: 15 },
+  '2': { start: 16, end: 30 },
+  '3': { start: 31, end: 45 },
+  '4': { start: 46, end: 60 },
+};
+if (group && !Object.hasOwn(GROUPS, group)) {
+  console.error(`Unknown installer test group: ${group}`);
+  process.exit(2);
+}
 let passed = 0;
 let failed = 0;
+let registered = 0;
+let selected = 0;
 
 function cleanupTempDirectory(root, expectedParent) {
   const entry = fs.lstatSync(root);
@@ -256,6 +270,9 @@ function unchanged(f) {
 
 function test(name, callback) {
   if (only && !name.includes(only)) return;
+  registered += 1;
+  if (group && (registered < GROUPS[group].start || registered > GROUPS[group].end)) return;
+  selected += 1;
   try { callback(); passed++; console.log(`PASS ${name}`); }
   catch (error) { failed++; console.error(`FAIL ${name}: ${error.stack ?? error}`); }
 }
@@ -845,6 +862,14 @@ if (process.platform !== 'win32') {
   }
 }
 
+if (group && selected !== GROUPS[group].end - GROUPS[group].start + 1) {
+  console.error(`Installer test group ${group} selected ${selected} cases, expected ${GROUPS[group].end - GROUPS[group].start + 1}.`);
+  failed += 1;
+}
+if (!group && !only && registered !== 60) {
+  console.error(`Installer suite registered ${registered} cases, expected 60.`);
+  failed += 1;
+}
 console.log(`\nPortable installer: ${passed} passed, ${failed} failed.`);
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);
 if (failed) process.exitCode = 1;

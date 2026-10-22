@@ -5,14 +5,14 @@ import path from 'node:path';
 import { killProcessTree } from '../../src/dsh.js';
 import { browserRuntimeEnv, isolatedEnv, prepareIsolatedHome } from './isolated-fixtures.mjs';
 
-export async function runTestCase(root, file, timeoutMs, { remove = rm } = {}) {
+export async function runTestCase(root, file, timeoutMs, { remove = rm, args = [] } = {}) {
   const isolatedRoot = await mkdtemp(path.join(os.tmpdir(), 'qq-suite-case-'));
   const started = Date.now();
   let result;
   try {
     await prepareIsolatedHome(isolatedRoot);
     result = await new Promise((resolve) => {
-      const child = spawn(process.execPath, [path.join(root, file)], {
+      const child = spawn(process.execPath, [path.join(root, file), ...args], {
         cwd: root,
         windowsHide: true,
         env: (['tests/dsh-web-test.mjs', 'tests/ui-cdp.mjs', 'tests/updates-ui.mjs'].includes(file)
