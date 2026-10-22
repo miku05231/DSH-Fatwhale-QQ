@@ -110,23 +110,37 @@ async function captured(file) {
   return (await fs.readFile(file, 'utf8')).split('\n').map((line) => Buffer.from(line, 'base64').toString('utf8'));
 }
 
-async function waitForFile(file) {
-  const deadline = Date.now() + 10_000;
+async function waitForFile(file, { timeout = 10_000, errorFile, diagnostics } = {}) {
+  async function fail(message) {
+    let details = '';
+    if (diagnostics) {
+      try { details = await diagnostics(); }
+      catch (error) { details = `Fixture diagnostics failed: ${error.stack ?? error}`; }
+    }
+    throw new Error(`${message}${details ? `\n${details}` : ''}`);
+  }
+  const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
+    if (errorFile) {
+      let fixtureError;
+      try { fixtureError = await fs.readFile(errorFile, 'utf8'); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (fixtureError !== undefined) return fail(`Fixture failed before writing ${file}:\n${fixtureError}`);
+    }
     try {
       await fs.access(file);
       return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`Fixture did not write ${file}`);
+  return fail(`Fixture did not write ${file} within ${timeout}ms`);
 }
 
 async function waitForFixtureProcesses(directory) {
   if (!(await fs.readdir(directory)).length) return;
   await successful(PS, ['-NoProfile', '-NonInteractive', '-Command', `
 $ErrorActionPreference = 'Stop'
+$fixtureFailures = @()
 foreach ($fixtureFile in [IO.Directory]::GetFiles(${psQuote(directory)}, '*.txt')) {
   $fixtureId = [int][IO.Path]::GetFileNameWithoutExtension($fixtureFile)
   $fixtureStart = [long][IO.File]::ReadAllText($fixtureFile)
@@ -139,12 +153,39 @@ foreach ($fixtureFile in [IO.Directory]::GetFiles(${psQuote(directory)}, '*.txt'
       throw
     }
     if ($actualStart -eq $fixtureStart -and -not $fixtureProcess.WaitForExit(10000)) {
-      throw 'An isolated fixture process did not exit.'
+      try { $fixtureProcess.Kill() }
+      catch [InvalidOperationException] { if (-not $fixtureProcess.HasExited) { throw } }
+      if (-not $fixtureProcess.WaitForExit(5000)) {
+        $fixtureFailures += ('An isolated fixture process could not be stopped: ' + $fixtureId)
+      } else {
+        $fixtureFailures += ('An isolated fixture process did not exit and was stopped: ' + $fixtureId)
+      }
     }
   } finally { $fixtureProcess.Dispose() }
 }
+if ($fixtureFailures.Count -gt 0) { throw ($fixtureFailures -join [Environment]::NewLine) }
 exit 0
 `]);
+}
+
+async function fixtureDiagnostics(files, directory, bootstrapResult) {
+  const contents = await Promise.all(files.map(async (file) => {
+    try { return `${file}:\n${await fs.readFile(file, 'utf8')}`; }
+    catch (error) { return `${file}: ${error.code ?? error.message}`; }
+  }));
+  const processes = await Promise.all((await fs.readdir(directory)).map(async (name) => {
+    const pid = Number(path.parse(name).name);
+    let status = 'PID exists';
+    try { process.kill(pid, 0); }
+    catch (error) { status = error.code === 'ESRCH' ? 'PID has exited' : `PID query failed: ${error.code}`; }
+    return `${name}: start ticks=${(await fs.readFile(path.join(directory, name), 'utf8')).trim()}, ${status}`;
+  }));
+  return [
+    `Bootstrap stdout:\n${bootstrapResult.stdout}`,
+    `Bootstrap stderr:\n${bootstrapResult.stderr}`,
+    ...contents,
+    `Registered fixture processes:\n${processes.join('\n') || '(none)'}`,
+  ].join('\n');
 }
 
 async function main() {
@@ -366,28 +407,51 @@ function Get-CimInstance {
   }
   throw ('Unexpected process query: ' + $Filter)
 }
+function Start-Process {
+  [CmdletBinding()]
+  param([string]$FilePath, [string[]]$ArgumentList, [string]$WindowStyle)
+  $fixtureChild = Microsoft.PowerShell.Management\\Start-Process @PSBoundParameters -PassThru
+  try {
+    $fixtureStart = $fixtureChild.StartTime.ToUniversalTime().Ticks.ToString()
+    [IO.File]::WriteAllText((Join-Path $env:QQ_EXE_TEST_PROCESSES ($fixtureChild.Id.ToString() + '.txt')),
+      $fixtureStart)
+    $fixtureLaunch = [pscustomobject]@{ pid = $fixtureChild.Id; startTicks = $fixtureStart; file = $FilePath; arguments = $ArgumentList }
+    [IO.File]::WriteAllText($env:QQ_EXE_TEST_TRAY_STARTED, ($fixtureLaunch | ConvertTo-Json -Compress))
+  } finally { $fixtureChild.Dispose() }
+}
 `, 'utf8');
     const trayFixture = path.join(app, 'launcher', 'Launcher.ps1');
     const trayCapture = path.join(temporary, 'tray.json');
+    const trayStarted = path.join(temporary, 'tray-started.json');
+    const trayError = path.join(temporary, 'tray-error.txt');
     await fs.writeFile(trayFixture, `
 $ErrorActionPreference = 'Stop'
-$fixtureProcess = [Diagnostics.Process]::GetCurrentProcess()
 try {
-  [IO.File]::WriteAllText((Join-Path $env:QQ_EXE_TEST_PROCESSES ($PID.ToString() + '.txt')),
-    $fixtureProcess.StartTime.ToUniversalTime().Ticks.ToString())
-} finally { $fixtureProcess.Dispose() }
-$data = [pscustomobject]@{
-  script = $PSCommandPath
-  cwd = [Environment]::CurrentDirectory
-  apartment = [Threading.Thread]::CurrentThread.ApartmentState.ToString()
-  arguments = @($args)
+  $data = [pscustomobject]@{
+    script = $PSCommandPath
+    cwd = [Environment]::CurrentDirectory
+    apartment = [Threading.Thread]::CurrentThread.ApartmentState.ToString()
+    arguments = @($args)
+  }
+  $capture = $env:QQ_EXE_TEST_TRAY_CAPTURE
+  [IO.File]::WriteAllText(($capture + '.tmp'), ($data | ConvertTo-Json -Compress))
+  [IO.File]::Move(($capture + '.tmp'), $capture)
+} catch {
+  [IO.File]::WriteAllText($env:QQ_EXE_TEST_TRAY_ERROR, ($_ | Out-String))
+  exit 1
 }
-$capture = $env:QQ_EXE_TEST_TRAY_CAPTURE
-[IO.File]::WriteAllText(($capture + '.tmp'), ($data | ConvertTo-Json -Compress))
-[IO.File]::Move(($capture + '.tmp'), $capture)
 `, 'utf8');
-    await successful(exe, [], { env: { ...desktopEnv, QQ_EXE_TEST_TRAY_CAPTURE: trayCapture } });
-    await waitForFile(trayCapture);
+    const realBootstrap = await successful(exe, [], { env: {
+      ...desktopEnv, QQ_EXE_TEST_TRAY_CAPTURE: trayCapture,
+      QQ_EXE_TEST_TRAY_STARTED: trayStarted, QQ_EXE_TEST_TRAY_ERROR: trayError,
+    } });
+    await waitForFile(trayCapture, {
+      timeout: 60_000,
+      errorFile: trayError,
+      diagnostics: () => fixtureDiagnostics([
+        trayStarted, trayError, trayCapture, `${trayCapture}.tmp`, path.join(app, 'state', 'launcher.log'),
+      ], fixtureProcesses, realBootstrap),
+    });
     await waitForFixtureProcesses(fixtureProcesses);
     const trayData = JSON.parse(await fs.readFile(trayCapture, 'utf8'));
     check('The real bootstrap launches its tray script from a path with spaces, Unicode and an apostrophe', () => {
