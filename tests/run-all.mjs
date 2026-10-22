@@ -94,6 +94,26 @@ const SUITE = [
     note: 'GroupMemory 追加/裁剪/损坏行容错',
   },
   {
+    name: 'JEV 群聊判定', file: 'tests/jev-classifier-test.mjs', expect: ['fail 0', 'skipped 0'], timeoutMs: 60_000,
+    note: '受限上下文、JSON 判定、失败关闭与凭据错误脱敏',
+  },
+  ...[
+    ['回复语音 provider', 'reply-tts-test', '通过'],
+    ['文字与语音发送顺序', 'reply-delivery-test', '通过'],
+    ['B站平台适配器', 'bilibili-test', 'Passed: Bilibili'],
+    ['B站浏览器登录态提取', 'bili-cookies-test', 'fail 0'],
+    ['B站扫码登录', 'bilibili-login-test', 'fail 0'],
+    ['B站扫码登录完整链路', 'bilibili-login-integration-test', 'fail 0'],
+    ['平台调度与发布审计', 'platform-scheduler-test', 'fail 0'],
+    ['平台无工具模型', 'platform-model-test', 'fail 0'],
+    ['平台控制台接口', 'platform-webui-test', 'fail 0'],
+    ['平台与语音端到端', 'e2e-platform-voice', 'fail 0'],
+    ['JEV 实际消息准入', 'jev-admission-test', 'fail 0'],
+  ].map(([name, file, expected]) => ({
+    name, file: `tests/${file}.mjs`, expect: [expected], timeoutMs: 120_000,
+    note: '临时配置、模拟账号与模型，不连接真实平台或发布',
+  })),
+  {
     name: '模型跟随',
     file: 'tests/model-follow-test.mjs',
     expect: ['通过'],

@@ -24,6 +24,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 
 import { createFakeNapCat } from './ws-harness.mjs';
@@ -90,6 +91,14 @@ async function startBridge({ allowGroupMembers, wakeWordMatch }) {
 
   const napcat = createFakeNapCat();
   const port = await napcat.listen(0);
+  let classifierCalls = 0;
+  const classifier = http.createServer((req, res) => {
+    classifierCalls++;
+    req.resume();
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: '{"should_reply":false}' } }] }));
+  });
+  await new Promise((resolve) => classifier.listen(0, '127.0.0.1', resolve));
 
   const configPath = path.join(tmpRoot, 'config.json');
   await fsp.writeFile(
@@ -114,6 +123,7 @@ async function startBridge({ allowGroupMembers, wakeWordMatch }) {
         wakeWordMatch,
         groupContextCount: 5,
       },
+      jev: { baseUrl: `http://127.0.0.1:${classifier.address().port}`, token: 'synthetic-member-classifier', model: 'fixture', timeoutMs: 8000 },
       logDir,
       stateDir,
       memory: { enabled: false },
@@ -148,6 +158,7 @@ async function startBridge({ allowGroupMembers, wakeWordMatch }) {
   return {
     napcat,
     readStatus,
+    classifierCalls: () => classifierCalls,
     /** 发一条群消息，返回这一批新产生的群回复（过滤心跳） */
     async sendGroup({ groupId = GROUP, userId, text, atSelf = false, messageId }) {
       const from = napcat.state.calls.length;
@@ -165,6 +176,7 @@ async function startBridge({ allowGroupMembers, wakeWordMatch }) {
     async stop() {
       if (exitCode === null) await killTree(child.pid);
       await napcat.close();
+      await new Promise((resolve) => classifier.close(resolve));
       const tail = childOut.join('');
       await fsp.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
       return tail;
@@ -189,6 +201,8 @@ async function main() {
     replies = await bridge.sendGroup({ userId: MEMBER, text: '在吗', atSelf: true, messageId: 202 });
     if (replies.length === 0) ok('群友 @ 我 → 不回（旧配置下白名单优先）');
     else bad('旧配置下 @ 也不该回', String(replies[0].params.message).slice(0, 60));
+    if (bridge.classifierCalls() === 0) ok('用户准入拒绝优先，不调用判定模型');
+    else bad('未准入的群友触发了判定模型');
   } finally {
     await bridge.stop();
   }
@@ -211,7 +225,7 @@ async function main() {
     if (replies.length === 0) ok('没喊也没 @，只是闲聊 → 不回（不刷屏）');
     else bad('闲聊被搭话了', String(replies[0].params.message).slice(0, 60));
     const status = bridge.readStatus();
-    if (String(status?.lastDrop ?? '').includes('唤醒词')) ok('闲聊被忽略的原因可查', status.lastDrop);
+    if (String(status?.lastDrop ?? '').includes('对话判定未通过（model_not_eligible）') && bridge.classifierCalls() === 1) ok('闲聊经过模型判定后拒答，原因可查', status.lastDrop);
     else bad('闲聊忽略原因不对', JSON.stringify(status?.lastDrop ?? null));
 
     replies = await bridge.sendGroup({ userId: MEMBER, text: '在吗', atSelf: true, messageId: 304 });

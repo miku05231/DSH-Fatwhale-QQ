@@ -9,11 +9,15 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { meta as replyTtsMeta } from '../src/plugins/reply-tts.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const FEATURES_ONLY = process.argv.includes('--features-only');
+if (process.argv.slice(2).some((arg) => arg !== '--features-only')) throw new Error('Only --features-only is supported.');
+const VERSION = JSON.parse(await readFile(path.join(ROOT, 'package.json'), 'utf8')).version;
 const PUBLIC = path.join(ROOT, 'src', 'webui', 'public');
 const SHOTS = path.join(ROOT, 'docs', 'screenshots');
-const REPORT = path.join(ROOT, 'state', 'showcase-validation.json');
+const REPORT = path.join(ROOT, 'state', FEATURES_ONLY ? 'features-showcase-validation.json' : 'showcase-validation.json');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const now = new Date();
 const ago = (minutes) => new Date(now.getTime() - minutes * 60_000).toISOString();
@@ -80,7 +84,7 @@ function demoData(url) {
   switch (url.pathname) {
     case '/api/overview':
       return {
-        version: '0.1.0',
+        version: VERSION,
         now: now.toISOString(),
         uptimeSeconds: 9440,
         ports: { onebot: 3001, napcatWebui: 6099, webui: 5830 },
@@ -141,6 +145,10 @@ function demoData(url) {
         failures: [],
         plugins: [
           {
+            ...replyTtsMeta, enabled: false, hooks: ['afterReply'],
+            config: Object.fromEntries(replyTtsMeta.configSchema.map((field) => [field.key, field.default])),
+          },
+          {
             name: 'hello', displayName: '问候', version: '1.0.0',
             description: '用简单的问候开始一段对话', enabled: true, hooks: ['onMessage'],
             config: {}, configSchema: [],
@@ -160,11 +168,32 @@ function demoData(url) {
       };
     case '/api/settings':
       return {
-        behavior: { showErrors: false, groupContextCount: 20, wakeWord: '大肥鱼', wakeWordMatch: 'prefix' },
+        behavior: { showErrors: false, groupContextCount: 20, wakeWord: '', wakeWordMatch: 'prefix', sessionWindowMinutes: 180 },
+        dsh: { cwd: 'qq-workspace' },
+        jev: { baseUrl: 'https://api.example.com/v1', model: 'jev-chat', hasToken: true, timeoutMs: 8000, contextMessages: 12 },
         security: {
+          adminUserIds: [100000001],
           allowGroupMembers: true, allowGroups: true, privatePolicy: 'allowlist',
           allowFrom: [100000001], denyFrom: [], allowGroupIds: [200000001], denyGroupIds: [],
         },
+      };
+    case '/api/automation/bilibili':
+      return {
+        config: {
+          enabled: false, cron: '0 9,18 * * *', keywords: ['人工智能', '开源项目'],
+          upUsers: ['100000001'], targets: ['g:200000001'], mentionUid: '100000002',
+          commentEnabled: false, commentApproved: false,
+        },
+        cookieAvailable: true, nextRunAt: null, busy: false, blockedReason: '', todayComments: 0,
+        commentPublicationAvailable: true, commentPublicationStatus: '自动评论已关闭', audit: [],
+        lastRun: { status: 'ok', at: ago(20), found: 12, published: 0 },
+        automationToken: '0'.repeat(64),
+      };
+    case '/api/updates':
+      return {
+        currentVersion: VERSION, latestVersion: VERSION, phase: 'idle', automatic: false,
+        checkedAt: ago(5), available: false, releaseUrl: '', releaseNotes: '',
+        canInstall: false, installReason: '', progress: null, error: '',
       };
     case '/api/autostart':
       return { available: true, enabled: false };
@@ -386,7 +415,8 @@ async function main() {
       persona: 'document.querySelectorAll("#personaList .persona-row").length === 3 && document.querySelector("#personaBody").value.length > 100',
       sessions: 'document.querySelectorAll("#sessionList .session").length === 6',
       model: 'document.querySelector("#modelCurrent").textContent === "deepseek/deepseek-chat"',
-      plugins: 'document.querySelectorAll("#pluginsList .plugin-card").length === 2',
+      plugins: 'document.querySelectorAll("#pluginsList .plugin-card").length === 3',
+      automation: 'document.querySelector("#biliCron").value === "0 9,18 * * *"',
       system: 'document.querySelectorAll("#systemInfo dt").length >= 13 && document.querySelector("#setWorkspaceCwd").value.length > 0',
     };
     const navigate = async (page) => {
@@ -434,28 +464,43 @@ async function main() {
 
     await cdp.send('Page.navigate', { url: `${origin}/#overview` });
     await waitFor(async () => await evaluate(readyChecks.overview), 'overview data');
-    await viewport(1280, 900);
-    await screenshot('console-overview-light');
-    await viewport(1280, 900, 'dark');
-    await screenshot('console-overview-dark');
-    await viewport(1280, 1360);
-    await navigate('memory');
-    await click('#memoryQuick [data-q="群聊"]');
-    await waitFor(async () => await evaluate('document.querySelectorAll("#memoryResults .hit").length === 2'), 'memory search results');
-    await screenshot('console-memory');
-    await viewport(1280, 1100);
-    await navigate('persona');
-    await screenshot('console-personas');
-    await viewport(1280, 900);
-    await navigate('model');
-    await screenshot('console-model');
-    await viewport(390, 844);
-    await navigate('overview');
-    await screenshot('console-mobile');
+    if (!FEATURES_ONLY) {
+      await viewport(1280, 900);
+      await screenshot('console-overview-light');
+      await viewport(1280, 900, 'dark');
+      await screenshot('console-overview-dark');
+      await viewport(1280, 1360);
+      await navigate('memory');
+      await click('#memoryQuick [data-q="群聊"]');
+      await waitFor(async () => await evaluate('document.querySelectorAll("#memoryResults .hit").length === 2'), 'memory search results');
+      await screenshot('console-memory');
+      await viewport(1280, 1100);
+      await navigate('persona');
+      await screenshot('console-personas');
+      await viewport(1280, 900);
+      await navigate('model');
+      await screenshot('console-model');
+      await viewport(390, 844);
+      await navigate('overview');
+      await screenshot('console-mobile');
+    }
 
-    for (const width of [375, 390, 768, 1440]) {
+    await viewport(1280, 1100);
+    await navigate('system');
+    await evaluate('document.querySelector("#jevBaseUrl").closest(".card").scrollIntoView(); window.scrollBy(0, -100)');
+    await screenshot('console-jev-settings');
+    await navigate('plugins');
+    await evaluate('window.scrollTo(0, 0)');
+    await screenshot('console-reply-tts');
+    await navigate('automation');
+    await evaluate('window.scrollTo(0, 0)');
+    await screenshot('console-bilibili-automation');
+    await evaluate('document.querySelector("#biliMentionUid").scrollIntoView({ block: "center" })');
+    await screenshot('console-bilibili-safeguards');
+
+    for (const width of FEATURES_ONLY ? [375, 768, 1440] : [375, 390, 768, 1440]) {
       await viewport(width, width < 600 ? 844 : 900);
-      for (const page of Object.keys(readyChecks)) {
+      for (const page of FEATURES_ONLY ? ['system', 'plugins', 'automation'] : Object.keys(readyChecks)) {
         await navigate(page);
         await layout(page, width);
       }
@@ -468,7 +513,7 @@ async function main() {
     await writeFile(REPORT, `${JSON.stringify(result, null, 2)}\n`);
     console.log(`Captured ${result.screenshots.length} screenshots: docs/screenshots/console-*.png`);
     console.log(`Checked ${result.layouts.length} page/viewport layouts; JS errors ${result.errors.length}; failed requests ${result.failedRequests.length}; layout issues ${result.layoutIssues.length}.`);
-    console.log('Validation: state/showcase-validation.json');
+    console.log(`Validation: ${path.relative(ROOT, REPORT).replaceAll('\\', '/')}`);
     if (!result.passed) process.exitCode = 1;
   } finally {
     if (cdp) {

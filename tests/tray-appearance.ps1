@@ -445,6 +445,36 @@ function Get-BridgeProcess { [pscustomobject]@{ Running = $true; ProcessId = 103
         param([string]$Message, [string]$Level)
         $script:ProbeErrors.Add($Message)
     }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+
+public static class QQTrayFixtureFocus {
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint source, uint target, bool attach);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
+
+    public static bool Activate(IntPtr window) {
+        uint owner;
+        GetWindowThreadProcessId(window, out owner);
+        if (owner != (uint)Process.GetCurrentProcess().Id) return false;
+        uint ignored;
+        uint foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out ignored);
+        uint currentThread = GetCurrentThreadId();
+        bool attached = false;
+        try {
+            if (foregroundThread != 0 && foregroundThread != currentThread)
+                attached = AttachThreadInput(currentThread, foregroundThread, true);
+            return SetForegroundWindow(window);
+        } finally {
+            if (attached) AttachThreadInput(currentThread, foregroundThread, false);
+        }
+    }
+}
+'@
     function Set-FixtureForeground {
         param([System.Windows.Forms.Form]$Form)
 
@@ -453,6 +483,7 @@ function Get-BridgeProcess { [pscustomobject]@{ Running = $true; ProcessId = 103
         do {
             $Form.BringToFront()
             $Form.Activate()
+            [void][QQTrayFixtureFocus]::Activate($Form.Handle)
             [System.Windows.Forms.Application]::DoEvents()
             $current = $foregroundMethod.Invoke($null, @())
             if ($current -eq $Form.Handle) { return $true }

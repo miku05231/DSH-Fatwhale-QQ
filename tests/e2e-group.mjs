@@ -5,17 +5,18 @@
 //   4. 记忆落盘在 state/groupmem/<群号>.jsonl，格式正确
 //
 // 用法：node tests/e2e-group.mjs
-//       需要本机 dsh 可用、网络能到模型服务；只有第 3 步会真的调模型。
+//       固定真实 DSH + 本机合成模型，不读取真实账号、模型补丁或工作区。
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { createFakeNapCat } from './ws-harness.mjs';
+import { createLocalDshFixture } from './helpers/isolated-fixtures.mjs';
+import { killProcessTree } from '../src/dsh.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(HERE, '..');
@@ -37,6 +38,12 @@ const bad = (n, d = '') => {
   console.log(`  ✘ ${n}${d ? `  — ${d}` : ''}`);
 };
 const section = (t) => console.log(`\n[${t}]`);
+const MODEL_REPLY = '晚饭吃面，来自隔离群聊模型。';
+const requestText = (body) => JSON.stringify(body.messages ?? []);
+const isClassification = (body) => requestText(body).includes('should_reply') && requestText(body).includes('current_message');
+const isSessionTitle = (body) => requestText(body).includes('Generate the session title from this JSON array of human messages:');
+const messageText = (message) => typeof message === 'string' ? message
+  : (Array.isArray(message) ? message.filter(item => item.type === 'text').map(item => item.data?.text ?? '').join('') : '');
 
 async function waitFor(predicate, { timeout = 120000, interval = 200, label = '条件' } = {}) {
   const deadline = Date.now() + timeout;
@@ -48,7 +55,11 @@ async function waitFor(predicate, { timeout = 120000, interval = 200, label = '�
   throw new Error(`等待超时（${timeout}ms）：${label}`);
 }
 
-const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'qqbridge-group-'));
+const fixture = await createLocalDshFixture({
+  prefix: 'qqbridge-group-',
+  reply: body => isClassification(body) ? '{"should_reply":false}' : isSessionTitle(body) ? '隔离群聊晚饭' : MODEL_REPLY,
+});
+const tmpRoot = fixture.root;
 const stateDir = path.join(tmpRoot, 'state');
 const logDir = path.join(tmpRoot, 'logs');
 await fsp.mkdir(stateDir, { recursive: true });
@@ -57,12 +68,12 @@ await fsp.mkdir(logDir, { recursive: true });
 const config = {
   onebot: { url: '', accessToken: '' },
   dsh: {
-    command: 'dsh',
+    command: fixture.command,
     mode: 'headless',
     companion: false,
     profile: 'headless',
-    patchPath: path.join(PROJECT_ROOT, 'patches', 'headless-model.yml'),
-    cwd: path.join(PROJECT_ROOT, 'qq-workspace'),
+    patchPath: fixture.patchPath,
+    cwd: fixture.workspace,
     timeoutMs: 300000,
     permissionMode: 'danger-full-access',
   },
@@ -77,12 +88,16 @@ const config = {
   },
   groupMemory: { limit: 300 },
   behavior: {
-    queuedNotice: '收到，正在处理…',
+    queuedNotice: '',
     maxReplyChunk: 1200,
-    showErrors: true,
+    showErrors: false,
     wakeWord: '',
     groupContextCount: 40,
   },
+  persona: { enabled: false },
+  memory: { enabled: false },
+  stickers: { enabled: false },
+  jev: { timeoutMs: 30000 },
   logDir: 'logs',
   stateDir: 'state',
 };
@@ -100,6 +115,7 @@ function startBridge() {
     cwd: PROJECT_ROOT,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: fixture.env,
   });
   bridge.stderr.setEncoding('utf8');
   bridge.stderr.on('data', (c) => process.stderr.write(c));
@@ -145,6 +161,24 @@ try {
   await new Promise((r) => setTimeout(r, 1500));
   if (replyCount() === before1) ok('没有回复（未 @ 机器人）');
   else bad('竟然回复了', `${replyCount() - before1} 条`);
+  if (fixture.requests.length === 0) ok('非准入群成员未调用分类或回复模型');
+  else bad('非准入群成员触发了模型请求');
+
+  napcat.sendGroupMessage({
+    groupId: TARGET_GROUP, userId: OWNER, text: '今天晚饭吃什么', selfId: BOT,
+    messageId: 204, nickname: '主人',
+  });
+  await waitFor(() => fixture.requests.some(isClassification), { timeout: 30000, label: '当前 DSH 模型完成普通群聊分类' });
+  const statusPath = path.join(stateDir, 'status.json');
+  await waitFor(() => {
+    try { return JSON.parse(fs.readFileSync(statusPath, 'utf8')).lastDrop?.includes('model_not_eligible'); }
+    catch { return false; }
+  }, { timeout: 15000, label: '普通群聊分类拒答结果' });
+  const classifications = fixture.requests.filter(isClassification);
+  if (classifications.length === 1 && fixture.requests.length === 1 && replyCount() === before1) ok('准入成员普通聊天仅分类一次并保持静默');
+  else bad('普通群聊分类次数或静默行为不正确');
+  if (classifications[0]?.model === 'test-chat' && !(classifications[0]?.tools?.length)) ok('默认分类使用当前模型且未提供工具');
+  else bad('默认分类模型或工具边界不正确');
 
   section('2/4 别的群 @ 机器人 → 完全不理会');
   const before2 = replyCount();
@@ -162,6 +196,8 @@ try {
   else bad('别的群被回复了', `${replyCount() - before2} 条`);
   if (!fs.existsSync(memFile.replace(String(TARGET_GROUP), String(WRONG_GROUP)))) ok('别的群没有被记录');
   else bad('别的群竟然被记录了');
+  if (fixture.requests.length === 1) ok('未准入群不会调用分类或回复模型');
+  else bad('未准入群触发了模型请求');
 
   section('3/4 白名单成员在目标群 @ 机器人 → 回复');
   const msgsBefore = readMem().length;
@@ -174,9 +210,22 @@ try {
     nickname: '主人',
     atSelf: true,
   });
-  await waitFor(() => replyCount() > before2, { timeout: 300000, label: '群回复' });
+  await waitFor(() => napcat.state.calls.some(c => c.action === 'send_group_msg' && messageText(c.params?.message) === MODEL_REPLY), { timeout: 60000, label: '群聊本机模型确定回复' });
   const reply = napcat.state.calls.filter((c) => String(c.action).includes('send_')).at(-1);
-  ok('收到了群回复', JSON.stringify(reply?.params?.message ?? '').slice(0, 80));
+  if (messageText(reply?.params?.message) === MODEL_REPLY) ok('收到了本机真实 DSH 模型的确定回复');
+  else bad('群聊回复并非预期模型文本');
+  await waitFor(() => fixture.requests.some(isSessionTitle), { timeout: 15000, label: 'DSH 内核生成会话标题' });
+  const conversations = fixture.requests.filter(body => !isClassification(body) && !isSessionTitle(body));
+  const titles = fixture.requests.filter(isSessionTitle);
+  if (conversations.length === 1 && fixture.requests.filter(isClassification).length === 1
+      && titles.length === 1 && fixture.requests.length === 3) ok('明确 @ 绕过分类，仅调用一次回复和一次内核标题模型');
+  else bad('明确 @ 的模型调用类型或次数不正确', JSON.stringify(fixture.requests.map(body => ({
+    model: body.model, classification: isClassification(body), title: isSessionTitle(body), tools: body.tools?.length ?? 0,
+    roles: body.messages?.map(message => message.role),
+    lastMessage: JSON.stringify(body.messages?.at(-1)).slice(0, 500),
+  }))));
+  if (conversations[0]?.model === 'test-chat' && requestText(conversations[0]).includes('今天晚饭吃什么')) ok('真实回复模型收到前面的群聊上下文');
+  else bad('真实回复模型没有收到群聊上下文');
 
   section('4/4 记忆格式与内容');
   await waitFor(() => readMem().length >= msgsBefore + 1, { timeout: 15000, label: '记忆追加' });
@@ -191,22 +240,19 @@ try {
   } else {
     bad('字段不对', JSON.stringify(rec));
   }
-  const ownerRec = mem.find((r) => String(r.userId) === String(OWNER));
+  const ownerRec = mem.find((r) => String(r.userId) === String(OWNER) && r.text?.includes('刚才大家说晚饭'));
   if (ownerRec) ok('@ 的那条也记下了', JSON.stringify(ownerRec).slice(0, 100));
   else bad('@ 的那条没记下');
 } catch (err) {
   bad('异常', String(err?.message ?? err));
 } finally {
-  try {
-    bridge?.kill();
-  } catch {}
-  try {
-    napcat.close();
-  } catch {}
-  await new Promise((r) => setTimeout(r, 500));
-  try {
-    await fsp.rm(tmpRoot, { recursive: true, force: true });
-  } catch {}
+  if (bridge && bridge.exitCode === null && bridge.signalCode === null) {
+    const closed = new Promise(resolve => bridge.once('close', resolve));
+    killProcessTree(bridge);
+    await closed;
+  }
+  await napcat.close();
+  await fixture.close();
 }
 
 console.log(`\n${'='.repeat(56)}`);

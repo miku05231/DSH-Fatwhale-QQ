@@ -353,7 +353,7 @@
         <p class="card__hint" id="personaPathHint">—</p>
         <label class="field-label" for="setMemoryRoot">记忆库根目录</label>
         <input class="text-field" type="text" id="setMemoryRoot" placeholder="D:\memory\你的机器人" />
-        <p class="card__hint" id="memoryRootHint">—</p>
+        <p class="card__hint" id="memoryPathHint">—</p>
         <label class="field-label" for="setWorkspaceCwd">工作区（DSH 的 cwd）</label>
         <input class="text-field" type="text" id="setWorkspaceCwd" placeholder="D:\workspace" />
         <p class="card__hint" id="workspaceCwdHint">—</p>
@@ -398,6 +398,20 @@
       </section>
       <section class="card card--pad">
         <h2 class="card__title">行为设置</h2>
+        <p class="card__hint">允许群聊成员时，无 @/唤醒词的消息会先判断是否在与机器人对话。配置 JEV URL 和 Token 时使用 JEV，否则使用当前默认模型。判断会使用本群最近消息和机器人回答。</p>
+        <label class="field-label" for="jevBaseUrl">JEV Base URL</label>
+        <input class="text-field" type="url" id="jevBaseUrl" placeholder="https://api.example.com/v1" autocomplete="url" />
+        <label class="field-label" for="jevModel">JEV 模型</label>
+        <input class="text-field" type="text" id="jevModel" placeholder="jev-model" autocomplete="off" />
+        <label class="field-label" for="jevToken">JEV Token</label>
+        <input class="text-field" type="password" id="jevToken" placeholder="留空保留已保存的 Token" autocomplete="new-password" />
+        <p class="card__hint" id="jevTokenHint">Token 不会回显到页面或日志。</p>
+        <div class="row-end">
+          <label class="field-label" for="jevTimeout">超时（毫秒）</label>
+          <input class="text-field text-field--num" type="number" id="jevTimeout" min="1" max="60000" step="1" value="8000" />
+          <label class="field-label" for="jevContext">上下文消息数</label>
+          <input class="text-field text-field--num" type="number" id="jevContext" min="1" max="100" step="1" value="12" />
+        </div>
         <label class="switch-row">
           <span class="switch-row__text">在群里显示错误信息</span>
           <input class="switch" type="checkbox" id="setShowErrors" />
@@ -426,6 +440,77 @@
         <div class="row-end">
           <button class="btn btn--filled ripple" type="button" id="settingsSave">保存设置</button>
         </div>
+      </section>
+    </section>
+
+    <!-- ------------------------- 平台自动化 ------------------------- -->
+    <section class="page" id="page-automation" data-page="automation" aria-label="平台自动化">
+      <section class="card card--pad">
+        <h2 class="card__title">网络平台自动化</h2>
+        <p class="card__hint" id="biliAutomationStatus" role="status">读取自动化状态中…</p>
+        <p class="card__hint" id="biliCommentStatus"></p>
+        <div class="bili-login">
+          <button class="btn btn--filled ripple" type="button" id="biliQrLogin" aria-controls="biliQrPanel" aria-expanded="false">
+            <svg class="icon icon--xs" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3V3zm2 2v3h3V5H5zm9-2h7v7h-7V3zm2 2v3h3V5h-3zM3 14h7v7H3v-7zm2 2v3h3v-3H5zm9-2h3v3h-3v-3zm4 0h3v7h-3v-3h-4v3h-2v-5h6v-2z"/></svg>
+            扫码登录 B站
+          </button>
+          <div class="bili-qr" id="biliQrPanel" hidden>
+            <img class="bili-qr__image" id="biliQrImage" width="240" height="240" alt="B站登录二维码" hidden />
+            <p class="bili-qr__status" id="biliQrStatus" role="status" aria-live="polite">正在获取二维码…</p>
+            <div class="row-end bili-qr__actions">
+              <button class="btn btn--tonal ripple" type="button" id="biliQrRefresh" title="刷新二维码">
+                <svg class="icon icon--xs" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+                刷新二维码
+              </button>
+              <button class="btn btn--text ripple" type="button" id="biliQrCancel">取消</button>
+            </div>
+          </div>
+          <details class="bili-login__backup" id="biliBrowserImport">
+            <summary>从浏览器导入（备选）</summary>
+            <label class="field-label" for="biliCookieBrowser">登录态来源</label>
+            <select class="select-field" id="biliCookieBrowser">
+              <option value="edge">Microsoft Edge</option>
+              <option value="chrome">Google Chrome</option>
+            </select>
+            <div class="row-end">
+              <button class="btn btn--text ripple" type="button" id="biliCookieImport">导入浏览器登录态</button>
+            </div>
+          </details>
+        </div>
+        <label class="switch-row">
+          <span class="switch-row__text">启用 B 站自动化</span>
+          <input class="switch" type="checkbox" id="biliEnabled" />
+        </label>
+        <label class="field-label" for="biliCron">Cron（5字段，本地时间）</label>
+        <input class="text-field" type="text" id="biliCron" placeholder="0 9 * * *" />
+        <label class="field-label" for="biliKeywords">搜索关键词（每行一个）</label>
+        <textarea class="text-field text-field--list" id="biliKeywords" rows="3"></textarea>
+        <label class="field-label" for="biliUpUsers">UP 主 UID（每行一个）</label>
+        <textarea class="text-field text-field--list" id="biliUpUsers" rows="3"></textarea>
+        <label class="field-label" for="biliTargets">QQ 推送目标（私聊填 QQ 号，群聊填 g:群号）</label>
+        <textarea class="text-field text-field--list" id="biliTargets" rows="2" placeholder="1000000002&#10;g:200000001"></textarea>
+        <label class="field-label" for="biliMentionUid">动态评论 @ 的 B站 UID</label>
+        <input class="text-field" type="text" id="biliMentionUid" inputmode="numeric" />
+        <label class="switch-row">
+          <span class="switch-row__text">允许自动发布动态评论并 @</span>
+          <input class="switch" type="checkbox" id="biliCommentEnabled" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-row__text">已完成小范围人工验收，允许实际发布评论</span>
+          <input class="switch" type="checkbox" id="biliCommentApproved" />
+        </label>
+        <p class="card__hint">每日最多 3 条，同一动态最多一次，间隔至少 30 分钟。</p>
+        <div class="row-end">
+          <button class="btn btn--tonal ripple" type="button" id="biliRunNow">立即检查</button>
+          <button class="btn btn--filled ripple" type="button" id="biliSave">保存自动化设置</button>
+        </div>
+      </section>
+      <section class="card card--pad">
+        <div class="row-between">
+          <h2 class="card__title">评论审计</h2>
+          <button class="btn btn--text ripple" type="button" id="biliRefresh">刷新状态</button>
+        </div>
+        <div class="stack" id="biliAudit"><p class="empty">暂无评论记录</p></div>
       </section>
     </section>
   </main>
@@ -464,6 +549,10 @@
     <button class="nav-item ripple" type="button" data-page="plugins">
       <span class="nav-item__pill"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v3.8h1.5a2.5 2.5 0 0 1 0 5H2V20a2 2 0 0 0 2 2h4.2v-1.5a2.5 2.5 0 0 1 5 0V22H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z"/></svg></span>
       <span class="nav-item__label">插件</span>
+    </button>
+    <button class="nav-item ripple" type="button" data-page="automation">
+      <span class="nav-item__pill"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8V2zm1 4v6l5 3 .9-1.5-4.1-2.5V6h-1.8zM19 2v4h4V4h-2.6l2.3-2.3L21.3 0 19 2z"/></svg></span>
+      <span class="nav-item__label">自动化</span>
     </button>
     <button class="nav-item ripple" type="button" data-page="system">
       <span class="nav-item__pill"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.8 7.8 0 0 0 .1-1 7.8 7.8 0 0 0-.1-1l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.5a.5.5 0 0 0-.6-.2l-2.5 1a7.3 7.3 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.5a.5.5 0 0 0 .1.6L4.5 11a7.8 7.8 0 0 0-.1 1c0 .3 0 .7.1 1l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.5c.1.2.4.3.6.2l2.5-1c.5.4 1.1.8 1.7 1l.4 2.6c0 .2.2.4.5.4h4c.3 0 .5-.2.5-.4l.4-2.6c.6-.2 1.2-.6 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.5a.5.5 0 0 0-.1-.6L19.4 13zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg></span>

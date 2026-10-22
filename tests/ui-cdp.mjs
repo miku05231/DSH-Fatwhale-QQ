@@ -308,7 +308,10 @@ async function main() {
     await goto('stickers');
     await sleep(800);
     check('表情页激活', (await evaluate('document.querySelector(".page.is-active").dataset.page')) === 'stickers');
-    check('底部导航有 8 项（含表情）', (await evaluate('document.querySelectorAll(".nav-item").length')) === 8);
+    const expectedPages = ['overview', 'memory', 'stickers', 'persona', 'sessions', 'model', 'plugins', 'automation', 'system'];
+    const navigationPages = await evaluate('[...document.querySelectorAll(".nav-item")].map(node=>node.dataset.page)');
+    check('底部导航有完整的 9 项（含表情与自动化）', navigationPages.length === expectedPages.length
+      && expectedPages.every(page => navigationPages.includes(page)));
     check(
       '表情页统计行已填充',
       (await evaluate('document.querySelectorAll("#stickerStats .stat").length')) === 4,

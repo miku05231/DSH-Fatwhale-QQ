@@ -35,6 +35,10 @@ import {
   setChatPersona,
 } from './personas.js';
 import { createReflectScheduler } from './reflect.js';
+import { classifyGroupMessage, createDefaultGroupClassifier } from './jev-classifier.js';
+import { deliverTextAndVoice } from './reply-delivery.js';
+import { createPlatformScheduler } from './platform-scheduler.js';
+import { createPlatformModelProvider } from './platform-model.js';
 import { buildStickerPrompt } from './sticker-prompt.js';
 import { applyStickerSendPolicy } from './sticker-send-policy.js';
 import {
@@ -164,10 +168,12 @@ async function main() {
   const sessions = new SessionStore(stateDir);
   let sessionWindowMinutes = config.behavior.sessionWindowMinutes;
   const queue = new SerialQueue();
+  const admissionQueue = new SerialQueue();
   const limiter = new RateLimiter({ perMinute: config?.security?.rateLimitPerMinute ?? 10 });
 
   // 距离上次「反思」攒了多少轮对话。到阈值就后台沉淀一次笔记。
   let turnSinceReflect = 0;
+  const groupBotReplies = new Map();
 
   // 长期记忆（Obsidian 笔记库）。模块失败只降级，绝不影响收发消息。
   let memory = null;
@@ -449,15 +455,47 @@ async function main() {
     reconnect: true,
   });
 
+  const platformAbort = new AbortController();
+  const defaultGroupClassifier = createDefaultGroupClassifier({
+    readConfig: accessConfig,
+    modelPlan: () => ({ extraPatchPaths: refreshModelPlan(), model: modelInfo?.effective ?? null }),
+    cwd: dshCwd, projectRoot: configRoot, stateDir, patchPath, log, signal: platformAbort.signal,
+  });
+  const platformModel = createPlatformModelProvider({
+    readConfig: accessConfig,
+    modelPlan: () => ({ extraPatchPaths: refreshModelPlan(), model: modelInfo?.effective ?? null }),
+    cwd: dshCwd, projectRoot: configRoot, stateDir, patchPath, log, signal: platformAbort.signal,
+  });
+  const platformScheduler = createPlatformScheduler({
+    configPath, stateDir, projectRoot: PROJECT_ROOT, log,
+    generate: (request) => queue.enqueue('automation:bilibili', () => platformModel(request)),
+    sendTarget: async (target, summary) => {
+      if (!connected || shuttingDown) throw new Error('onebot_unavailable');
+      const group = target.startsWith('g:');
+      const id = Number(group ? target.slice(2) : target);
+      const action = group ? 'send_group_msg' : 'send_private_msg';
+      for (const chunk of chunkText(toPlainText(summary), config?.behavior?.maxReplyChunk ?? 1200)) {
+        if (!connected || shuttingDown) throw new Error('onebot_unavailable');
+        await bot.call(action, {
+          ...(group ? { group_id: id } : { user_id: id }),
+          message: [{ type: 'text', data: { text: chunk } }],
+        });
+      }
+      return true;
+    },
+  });
+
   bot.on('ready', () => {
     connected = true;
     lastErrorRef.value = null;
     log.info('已连上 NapCat（OneBot 服务端）');
+    platformScheduler.start();
     writeStatus();
   });
 
   bot.on('disconnect', (err) => {
     connected = false;
+    platformScheduler.stop();
     log.warn('与 NapCat 断开，正在自动重连…', err?.message ?? '');
     writeStatus();
   });
@@ -551,6 +589,15 @@ async function main() {
   // ------------------------------------------------------------ 消息处理
 
   async function handleMessage(msg) {
+    const key = msg.messageType === 'group' ? `g:${msg.groupId}` : `p:${msg.userId}`;
+    // Preserve arrival order through asynchronous admission, then release the
+    // admission slot as soon as the DSH work has entered its existing queue.
+    const admitted = await admissionQueue.enqueue(key, () => admitMessage(msg));
+    await admitted?.reply;
+  }
+
+  async function admitMessage(msg) {
+    if (shuttingDown) return;
     const userId = Number(msg.userId);
     const isGroup = msg.messageType === 'group';
 
@@ -559,6 +606,10 @@ async function main() {
     if (Number.isFinite(selfId) && selfId === userId) return;
 
     if (isGroup) {
+      if (isUserBlocked(userId, config)) {
+        noteDrop(`用户 ${userId} 在 denyFrom 黑名单里`);
+        return;
+      }
       if (!config?.security?.allowGroups) {
         noteDrop('群聊功能没开启（allowGroups=false）');
         log.debug(`忽略群消息（allowGroups=false），群 ${msg.groupId}`);
@@ -616,15 +667,11 @@ async function main() {
     }
     const byWakeWord = wakeAt >= 0;
     const atSelf = isGroup ? isAtSelf(msg, config) : true;
+    const explicitWake = atSelf || byWakeWord;
 
     if (isGroup) {
-      if (!atSelf && !byWakeWord) {
-        noteDrop(`群 ${msg.groupId} 的消息既没 @ 我，也没提到唤醒词「${wakeWord || '（未设置）'}」（匹配模式 ${wakeMode}）`);
-        log.debug(`忽略群 ${msg.groupId} 既没 @ 也没唤醒词的消息`);
-        return;
-      }
       // allowGroupMembers=false 时只有 allowFrom 里的人能指挥它；
-      // 设成 true 就是「群里谁 @ 它 / 喊它都能聊」，防御靠群号白名单 + 单人限流。
+      // 设成 true 就是允许群成员参与免唤醒意图判断；群号白名单仍是第一道门。
       if (!config?.security?.allowGroupMembers && !isAllowed(userId, config)) {
         noteDrop(`群 ${msg.groupId} 里 ${userId} 不在 allowFrom，且 allowGroupMembers=false`);
         log.debug(`群 ${msg.groupId} 里用户 ${userId} 不在白名单，忽略`);
@@ -635,7 +682,7 @@ async function main() {
     if (!limiter.take(String(userId))) {
       noteDrop(`用户 ${userId} 触发限流`);
       log.warn(`用户 ${userId} 触发限流，忽略本条`);
-      await safeSend(msg, '慢一点，我还在处理上一条 🙂');
+      if (!isGroup || explicitWake) await safeSend(msg, '慢一点，我还在处理上一条 🙂');
       return;
     }
 
@@ -648,6 +695,38 @@ async function main() {
       return;
     }
 
+    if (isGroup && !explicitWake) {
+      const jev = config?.jev ?? {};
+      const groupKey = String(msg.groupId);
+      const currentMessageId = msg.raw?.message_id;
+      const records = groupMem.recent(groupKey, jev.contextMessages ?? 12)
+        .filter((record, index, list) => {
+          if (currentMessageId != null) return String(record.messageId ?? '') !== String(currentMessageId);
+          return !(index === list.length - 1 && String(record.userId) === String(userId) && record.text === msg.text);
+        })
+        .map((record) => ({ at: Number(record.ts) || 0, role: 'user', text: record.text }));
+      records.push(...(groupBotReplies.get(groupKey) ?? []));
+      const history = records.sort((a, b) => a.at - b.at)
+        .slice(-(jev.contextMessages ?? 12))
+        .map(({ role, text: content }) => ({ role, text: content }));
+      const decision = await classifyGroupMessage({
+        baseUrl: jev.baseUrl,
+        token: jev.token,
+        model: jev.model,
+        timeoutMs: jev.timeoutMs,
+        history: history.slice(-(jev.contextMessages ?? 12)),
+        message: text,
+        runDefaultModel: defaultGroupClassifier,
+        signal: platformAbort.signal,
+      });
+      if (shuttingDown) return;
+      if (!decision.eligible) {
+        noteDrop(`群 ${msg.groupId} 的对话判定未通过（${decision.reason}）`);
+        return;
+      }
+    }
+
+    if (shuttingDown) return;
     log.info(`收到 ${isGroup ? '群' : '私聊'} 消息 user=${userId} len=${text.length}`);
 
     const queueKey = chatKey;
@@ -656,7 +735,9 @@ async function main() {
       await safeSend(msg, config?.behavior?.queuedNotice ?? '收到，正在处理…');
     }
 
-    await queue.enqueue(queueKey, async () => {
+    if (shuttingDown) return;
+    const reply = queue.enqueue(queueKey, async () => {
+      if (shuttingDown) return;
       inFlightCount += 1;
       // 在真正出队时判权，排队期间撤掉管理员也不能执行电脑操作。
       const executionConfig = accessConfig();
@@ -806,11 +887,26 @@ async function main() {
         }
       }
 
-      await sendReply(msg, outgoing, {
-        requireAdmin: canUseComputer,
-        grantUnchanged,
-        textOnly: !canUseComputer,
+      const delivery = await deliverTextAndVoice(outgoing, {
+        sendText: async (text) => {
+          const sent = await sendReply(msg, text, {
+            requireAdmin: canUseComputer, grantUnchanged, textOnly: !canUseComputer,
+          });
+          if (sent && isGroup) rememberGroupBotReply(msg.groupId, text);
+          return sent;
+        },
+        voiceEnabled: Boolean(plugins?.isEnabled('reply-tts')),
+        voiceConfig: plugins?.configOf('reply-tts'),
+        sendRecord: async (file) => {
+          if (canUseComputer && (!isCurrentAdmin(msg) || !grantUnchanged())) return false;
+          const action = isGroup ? 'send_group_msg' : 'send_private_msg';
+          const target = isGroup ? { group_id: msg.groupId } : { user_id: msg.userId };
+          await bot.call(action, { ...target, message: [{ type: 'record', data: { file } }] });
+          return true;
+        },
+        signal: abort.signal, log,
       });
+      if (!delivery.textSent) return;
       // 记进长期记忆。不 await，慢一点也没关系，失败更不能影响回话。
       void captureToMemory({
         userId,
@@ -821,6 +917,7 @@ async function main() {
         canUseComputer,
       });
     });
+    return { reply };
   }
 
   /**
@@ -911,6 +1008,21 @@ async function main() {
     }
   }
 
+  function rememberGroupBotReply(groupId, text) {
+    const key = String(groupId ?? '');
+    if (!key || !text) return;
+    const cutoff = Date.now() - 6 * 60 * 60 * 1000;
+    for (const [group, replies] of groupBotReplies) {
+      const fresh = replies.filter((reply) => reply.at >= cutoff);
+      if (fresh.length) groupBotReplies.set(group, fresh.slice(-20));
+      else groupBotReplies.delete(group);
+    }
+    const replies = groupBotReplies.get(key) ?? [];
+    replies.push({ at: Date.now(), role: 'assistant', text: String(text).slice(0, 1000) });
+    groupBotReplies.set(key, replies.slice(-20));
+    while (groupBotReplies.size > 256) groupBotReplies.delete(groupBotReplies.keys().next().value);
+  }
+
   /**
    * 群里被 @ 时喂给 DSH 的完整 prompt：
    * 群号 + 最近聊天摘要 + 当前这条 + 一条工具提示。
@@ -970,9 +1082,10 @@ async function main() {
   async function sendReply(msg, text, { requireAdmin = false, grantUnchanged, textOnly = false } = {}) {
     const chunks = chunkText(text, config?.behavior?.maxReplyChunk ?? 1200);
     for (const chunk of chunks) {
-      if (requireAdmin && (!isCurrentAdmin(msg) || (grantUnchanged && !grantUnchanged()))) return;
-      await safeSend(msg, chunk, { textOnly, requireAdmin, grantUnchanged });
+      if (requireAdmin && (!isCurrentAdmin(msg) || (grantUnchanged && !grantUnchanged()))) return false;
+      if (!await safeSend(msg, chunk, { textOnly, requireAdmin, grantUnchanged })) return false;
     }
+    return chunks.length > 0;
   }
 
   async function safeSend(msg, text, { textOnly = false, requireAdmin = false, grantUnchanged } = {}) {
@@ -981,11 +1094,13 @@ async function main() {
     const params = qqReplyParams(msg, text, textOnly ? { security: { adminUserIds: [] } } : accessConfig());
     try {
       const policy = await applyStickerSendPolicy(action, params, { configPath, config, configRoot });
-      if (policy.skipped) return;
-      if (requireAdmin && (!isCurrentAdmin(msg) || (grantUnchanged && !grantUnchanged()))) return;
+      if (policy.skipped) return false;
+      if (requireAdmin && (!isCurrentAdmin(msg) || (grantUnchanged && !grantUnchanged()))) return false;
       await bot.call(action, policy.params);
+      return true;
     } catch (err) {
       log.error(`发送消息失败（${action}）：`, err?.message ?? err);
+      return false;
     }
   }
 
@@ -997,6 +1112,8 @@ async function main() {
     log.info(`收到 ${signal}，正在退出…`);
     clearInterval(statusTimer);
     reflectScheduler.stop();
+    platformScheduler.stop();
+    platformAbort.abort();
     if (stickerTargetTimer) clearInterval(stickerTargetTimer);
     try {
       await stickerCollector?.flush?.();

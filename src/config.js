@@ -63,6 +63,26 @@ export const DEFAULTS = deepFreeze({
     // 从首次对话开始的固定窗口，0 持续复用；控制台保存后下一条消息生效。
     sessionWindowMinutes: DEFAULT_SESSION_WINDOW_MINUTES,
   },
+  // JEV URL 和 token 齐全时用于群聊判断，否则沿用当前默认模型。
+  jev: {
+    baseUrl: '',
+    token: '',
+    model: '',
+    timeoutMs: 8000,
+    contextMessages: 12,
+  },
+  automation: {
+    bilibili: {
+      enabled: false,
+      cron: '0 9 * * *',
+      keywords: [],
+      upUsers: [],
+      targets: [],
+      mentionUid: '',
+      commentEnabled: false,
+      commentApproved: false,
+    },
+  },
   // 人格：一篇 Markdown。默认在工作区 AGENTS.md（DSH 自己会读，桥接就不重复注入）；
   // 指到别处时由桥接每条消息读出来注入 prompt。
   persona: {
@@ -229,6 +249,9 @@ const OPTIONAL_STRINGS = [
   'dsh.patchPath', // 留空 = 不套补丁（干净的机器、Docker 里默认就没补丁）
   'behavior.queuedNotice',
   'behavior.wakeWord',
+  'jev.baseUrl',
+  'jev.token',
+  'jev.model',
   'persona.dir',
   'persona.active',
 ];
@@ -290,6 +313,20 @@ function validateConfig(config) {
     if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
       invalid(field, `必须是正整数（${label}）`, value);
     }
+  }
+
+  for (const field of ['jev.timeoutMs', 'jev.contextMessages']) {
+    const value = getField(config, field);
+    const max = field === 'jev.timeoutMs' ? 60000 : 100;
+    if (!Number.isInteger(value) || value < 1 || value > max) {
+      invalid(field, `必须是 1–${max} 之间的整数`, value);
+    }
+  }
+  const jevBaseUrl = getField(config, 'jev.baseUrl').trim();
+  if (jevBaseUrl) {
+    let parsed;
+    try { parsed = new URL(jevBaseUrl); } catch { invalid('jev.baseUrl', '不是合法的 URL', jevBaseUrl); }
+    if (!['http:', 'https:'].includes(parsed.protocol)) invalid('jev.baseUrl', '必须使用 http 或 https', jevBaseUrl);
   }
 
   // rateLimitPerMinute：<= 0 表示不限流，所以允许 0 与负数

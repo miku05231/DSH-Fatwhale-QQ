@@ -25,6 +25,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createUpdateManager } from '../updates.mjs';
+import { createPlatformScheduler } from '../platform-scheduler.js';
+import { createBilibiliQrLogin } from '../platforms/bilibili-login.js';
 import { DEFAULT_SESSION_WINDOW_MINUTES, isValidSessionWindowMinutes } from '../sessions.js';
 import { openLocalPath, openExternalUrl } from '../open-path.js';
 import { describeModelState, writeModelState, MODEL_MODES, REASONING_EFFORTS } from '../model-follow.js';
@@ -164,6 +166,13 @@ const SETTINGS_SPEC = {
     wakeWordMatch: 'string',
     groupContextCount: 'int',
     sessionWindowMinutes: 'sessionWindow',
+  },
+  jev: {
+    baseUrl: 'string',
+    token: 'string',
+    model: 'string',
+    timeoutMs: 'int',
+    contextMessages: 'int',
   },
   groupMemory: { limit: 'int' },
   // 表情包库：目录能搬、开关能关、阈值能调（都在控制台「表情」页上）
@@ -586,7 +595,7 @@ function configFileOf(root) {
 
 export function createWebUiServer({
   config = {}, configRoot, log, port = DEFAULT_PORT, host = '127.0.0.1', updateManager,
-  openPath = openLocalPath, openUrl = openExternalUrl,
+  openPath = openLocalPath, openUrl = openExternalUrl, platformControl, platformQrLogin,
 } = {}) {
   const root = path.resolve(text(configRoot) || PROJECT_ROOT);
   const basePort = Number.isInteger(Number(port)) && Number(port) > 0 ? Number(port) : DEFAULT_PORT;
@@ -657,6 +666,12 @@ export function createWebUiServer({
     log: safeLog,
   });
   const updateToken = randomBytes(32).toString('hex');
+  // Only the bridge starts the scheduler; this instance edits configuration and queues work.
+  const platforms = platformControl ?? createPlatformScheduler({ configPath, stateDir, log: safeLog });
+  const automationToken = randomBytes(32).toString('hex');
+  const qrLogin = platformQrLogin ?? createBilibiliQrLogin({
+    saveCookies: (cookies, options) => platforms.importLoginCookies(cookies, options),
+  });
 
   let server = null;
   let actualPort = 0;
@@ -1551,6 +1566,8 @@ export function createWebUiServer({
           : value;
       }
     }
+    out.jev.hasToken = Boolean(cfg?.jev?.token);
+    delete out.jev.token;
     return out;
   }
 
@@ -1607,6 +1624,28 @@ export function createWebUiServer({
 
   async function putSettings(req, res) {
     const body = await readJsonBody(req);
+    if (Object.hasOwn(body?.jev ?? {}, 'baseUrl')) {
+      const value = text(body.jev.baseUrl).trim();
+      try {
+        const url = new URL(value);
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error();
+      } catch {
+        if (value) return fail(res, 400, 'JEV Base URL 必须是没有内嵌凭据的 http 或 https 地址');
+      }
+    }
+    if (Object.hasOwn(body?.jev ?? {}, 'token') && text(body.jev.token).length > 4096) {
+      return fail(res, 400, 'JEV Token 长度不能超过 4096 个字符');
+    }
+    if (Object.hasOwn(body?.jev ?? {}, 'model') && text(body.jev.model).length > 200) {
+      return fail(res, 400, 'JEV 模型名长度不能超过 200 个字符');
+    }
+    for (const [key, max] of [['timeoutMs', 60000], ['contextMessages', 100]]) {
+      if (!Object.hasOwn(body?.jev ?? {}, key)) continue;
+      const value = body.jev[key];
+      if (!Number.isInteger(value) || value < 1 || value > max) {
+        return fail(res, 400, `JEV ${key} 必须是 1–${max} 的整数`);
+      }
+    }
     if (Object.hasOwn(body?.security ?? {}, 'adminUserIds') &&
         coerce('qqIdArray', body.security.adminUserIds) === null) {
       return fail(res, 400, '电脑操作管理员必须是正整数 QQ 号数组');
@@ -1628,24 +1667,29 @@ export function createWebUiServer({
     }
 
     const applied = {};
+    const updates = [];
     for (const [group, fields] of Object.entries(SETTINGS_SPEC)) {
       if (!body?.[group] || typeof body[group] !== 'object') continue;
       for (const [key, type] of Object.entries(fields)) {
         if (!Object.hasOwn(body[group], key)) continue;
+        if (group === 'jev' && key === 'token' && text(body[group][key]).trim() === '') continue;
         const value = coerce(type, body[group][key]);
         if (value === null && type !== 'string') continue;
         disk[group] = disk[group] && typeof disk[group] === 'object' ? disk[group] : {};
         disk[group][key] = value;
-        config[group] = config[group] && typeof config[group] === 'object' ? config[group] : {};
-        config[group][key] = value;
-        applied[`${group}.${key}`] = value;
+        updates.push({ group, key, value });
+        if (!(group === 'jev' && key === 'token')) applied[`${group}.${key}`] = value;
       }
     }
 
-    if (Object.keys(applied).length === 0) return fail(res, 400, '没有可更新的字段');
+    if (updates.length === 0) return fail(res, 400, '没有可更新的字段');
     try {
       await writeAtomic(configPath, `${JSON.stringify(disk, null, 2)}\n`);
-      safeLog.info?.(`配置已更新：${Object.keys(applied).join('、')}`);
+      for (const { group, key, value } of updates) {
+        config[group] = config[group] && typeof config[group] === 'object' ? config[group] : {};
+        config[group][key] = value;
+      }
+      safeLog.info?.(`配置已更新：${updates.map(({ group, key }) => `${group}.${key}`).join('、')}`);
       return ok(res, { applied, settings: pickSettings(config), path: configPath });
     } catch (err) {
       return fail(res, 500, `保存配置失败：${err?.message ?? err}`);
@@ -2170,6 +2214,158 @@ export function createWebUiServer({
 
   // ------------------------------------------------------------ 路由
 
+  const automationErrors = {
+    cron_invalid: 'Cron 必须是有效的 5 字段表达式',
+    mention_uid_invalid: '@ 目标 UID 必须是正整数',
+    config_invalid: '自动化配置格式不正确',
+    boolean_invalid: '启用状态与人工验收状态必须是布尔值',
+    keywords_invalid: '搜索关键词必须为字符串数组，每项不超过 100 字',
+    upUsers_invalid: 'UP 主 UID 必须为正整数字符串数组',
+    targets_invalid: 'QQ 推送目标格式不正确',
+    comment_acceptance_required: '开启自动评论前需填写 @ UID 并确认已完成人工验收',
+    sources_targets_required: '启用自动化前需配置内容来源和 QQ 推送目标',
+    target_invalid: 'QQ 推送目标格式不正确',
+    browser_invalid: '请选择 Chrome 或 Edge',
+    cookie_extractor_unavailable: '无法启动 Cookie 提取工具，请检查 Python 是否已安装',
+    cookie_extractor_failed: '浏览器登录态提取失败，请检查所选浏览器是否已登录 B站',
+    cookie_extractor_timeout: '读取浏览器登录态超时，请完全退出所选浏览器后重试',
+    cookie_database_locked: '所选浏览器正在占用 Cookie 数据库，请完全退出该浏览器（含后台进程）后重试',
+    cookie_app_bound_unsupported: '所选浏览器的登录态使用应用绑定加密（v20），当前提取工具无法读取',
+    cookie_crypto_unavailable: '缺少 Cookie 解密依赖，请为桥接使用的 Python 安装 cryptography',
+    cookie_decryption_failed: '无法解密所选浏览器登录态，请使用登录该浏览器的 Windows 用户运行桥接',
+    browser_profile_not_found: '未找到所选浏览器配置，请先打开该浏览器并登录 B站',
+    cookie_database_unreadable: '无法读取所选浏览器的 Cookie 数据库，请检查访问权限并关闭浏览器后重试',
+    bilibili_login_not_found: '未找到有效的 B站登录态',
+    cookie_extractor_invalid_output: '未能导入 B站登录态',
+    bilibili_login_required: 'B站登录态已失效，请在所选浏览器重新登录后导入',
+    bilibili_invalid_cookie: 'B站登录态格式无效，请重新登录后导入',
+    bilibili_http_error: '验证 B站登录态时 HTTP 请求失败，请稍后重试',
+    bilibili_request_failed: '无法连接 B站验证登录态，请检查网络后重试',
+    bilibili_request_timeout: 'B站登录态验证超时，请稍后重试',
+    bilibili_api_rejected: 'B站拒绝了登录验证请求，请稍后重试',
+    bilibili_invalid_response: 'B站返回了无法识别的登录验证结果，请稍后重试',
+    busy: '自动化任务正在运行，请等待完成后重试',
+    qrcode_network_error: '无法连接 B站登录服务，请检查网络后重试',
+    qrcode_timeout: 'B站扫码请求超时，请重试',
+    qrcode_response_invalid: 'B站扫码登录返回异常，请重新生成二维码',
+    qrcode_platform_refused: 'B站暂时拒绝扫码登录，请稍后重试',
+    qrcode_login_invalid: '扫码返回的登录态不完整，请重新生成二维码',
+    qrcode_save_failed: '登录态保存失败，请重新扫码',
+    qrcode_cancelled: '二维码已取消或失效，请重新生成',
+    qrcode_session_invalid: '二维码已取消或失效，请重新生成',
+  };
+
+  function automationSnapshot(raw = {}) {
+    const cfg = raw.config ?? {};
+    const configKeys = ['enabled', 'cron', 'keywords', 'upUsers', 'targets', 'mentionUid', 'commentEnabled', 'commentApproved'];
+    const clean = (value) => redactSecrets(text(value)).slice(0, 8000);
+    const safeFields = (value, keys) => Object.fromEntries(keys
+      .filter((key) => value && Object.hasOwn(value, key))
+      .map((key) => [key, typeof value[key] === 'number' || typeof value[key] === 'boolean' ? value[key] : clean(value[key])]));
+    return {
+      config: Object.fromEntries(configKeys.filter((key) => Object.hasOwn(cfg, key)).map((key) => [key, cfg[key]])),
+      cookieAvailable: raw.cookieAvailable === true,
+      nextRunAt: raw.nextRunAt ?? null,
+      lastRun: raw.lastRun ? safeFields(raw.lastRun, ['status', 'at', 'found', 'published', 'reason']) : null,
+      todayComments: Number(raw.todayComments) || 0,
+      busy: raw.busy === true || raw.lastRun?.status === 'running',
+      blockedReason: clean(raw.blockedReason ?? ''),
+      commentPublicationAvailable: raw.commentPublicationAvailable === true,
+      commentPublicationStatus: clean(raw.commentPublicationStatus ?? ''),
+      audit: (Array.isArray(raw.audit) ? raw.audit : []).slice(-100).map((entry) => safeFields(entry,
+        ['dynamicId', 'targetUid', 'mentionUid', 'at', 'status', 'result', 'reason', 'text', 'body', 'comment'])),
+      automationToken,
+    };
+  }
+
+  async function routeAutomation(req, res, pathname, method) {
+    const authority = text(req.headers.host).toLowerCase();
+    const port = req.socket.localPort;
+    if (!new Set([`127.0.0.1:${port}`, `localhost:${port}`]).has(authority)) {
+      return fail(res, 403, '自动化接口仅允许本机控制台访问');
+    }
+    const origin = text(req.headers.origin);
+    if ((origin && origin !== `http://${authority}`) || req.headers['sec-fetch-site'] === 'cross-site') {
+      return fail(res, 403, '自动化接口不接受跨站请求');
+    }
+    const base = '/api/automation/bilibili';
+    const expectedMethod = pathname === base ? null : {
+      [`${base}/run`]: 'POST', [`${base}/cookie`]: 'POST', [`${base}/audit`]: 'GET',
+      [`${base}/login/start`]: 'POST', [`${base}/login/poll`]: 'POST', [`${base}/login/cancel`]: 'POST',
+    }[pathname];
+    if (pathname !== base && !expectedMethod) return fail(res, 404, '没有这个自动化接口');
+    if (pathname === base ? !['GET', 'PUT'].includes(method) : method !== expectedMethod) {
+      return fail(res, 405, pathname === base ? '只支持 GET / PUT' : `只支持 ${expectedMethod}`);
+    }
+    if (method === 'GET') {
+      try {
+        const snapshot = automationSnapshot(await platforms.snapshot());
+        return ok(res, pathname.endsWith('/audit') ? { audit: snapshot.audit } : snapshot);
+      } catch {
+        safeLog.warn?.('读取 B站自动化状态失败');
+        return fail(res, 500, '读取自动化状态失败');
+      }
+    }
+    const supplied = Buffer.from(text(req.headers['x-qq-automation-token']), 'utf8');
+    const expected = Buffer.from(automationToken, 'utf8');
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+      return fail(res, 403, '请刷新自动化页面后再操作');
+    }
+    if (text(req.headers['content-type']).split(';')[0].trim().toLowerCase() !== 'application/json') {
+      return fail(res, 415, '自动化请求需要 JSON');
+    }
+    let body;
+    try { body = JSON.parse(await readBody(req, 64 * 1024) || '{}'); }
+    catch (error) { return fail(res, Number(error?.statusCode) || 400, '自动化请求格式不正确'); }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return fail(res, 400, '自动化请求需要 JSON 对象');
+    try {
+      if (pathname.startsWith(`${base}/login/`)) {
+        if (pathname.endsWith('/start')) {
+          if (Object.keys(body).length) return fail(res, 400, '生成二维码不接受额外参数');
+          const result = await qrLogin.start();
+          if (typeof result?.id !== 'string' || !/^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i.test(result.id)
+            || typeof result.qrImage !== 'string' || !/^data:image\/(?:gif|png);base64,[A-Za-z\d+/]+={0,2}$/.test(result.qrImage)
+            || result.qrImage.length > 256 * 1024 || !Number.isFinite(Date.parse(result.expiresAt))) {
+            throw new Error('qrcode_response_invalid');
+          }
+          return ok(res, { id: result.id, qrImage: result.qrImage, expiresAt: result.expiresAt, status: 'waiting' });
+        }
+        if (Object.keys(body).length !== 1 || typeof body.id !== 'string'
+          || !/^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i.test(body.id)) {
+          return fail(res, 400, '扫码会话标识无效，请重新生成二维码');
+        }
+        if (pathname.endsWith('/cancel')) {
+          const result = await qrLogin.cancel(body.id);
+          if (!['expired', 'success'].includes(result?.status)) throw new Error('qrcode_response_invalid');
+          return ok(res, { cancelled: result.status !== 'success', status: result.status });
+        }
+        const result = await qrLogin.poll(body.id);
+        if (!['waiting', 'scanned', 'expired', 'success'].includes(result?.status)) throw new Error('qrcode_response_invalid');
+        return ok(res, { status: result.status });
+      }
+      if (pathname === base) {
+        const fields = new Set(['enabled', 'cron', 'keywords', 'upUsers', 'targets', 'mentionUid', 'commentEnabled', 'commentApproved']);
+        if (Object.keys(body).some((key) => !fields.has(key))) return fail(res, 400, '自动化配置包含未知字段');
+        await platforms.saveConfig(body);
+        return ok(res, automationSnapshot(await platforms.snapshot()));
+      }
+      if (pathname.endsWith('/run')) {
+        if (Object.keys(body).length) return fail(res, 400, '立即检查不接受额外参数');
+        await platforms.queueManualRun();
+        return ok(res, { queued: true, message: '检查已排队，桥接运行时执行' });
+      }
+      if (Object.keys(body).length !== 1 || !['edge', 'chrome'].includes(body.browser)) {
+        return fail(res, 400, '请选择 Chrome 或 Edge');
+      }
+      await platforms.extractBrowserCookie(body.browser);
+      return ok(res, { imported: true, message: 'B站登录态已导入' });
+    } catch (error) {
+      const code = [error?.code, error?.message].find(value => typeof value === 'string' && Object.hasOwn(automationErrors, value));
+      safeLog.warn?.(`B站自动化控制操作失败（${code ?? 'operation_failed'}）`);
+      return fail(res, 400, code ? automationErrors[code] : '自动化操作失败，请检查配置或本机登录状态');
+    }
+  }
+
   async function routeUpdates(req, res, pathname, method) {
     // A separate token and strict loopback origin keep websites from triggering an installer.
     const authority = text(req.headers.host).toLowerCase();
@@ -2251,6 +2447,9 @@ export function createWebUiServer({
 
     if (pathname === '/api/updates' || pathname.startsWith('/api/updates/')) {
       return routeUpdates(req, res, pathname, method);
+    }
+    if (pathname === '/api/automation' || pathname.startsWith('/api/automation/')) {
+      return routeAutomation(req, res, pathname, method);
     }
     if (pathname === '/api/overview' && method === 'GET') return ok(res, await buildOverview());
     if (pathname === '/api/logs' && method === 'GET') return getLogs(url, res);
@@ -2434,6 +2633,7 @@ export function createWebUiServer({
     if (stopping) return;
     stopping = true;
     updates.stop();
+    await qrLogin.stop();
     const s = server;
     server = null;
     const port = actualPort;

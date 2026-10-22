@@ -1,7 +1,7 @@
 ﻿# 生成 Windows 发行文件，无需 npm 或 dotnet SDK。
 #   powershell -ExecutionPolicy Bypass -File scripts\make-release.ps1
 # 产物默认在 dist\release\；自定义 OutDir 必须是工程 dist 下的子目录。
-#   qq-bridge-<ver>-portable-win64.zip   完整便携包（另需 Node.js 18+）
+#   qq-bridge-<ver>-portable-win64.zip   完整便携包（另需 Node.js 22+）
 #   qq-bridge-<ver>-source.zip           脱敏源代码包
 #   qq-bridge-launcher-<ver>.exe         桌面 / 命令行启动器
 #   SHA256SUMS.txt                       三个文件的校验和
@@ -110,7 +110,7 @@ QQ-DSH $Version 便携版（Windows x64）
 ========================================
 
 第一次跑
-  1. 安装 Node.js 18 或更新版本（https://nodejs.org/），不用 npm install。
+  1. 安装 Node.js 22 或更新版本（https://nodejs.org/），不用 npm install。
   2. 双击 setup.cmd 完成配置，并运行 install-napcat.cmd 安装 NapCat。
   3. 双击 qq-bridge.exe：复用一键启动流程，启动 NapCat、桥接、控制台、DSH 和托盘。
      控制台优先在 Edge 应用窗口打开，没有 Edge 时使用默认浏览器。

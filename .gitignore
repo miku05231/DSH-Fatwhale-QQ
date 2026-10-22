@@ -6,6 +6,10 @@ data/
 memory/
 记忆库/
 qq-workspace/
+docs/testing/
+docs/work-progress.md
+docs/full-verification-*.md
+docs/update-program.md
 # thinking-effort 插件启动时写在 cwd 的小文件（桌面宿主会带出来）
 thinking-effort-loaded.json
 

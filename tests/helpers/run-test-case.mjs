@@ -15,7 +15,7 @@ export async function runTestCase(root, file, timeoutMs, { remove = rm, args = [
       const child = spawn(process.execPath, [path.join(root, file), ...args], {
         cwd: root,
         windowsHide: true,
-        env: (['tests/dsh-web-test.mjs', 'tests/ui-cdp.mjs', 'tests/updates-ui.mjs'].includes(file)
+        env: (['tests/dsh-web-test.mjs', 'tests/ui-cdp.mjs', 'tests/updates-ui.mjs', 'tests/platform-webui-test.mjs'].includes(file)
           ? browserRuntimeEnv : isolatedEnv)(isolatedRoot, {
           NODE_NO_WARNINGS: '1', QQ_TEST_REQUIRE_DSH: '1', QQ_TEST_REQUIRE_BROWSER: '1',
         }),

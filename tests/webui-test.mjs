@@ -196,6 +196,33 @@ async function httpTests(tmpRoot) {
       bad('名单数组回写失败', JSON.stringify(roundTrip.body).slice(0, 160));
     }
 
+    const jevToken = 'synthetic-jev-secret-that-must-never-return';
+    const jevSave = await putSettings({ jev: {
+      baseUrl: 'https://jev.example/v1', model: 'jev-fixture', token: jevToken,
+      timeoutMs: 4000, contextMessages: 8,
+    } });
+    if (jevSave.status === 200 && !JSON.stringify(jevSave.body).includes(jevToken)) ok('JEV 配置保存成功且 Token 不回传');
+    else bad('JEV Token 保存或回传脱敏异常', JSON.stringify(jevSave.body).slice(0, 240));
+    const savedJevConfig = JSON.parse(await readFile(fixture.configPath, 'utf8'));
+    eq(savedJevConfig.jev.token, jevToken, 'JEV Token 已写入隔离配置');
+    const jevRead = await get('/api/settings');
+    eq(jevRead.body?.data?.jev?.hasToken, true, 'JEV 设置只回传 Token 是否存在');
+    eq(Object.hasOwn(jevRead.body?.data?.jev ?? {}, 'token'), false, 'JEV 设置响应完全不包含 Token 字段');
+    eq(jevRead.body?.data?.jev?.model, 'jev-fixture', 'JEV 模型设置可读取');
+    const rotatedToken = 'synthetic-jev-rotated-secret-that-must-never-return';
+    const tokenOnlySave = await putSettings({ jev: { token: rotatedToken } });
+    eq(tokenOnlySave.status, 200, 'JEV 只更新 Token 也能成功保存');
+    eq(JSON.parse(await readFile(fixture.configPath, 'utf8')).jev.token, rotatedToken, '单字段 Token 更新已落盘');
+    eq(JSON.stringify(tokenOnlySave.body).includes(rotatedToken), false, '单字段 Token 更新不回传凭据');
+    eq(Object.hasOwn(tokenOnlySave.body?.data?.applied ?? {}, 'jev.token'), false, '更新字段回执不包含 Token 值');
+    const blankTokenSave = await putSettings({ jev: { token: '   ', model: 'jev-fixture' } });
+    eq(blankTokenSave.status, 200, 'Token 留空时其他设置仍可保存');
+    eq(JSON.parse(await readFile(fixture.configPath, 'utf8')).jev.token, rotatedToken, '空白 Token 保留已保存的凭据');
+    const invalidJev = await putSettings({ jev: { baseUrl: 'https://user:pass@jev.example/v1' } });
+    eq(invalidJev.status, 400, '含内嵌凭据的 JEV Base URL 被拒绝');
+    const invalidJevContext = await putSettings({ jev: { contextMessages: 101 } });
+    eq(invalidJevContext.status, 400, '超范围的 JEV 上下文条数被拒绝');
+
     const logs = await get('/api/logs?name=bridge&lines=5');
     if (logs.body?.ok === true && Array.isArray(logs.body.data?.lines)) ok('日志可读', `${logs.body.data.lines.length} 行`);
     else bad('日志读取失败');

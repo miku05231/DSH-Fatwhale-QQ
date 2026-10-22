@@ -46,9 +46,35 @@
     "wakeWordMatch": "contains",
     "groupContextCount": 40
   },
+  "jev": {
+    "baseUrl": "",
+    "token": "",
+    "model": "",
+    "timeoutMs": 8000,
+    "contextMessages": 12
+  },
+  "automation": {
+    "bilibili": {
+      "enabled": false,
+      "cron": "0 9 * * *",
+      "keywords": [],
+      "upUsers": [],
+      "targets": [],
+      "mentionUid": "",
+      "commentEnabled": false,
+      "commentApproved": false
+    }
+  },
   "plugins": {
     "enabled": true,
-    "dir": "src/plugins"
+    "dir": "src/plugins",
+    "reply-tts": {
+      "provider": "edge",
+      "voice": "zh-CN-XiaoxiaoNeural",
+      "python": "python",
+      "maxChars": 600,
+      "timeoutMs": 60000
+    }
   },
   "logDir": "logs",
   "stateDir": "state",

@@ -16,6 +16,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -84,6 +85,20 @@ async function main() {
 
   const napcat = createFakeNapCat();
   const port = await napcat.listen(0);
+  const classifierRequests = [];
+  const classifier = http.createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw);
+    classifierRequests.push({ headers: req.headers, body });
+    const payload = JSON.parse(body.messages.at(-1).content);
+    const shouldReply = payload.current_message.includes('接着聊')
+      && payload.history.some((item) => item.role === 'assistant');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ should_reply: shouldReply }) } }] }));
+  });
+  await new Promise((resolve) => classifier.listen(0, '127.0.0.1', resolve));
+  const classifierUrl = `http://127.0.0.1:${classifier.address().port}/v1`;
 
   const configPath = path.join(tmpRoot, 'config.json');
   await fsp.writeFile(
@@ -101,6 +116,7 @@ async function main() {
         maxChars: 4000,
       },
       behavior: { queuedNotice: '', maxReplyChunk: 1200, showErrors: true, wakeWord: WAKE, groupContextCount: 5 },
+      jev: { baseUrl: classifierUrl, token: 'synthetic-jev-token', model: 'fixture-jev', timeoutMs: 8000, contextMessages: 12 },
       logDir,
       stateDir,
       memory: { enabled: false },
@@ -169,6 +185,34 @@ async function main() {
     });
     if (String(g1[0].params.message).includes('收到')) ok('群里 @ 我 → 正常回复');
     else bad('群里 @ 的回复内容异常', String(g1[0].params.message).slice(0, 60));
+    ok('明确 @ 绕过 JEV 意图判定');
+
+    console.log('\n[2c/4 免唤醒续聊会带上机器人回答]');
+    const g1b = napcat.state.calls.length;
+    napcat.sendGroupMessage({
+      groupId: GROUP,
+      userId: OWNER,
+      nickname: '主人',
+      text: '接着聊刚才的话题',
+      selfId: SELF_ID,
+      messageId: 105,
+      atSelf: false,
+    });
+    const followup = await waitFor(() => (groupReplies(g1b).length > 0 ? groupReplies(g1b) : null), {
+      timeout: 20000,
+      label: 'JEV 通过后的免唤醒续聊回复',
+    });
+    if (String(followup[0].params.message).includes('收到')) ok('JEV 判定为续聊后进入 DSH');
+    else bad('JEV 续聊回复异常', String(followup[0].params.message).slice(0, 60));
+    const lastClassification = classifierRequests.at(-1);
+    if (lastClassification?.headers?.authorization === 'Bearer synthetic-jev-token') ok('JEV 请求使用配置的 Bearer Token');
+    else bad('JEV 请求未使用配置的 Bearer Token');
+    const classifierPayload = JSON.parse(lastClassification.body.messages.at(-1).content);
+    if (classifierPayload.history.some((item) => item.role === 'assistant' && item.text.includes('收到'))) {
+      ok('JEV 上下文包含机器人上一条回答');
+    } else {
+      bad('JEV 上下文缺少机器人上一条回答', JSON.stringify(classifierPayload.history));
+    }
 
     console.log('\n[3/4 群里没 @ 也没唤醒词 → 不理，但记下原因]');
     const g2 = napcat.state.calls.length;
@@ -185,7 +229,7 @@ async function main() {
     if (groupReplies(g2).length === 0) ok('没 @ 也没唤醒词 → 不回');
     else bad('不该回却回了', String(groupReplies(g2)[0].params.message).slice(0, 60));
     const status = readStatus();
-    if (String(status?.lastDrop ?? '').includes('唤醒词')) ok('status.json 记下了丢弃原因', status.lastDrop);
+    if (String(status?.lastDrop ?? '').includes('对话判定未通过')) ok('status.json 记下 JEV 拒答原因', status.lastDrop);
     else bad('status.json 没记丢弃原因', JSON.stringify(status?.lastDrop ?? null));
 
     console.log('\n[4/4 群里没 @ 但以唤醒词开头 → 回]');
@@ -213,6 +257,7 @@ async function main() {
   } finally {
     if (exitCode === null) await killTree(child.pid);
     await napcat.close();
+    await new Promise((resolve) => classifier.close(resolve));
     await fsp.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
   }
 

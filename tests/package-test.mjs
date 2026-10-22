@@ -17,6 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv, prepareIsolatedHome } from './helpers/isolated-fixtures.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -51,8 +52,21 @@ const REQUIRED = [
   'src/chat-only.js',
   'src/chat-only-host.js',
     'src/sticker-send-policy.js',
+  'src/jev-classifier.js',
+  'src/reply-delivery.js',
   'src/plugins.js',
+  'src/plugins/reply-tts.js',
   'src/model-follow.js',
+  'src/platform-model.js',
+  'src/platform-scheduler.js',
+  'src/platforms/bilibili.js',
+  'src/platforms/bilibili-login.js',
+  'src/third-party/croner/croner.js',
+  'src/third-party/croner/LICENSE',
+  'src/third-party/croner/README.md',
+  'src/third-party/qrcode-generator/qrcode.mjs',
+  'src/third-party/qrcode-generator/LICENSE',
+  'src/third-party/qrcode-generator/README.md',
   'src/webui/server.mjs',
   'src/updates.mjs',
   'src/companion/lib/index.js',
@@ -79,12 +93,21 @@ const REQUIRED = [
   'tests/exe-host-test.mjs',
   'tools/qq.mjs',
   'tools/memory.mjs',
+  'tools/requirements-voice.txt',
+  'tools/bili_cookies.py',
   'tests/blacklist-test.mjs',
   'config.example.json',
   '初始化配置.cmd',
   '一键启动.cmd',
   'README.md',
   'docs/控制台架构.md',
+  'docs/automation-and-voice.md',
+  'docs/verification-v3.0.0.md',
+  'docs/releases/v3.0.0.md',
+  'docs/screenshots/console-jev-settings.png',
+  'docs/screenshots/console-reply-tts.png',
+  'docs/screenshots/console-bilibili-automation.png',
+  'docs/screenshots/console-bilibili-safeguards.png',
   'package.json',
   '打包信息.json',
 ];
@@ -100,6 +123,9 @@ const MUST_NOT_EXIST = [
   '.git',
   'dist',
   'tools/export-public.mjs',
+  'docs/testing',
+  'docs/work-progress.md',
+  'docs/update-program.md',
 ];
 
 const FORBIDDEN = [
@@ -161,6 +187,11 @@ async function verifyOutputSafety(tmpRoot) {
   await fsp.writeFile(path.join(fixtureRoot, 'config.json'), '{"synthetic":true}\n');
   await fsp.writeFile(path.join(fixtureRoot, 'AGENTS.md'), 'private-maintenance-fixture\n');
   await fsp.writeFile(sourceSentinel, 'preserve-source-fixture\n');
+  const privateReports = ['docs/testing/private.md', 'docs/work-progress.md', 'docs/full-verification-fixture.md', 'docs/update-program.md'];
+  for (const file of privateReports) {
+    await fsp.mkdir(path.dirname(path.join(fixtureRoot, file)), { recursive: true });
+    await fsp.writeFile(path.join(fixtureRoot, file), 'synthetic-private-test-evidence\n');
+  }
 
   for (const [label, target] of [
     ['source root', fixtureRoot],
@@ -193,6 +224,9 @@ async function verifyOutputSafety(tmpRoot) {
     const accepted = run([fixtureTool, '--out', target, '--force', '--no-zip'], { cwd: tmpRoot });
     check(accepted.status === 0 && !fs.existsSync(stale), 'separate output can be rebuilt with --force');
     check(!fs.existsSync(path.join(target, 'AGENTS.md')), 'maintenance AGENTS.md is not packaged');
+    for (const file of privateReports) {
+      check(!fs.existsSync(path.join(target, file)), `private maintenance evidence is not packaged: ${file}`);
+    }
   }
 }
 
@@ -214,6 +248,13 @@ async function main() {
     section('2/7 该有的文件都在');
     for (const rel of REQUIRED) {
       check(fs.existsSync(path.join(outDir, rel)), `存在 ${rel}`);
+    }
+    for (const rel of [
+      'src/third-party/croner/croner.js', 'src/third-party/croner/LICENSE', 'src/third-party/croner/README.md',
+      'src/third-party/qrcode-generator/qrcode.mjs', 'src/third-party/qrcode-generator/LICENSE', 'src/third-party/qrcode-generator/README.md',
+    ]) {
+      check(fs.readFileSync(path.join(ROOT, rel)).equals(fs.readFileSync(path.join(outDir, rel))),
+        `第三方源文件与许可证保持原始字节 ${rel}`);
     }
 
     section('3/7 展示图片和原始图标完整');
@@ -266,8 +307,14 @@ async function main() {
     check(checkSec.status === 0, '产物 src/security.js 语法正确');
     const checkChatHost = run(['--check', path.join(outDir, 'src', 'chat-only-host.js')]);
     check(checkChatHost.status === 0, '产物 src/chat-only-host.js 语法正确');
+    const importPlatform = run(['--input-type=module', '-e',
+      'await Promise.all([import("./src/platform-scheduler.js"),import("./src/platform-model.js"),import("./src/reply-delivery.js"),import("./src/jev-classifier.js"),import("./src/platforms/bilibili-login.js"),import("./src/webui/server.mjs")]);' +
+      'const {qrcode}=await import("./src/third-party/qrcode-generator/qrcode.mjs");const image=qrcode(0,"M");image.addData("https://example.com/fixture");image.make();if(!/^data:image\\/gif;base64,/.test(image.createDataURL()))throw new Error("packaged QR rendering failed");'], { cwd: outDir });
+    check(importPlatform.status === 0, '产物中的 JEV、语音、平台与扫码模块可加载，二维码可生成',
+      importPlatform.status === 0 ? '' : String(importPlatform.stderr ?? '').slice(-1200));
 
-    const blacklist = run([path.join(outDir, 'tests', 'blacklist-test.mjs')], { cwd: outDir });
+    await prepareIsolatedHome(tmpRoot);
+    const blacklist = run([path.join(outDir, 'tests', 'blacklist-test.mjs')], { cwd: outDir, env: isolatedEnv(tmpRoot) });
     const blacklistOut = `${blacklist.stdout ?? ''}${blacklist.stderr ?? ''}`;
     check(blacklist.status === 0, '产物里的 blacklist-test 通过', `exit=${blacklist.status}`);
     check(/通过 \d+ 项，失败 0 项/.test(blacklistOut), '黑白名单用例全过（新目录里也能起真桥接）');

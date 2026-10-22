@@ -11,7 +11,7 @@ export function isolatedEnv(root, extra = {}) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (/^(?:path|pathext|systemroot|windir|comspec|processor_architecture|lang|lc_all|tz|ci|node_no_warnings)$/i.test(key)
-        || /^QQ_TEST_/.test(key)) env[key] = value;
+        || /^QQ_TEST_/.test(key) || key === 'QQ_PLATFORM_BROWSER_TEST') env[key] = value;
   }
   const home = path.join(root, 'home');
   return {

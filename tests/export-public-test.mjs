@@ -150,6 +150,9 @@ async function main() {
     'docs/隐私审计报告.md',
     'docs/从零验证报告.md',
     'docs/更新发布.md',
+    'docs/automation-and-voice.md',
+    'docs/verification-v3.0.0.md',
+    'docs/releases/v3.0.0.md',
     'scripts/install-update.ps1',
     '.github/workflows/release.yml',
     'deepseek-waitou.png',
@@ -160,6 +163,10 @@ async function main() {
     'docs/screenshots/tray-menu-dark.png',
     'docs/screenshots/tray-dialog-light.png',
     'docs/screenshots/tray-dialog-dark.png',
+    'docs/screenshots/console-jev-settings.png',
+    'docs/screenshots/console-reply-tts.png',
+    'docs/screenshots/console-bilibili-automation.png',
+    'docs/screenshots/console-bilibili-safeguards.png',
   ];
   for (const rel of required) {
     const full = path.join(out, rel.split('/').join(path.sep));
@@ -175,6 +182,8 @@ async function main() {
   const exportedShowcase = readme.match(showcasePattern)?.[0];
   ok(Boolean(sourceShowcase) && exportedShowcase === sourceShowcase, '公开 README 复用源 README 的图标与展示区');
   ok((readme.match(/<!-- showcase:start -->/g) ?? []).length === 1, '展示区只生成一次');
+  ok(readme.includes('九个页签') && readme.includes('当前 DSH 默认模型'), '公开说明包含新导航和默认模型判定');
+  ok(readme.includes('未实测') && readme.includes('真实 QQ 文字/语音投递') && readme.includes('B站实际评论与 @'), '公开说明明确真实账号未测试范围');
   const imageRefs = localReadmeImages(readme);
   ok(imageRefs.length >= 7, '公开 README 含应用图标与界面截图');
   const missingImages = imageRefs.filter((rel) => !fs.existsSync(path.join(out, rel)));
@@ -190,7 +199,7 @@ async function main() {
   ok(changedImages.length === 0, '展示截图按原始字节导出', changedImages.map((file) => path.relative(screenshotRoot, file)).join('; '));
 
   console.log('\n[4/5 不该出的东西一个都没有]');
-  const forbiddenDirs = ['AGENTS.md', 'config.json', 'state', 'logs', 'napcat', 'node_modules', '.env', 'qq-workspace'];
+  const forbiddenDirs = ['AGENTS.md', 'config.json', 'state', 'logs', 'napcat', 'node_modules', '.env', 'qq-workspace', 'docs/testing', 'docs/work-progress.md', 'docs/update-program.md'];
   for (const rel of forbiddenDirs) {
     ok(!fs.existsSync(path.join(out, rel)), `没有 ${rel}`);
   }

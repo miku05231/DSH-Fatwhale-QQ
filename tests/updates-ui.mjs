@@ -260,7 +260,10 @@ async function main() {
     await cdp.send('Page.navigate', { url: `${origin}/#overview` });
     await ready();
     await waitText('#snackbarText', '发现新版本 0.3.0');
-    check('All eight navigation pages remain present', await evaluate('document.querySelectorAll(".nav-item").length===8'));
+    const expectedPages = ['overview', 'memory', 'stickers', 'persona', 'sessions', 'model', 'plugins', 'automation', 'system'];
+    const navigationPages = await evaluate('[...document.querySelectorAll(".nav-item")].map(node=>node.dataset.page)');
+    check('All eight original pages and the automation page remain present exactly once',
+      navigationPages.length === expectedPages.length && expectedPages.every(page => navigationPages.includes(page)));
     check('Opening a page does not perform a release check or install', fixture.writes.length === 0);
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 375, height: 844, mobile: true, deviceScaleFactor: 1 });
     await screenshot('updates-notification-375');

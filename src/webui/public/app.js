@@ -244,11 +244,13 @@ const PAGES = {
   sessions: { title: '会话', subtitle: '群聊与私聊的 DSH 会话' },
   model: { title: '模型', subtitle: '跟随 DSH 桌面端，或在这里手动指定' },
   plugins: { title: '插件', subtitle: '开关与配置，扩展点不用改主流程' },
+  automation: { title: '自动化', subtitle: '定时浏览平台内容并按规则处理' },
   system: { title: '系统', subtitle: '运行信息、日志与行为设置' },
 };
 
 function setPage(name, { push = true } = {}) {
   if (!PAGES[name]) return;
+  if (STATE.page === 'automation' && name !== 'automation') stopBiliQrLogin({ notify: false });
   STATE.page = name;
 
   $$('.page').forEach((el) => el.classList.toggle('is-active', el.dataset.page === name));
@@ -283,6 +285,7 @@ async function refreshPage(name = currentPage()) {
   if (name === 'sessions') return loadSessions();
   if (name === 'model') return loadModel();
   if (name === 'plugins') return loadPlugins();
+  if (name === 'automation') return loadAutomation();
   if (name === 'system') return loadSystem();
 }
 
@@ -1980,6 +1983,7 @@ async function loadSettings() {
     const data = await api('/api/settings');
     const behavior = data?.behavior || {};
     const security = data?.security || {};
+    const jev = data?.jev || {};
     const showErrors = $('#setShowErrors');
     const context = $('#setGroupContext');
     const sessionWindow = $('#setSessionWindowMinutes');
@@ -1988,6 +1992,12 @@ async function loadSettings() {
     const allowMembers = $('#setAllowGroupMembers');
     const allowGroups = $('#setAllowGroups');
     const privatePolicy = $('#setPrivatePolicy');
+    if ($('#jevBaseUrl')) $('#jevBaseUrl').value = jev.baseUrl ?? '';
+    if ($('#jevModel')) $('#jevModel').value = jev.model ?? '';
+    if ($('#jevToken')) $('#jevToken').value = '';
+    if ($('#jevTimeout')) $('#jevTimeout').value = String(jev.timeoutMs ?? 8000);
+    if ($('#jevContext')) $('#jevContext').value = String(jev.contextMessages ?? 12);
+    if ($('#jevTokenHint')) $('#jevTokenHint').textContent = jev.hasToken ? '已保存 Token；留空保存时会保留。' : '尚未配置 Token。';
     if (showErrors) showErrors.checked = Boolean(behavior.showErrors);
     if (context) context.value = String(Number(behavior.groupContextCount) || 0);
     if (sessionWindow && document.activeElement !== sessionWindow) {
@@ -2024,6 +2034,13 @@ async function saveSettings() {
     return;
   }
   const payload = {
+    jev: {
+      baseUrl: String($('#jevBaseUrl')?.value ?? '').trim(),
+      model: String($('#jevModel')?.value ?? '').trim(),
+      token: String($('#jevToken')?.value ?? ''),
+      timeoutMs: Number($('#jevTimeout')?.valueAsNumber ?? 8000),
+      contextMessages: Number($('#jevContext')?.valueAsNumber ?? 12),
+    },
     behavior: {
       showErrors: Boolean($('#setShowErrors')?.checked),
       groupContextCount: Number($('#setGroupContext')?.value) || 0,
@@ -2047,6 +2064,10 @@ async function saveSettings() {
   btn.textContent = '保存中…';
   try {
     const data = await api('/api/settings', { method: 'PUT', body: JSON.stringify(payload) });
+    if ($('#jevToken')) $('#jevToken').value = '';
+    if ($('#jevTokenHint')) $('#jevTokenHint').textContent = data?.settings?.jev?.hasToken
+      ? '已保存 Token；留空保存时会保留。'
+      : '尚未配置 Token。';
     const count = Object.keys(data?.applied || {}).length;
     snackbar(count > 0 ? `已保存 ${count} 项设置（会话间隔与管理员权限立即生效，其余设置重启桥接后生效）` : '没有改动');
   } catch (err) {
@@ -2054,6 +2075,280 @@ async function saveSettings() {
   } finally {
     btn.disabled = false;
     btn.textContent = '保存设置';
+  }
+}
+
+function automationLines(id) {
+  return String($(id)?.value ?? '').split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+}
+
+const AUTOMATION_REASONS = {
+  disabled: '自动化已停用',
+  login_required: '需要导入有效登录态',
+  login_expired: '登录态已失效，请重新导入',
+  login_invalid: '登录态已失效，请重新导入',
+  daily_limit: '已达到每日评论上限',
+  cooldown: '等待评论间隔结束',
+  approval_required: '等待完成人工验收',
+  comment_not_approved: '等待完成人工验收',
+  platform_rejected: '平台拒绝发布',
+  publication_uncertain: '发布结果不确定，已暂停发布',
+  previous_publication_uncertain: '上次发布结果不确定，已暂停发布',
+  platform_refused: '平台拒绝发布，已暂停发布',
+  network_error: '网络异常，已暂停发布',
+  bilibili_login_required: '需要重新导入 B站登录态',
+  bilibili_invalid_cookie: '登录态无效，请重新导入',
+  bilibili_api_rejected: '平台拒绝发布，已暂停发布',
+  bilibili_invalid_response: '平台响应异常，已暂停发布',
+  bilibili_http_error: '网络异常，已暂停发布',
+  bilibili_request_failed: '网络异常，已暂停发布',
+  bilibili_comment_uncertain: '发布结果不确定，已暂停发布',
+  bilibili_publication_cancelled: '设置已变更，取消发布',
+  bilibili_invalid_mention: '@ 账户无效，已暂停发布',
+  bilibili_invalid_comment: '评论格式无效，已暂停发布',
+  platform_error: '平台检查失败',
+  duplicate: '该动态已有评论记录',
+};
+
+function automationReason(value) {
+  return AUTOMATION_REASONS[value] ?? String(value ?? '');
+}
+
+function renderAutomationAudit(entries) {
+  const host = $('#biliAudit');
+  if (!host) return;
+  host.textContent = '';
+  for (const entry of entries ?? []) {
+    const row = document.createElement('article');
+    row.className = 'session';
+    const main = document.createElement('div');
+    main.className = 'session__main';
+    const title = document.createElement('p');
+    title.className = 'session__title';
+    title.textContent = `动态 ${entry.dynamicId ?? '—'} · @ ${entry.targetUid ?? entry.mentionUid ?? '—'}`;
+    const status = document.createElement('p');
+    status.className = 'card__hint';
+    const result = { published: '已发布', success: '已发布', failed: '失败', blocked: '已阻止', skipped: '已跳过', pending: '待确认', unknown: '结果不确定', uncertain: '结果不确定', cancelled: '已取消' };
+    const outcome = entry.status ?? entry.result;
+    status.textContent = `${entry.at ? new Date(entry.at).toLocaleString() : '—'} · ${result[outcome] ?? outcome ?? '—'}${entry.reason ? ` · ${automationReason(entry.reason)}` : ''}`;
+    const content = document.createElement('p');
+    content.className = 'card__hint';
+    content.textContent = entry.text ?? entry.body ?? entry.comment ?? '';
+    main.append(title, status, content);
+    row.appendChild(main);
+    host.appendChild(row);
+  }
+  if (!host.childElementCount) host.innerHTML = '<p class="empty">暂无评论记录</p>';
+}
+
+async function loadAutomation() {
+  try {
+    const data = await api('/api/automation/bilibili');
+    STATE.automation = data;
+    const cfg = data?.config ?? {};
+    if ($('#biliEnabled')) $('#biliEnabled').checked = Boolean(cfg.enabled);
+    if ($('#biliCron')) $('#biliCron').value = cfg.cron ?? '0 9 * * *';
+    if ($('#biliKeywords')) $('#biliKeywords').value = (cfg.keywords ?? []).join('\n');
+    if ($('#biliUpUsers')) $('#biliUpUsers').value = (cfg.upUsers ?? []).join('\n');
+    if ($('#biliTargets')) $('#biliTargets').value = (cfg.targets ?? []).join('\n');
+    if ($('#biliMentionUid')) $('#biliMentionUid').value = cfg.mentionUid ?? '';
+    if ($('#biliCommentEnabled')) $('#biliCommentEnabled').checked = Boolean(cfg.commentEnabled);
+    if ($('#biliCommentApproved')) $('#biliCommentApproved').checked = Boolean(cfg.commentApproved);
+    if ($('#biliAutomationStatus')) {
+      const cookie = data.cookieAvailable ? 'B站登录态已就绪' : '尚未导入 B站登录态';
+      const due = data.nextRunAt ? ` · 下次检查 ${new Date(data.nextRunAt).toLocaleString()}` : '';
+      const outcome = { ok: '成功', error: '失败', partial: '部分成功', running: '运行中' };
+      const last = data.lastRun?.status ? ` · 上次${outcome[data.lastRun.status] ?? data.lastRun.status}：${new Date(data.lastRun.at).toLocaleString()}，新内容 ${data.lastRun.found ?? 0} 条` : '';
+      $('#biliAutomationStatus').textContent = `${data.busy ? '检查运行中 · ' : ''}${cookie}${due}${last}`;
+    }
+    if ($('#biliCommentStatus')) $('#biliCommentStatus').textContent = `今日评论 ${data.todayComments ?? 0}/3${data.blockedReason ? ` · ${automationReason(data.blockedReason)}` : ''}${data.commentPublicationStatus ? ` · ${data.commentPublicationStatus}` : ''}`;
+    renderAutomationAudit(data.audit);
+  } catch (err) {
+    if ($('#biliAutomationStatus')) $('#biliAutomationStatus').textContent = `读取自动化配置失败：${err.message}`;
+  }
+}
+
+async function automationMutation(path, method, payload, options = {}) {
+  if (!STATE.automation?.automationToken) await loadAutomation();
+  if (!STATE.automation?.automationToken) throw new Error('请刷新自动化页面后再操作');
+  return api(path, { ...options, method, headers: { 'Content-Type': 'application/json', 'X-QQ-Automation-Token': STATE.automation.automationToken }, body: JSON.stringify(payload) });
+}
+
+let biliQrSession = null;
+const BILI_QR_STATUSES = {
+  starting: '正在获取二维码…',
+  waiting: '请使用哔哩哔哩 App 扫码登录',
+  scanned: '已扫码，请在手机上确认登录',
+  expired: '二维码已过期，请刷新二维码',
+  success: 'B站登录成功，登录态已保存',
+  error: '登录检查失败，请刷新二维码重试',
+};
+
+function cancelBiliQrRequest(id, { keepalive = false, notify = true } = {}) {
+  if (!id || !STATE.automation?.automationToken) return;
+  void automationMutation('/api/automation/bilibili/login/cancel', 'POST', { id }, { keepalive }).then(async (result) => {
+    if (result?.status !== 'success') return;
+    await loadAutomation();
+    if (notify && currentPage() === 'automation' && !document.hidden) snackbar(BILI_QR_STATUSES.success);
+  }).catch(() => {});
+}
+
+function renderBiliQr(session, status) {
+  if (biliQrSession !== session) return;
+  session.status = status;
+  const panel = $('#biliQrPanel');
+  if (panel) { panel.hidden = false; panel.dataset.status = status; }
+  if ($('#biliQrStatus')) $('#biliQrStatus').textContent = BILI_QR_STATUSES[status];
+  if ($('#biliQrLogin')) {
+    $('#biliQrLogin').disabled = status === 'starting';
+    $('#biliQrLogin').setAttribute('aria-expanded', 'true');
+  }
+  if ($('#biliQrRefresh')) $('#biliQrRefresh').disabled = status === 'starting';
+  if ($('#biliQrCancel')) $('#biliQrCancel').textContent = status === 'success' ? '关闭' : '取消';
+  if (!['waiting', 'scanned'].includes(status)) {
+    const image = $('#biliQrImage');
+    if (image) { image.hidden = true; image.removeAttribute('src'); }
+  }
+}
+
+function stopBiliQrLogin({ hide = true, keepalive = false, notify = true } = {}) {
+  const session = biliQrSession;
+  biliQrSession = null;
+  if (session) {
+    clearTimeout(session.timer);
+    session.controller.abort();
+    cancelBiliQrRequest(session.id, { keepalive, notify });
+  }
+  if (hide && $('#biliQrPanel')) $('#biliQrPanel').hidden = true;
+  if ($('#biliQrImage')) { $('#biliQrImage').hidden = true; $('#biliQrImage').removeAttribute('src'); }
+  if ($('#biliQrLogin')) {
+    $('#biliQrLogin').disabled = false;
+    $('#biliQrLogin').setAttribute('aria-expanded', 'false');
+  }
+}
+
+function finishBiliQr(session, status) {
+  if (biliQrSession !== session) return;
+  clearTimeout(session.timer);
+  session.timer = null;
+  if (status !== 'success') cancelBiliQrRequest(session.id);
+  session.id = null;
+  renderBiliQr(session, status);
+}
+
+function failBiliQrLogin(session, error) {
+  if (biliQrSession !== session || session.controller.signal.aborted) return;
+  finishBiliQr(session, 'error');
+  if (error?.message && !error.message.startsWith('invalid_login_')) snackbar(`B站登录失败：${error.message}`, { duration: 5200 });
+}
+
+function scheduleBiliQrPoll(session) {
+  if (biliQrSession !== session || session.timer || session.polling || !session.id || document.hidden || currentPage() !== 'automation') return;
+  session.timer = window.setTimeout(() => {
+    session.timer = null;
+    void pollBiliQrLogin(session);
+  }, 2000);
+}
+
+async function pollBiliQrLogin(session) {
+  if (biliQrSession !== session || session.polling || !session.id) return;
+  if (Date.now() >= session.expiresAt) { finishBiliQr(session, 'expired'); return; }
+  session.polling = true;
+  try {
+    const result = await automationMutation('/api/automation/bilibili/login/poll', 'POST', { id: session.id }, { signal: session.controller.signal });
+    if (biliQrSession !== session) return;
+    if (!['waiting', 'scanned', 'expired', 'success'].includes(result?.status)) throw new Error('invalid_login_status');
+    if (result.status === 'success') {
+      finishBiliQr(session, 'success');
+      await loadAutomation();
+    } else if (result.status === 'expired' || Date.now() >= session.expiresAt) finishBiliQr(session, 'expired');
+    else renderBiliQr(session, result.status);
+  } catch (error) {
+    failBiliQrLogin(session, error);
+  } finally {
+    session.polling = false;
+    scheduleBiliQrPoll(session);
+  }
+}
+
+async function startBiliQrLogin() {
+  stopBiliQrLogin({ hide: false });
+  const session = { id: null, timer: null, polling: false, controller: new AbortController(), expiresAt: 0 };
+  biliQrSession = session;
+  renderBiliQr(session, 'starting');
+  try {
+    const result = await automationMutation('/api/automation/bilibili/login/start', 'POST', {}, { signal: session.controller.signal });
+    if (biliQrSession !== session) { cancelBiliQrRequest(result?.id); return; }
+    const validId = /^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i.test(result?.id ?? '');
+    const validImage = typeof result?.qrImage === 'string' && result.qrImage.length < 1024 * 1024 && /^data:image\/(?:gif|png);base64,[A-Za-z\d+/]+={0,2}$/.test(result.qrImage);
+    const expiresAt = Date.parse(result?.expiresAt);
+    if (!validId || !validImage || result.status !== 'waiting' || !Number.isFinite(expiresAt)) {
+      cancelBiliQrRequest(validId ? result.id : null);
+      throw new Error('invalid_login_qr');
+    }
+    session.id = result.id;
+    session.expiresAt = expiresAt;
+    if (expiresAt <= Date.now()) { finishBiliQr(session, 'expired'); return; }
+    const image = $('#biliQrImage');
+    if (image) { image.src = result.qrImage; image.hidden = false; }
+    renderBiliQr(session, 'waiting');
+    scheduleBiliQrPoll(session);
+  } catch (error) {
+    failBiliQrLogin(session, error);
+  }
+}
+
+async function saveAutomation() {
+  const mentionUid = String($('#biliMentionUid')?.value ?? '').trim();
+  if (mentionUid && !/^[1-9]\d*$/.test(mentionUid)) return snackbar('B站 UID 必须是正整数');
+  const payload = {
+    enabled: Boolean($('#biliEnabled')?.checked),
+    cron: String($('#biliCron')?.value ?? '').trim(),
+    keywords: automationLines('#biliKeywords'),
+    upUsers: automationLines('#biliUpUsers'),
+    targets: automationLines('#biliTargets'),
+    mentionUid,
+    commentEnabled: Boolean($('#biliCommentEnabled')?.checked),
+    commentApproved: Boolean($('#biliCommentApproved')?.checked),
+  };
+  const button = $('#biliSave');
+  if (button) button.disabled = true;
+  try {
+    await automationMutation('/api/automation/bilibili', 'PUT', payload);
+    snackbar('B站自动化设置已保存');
+    await loadAutomation();
+  } catch (err) {
+    snackbar(`保存失败：${err.message}`, { duration: 5200 });
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function runAutomationNow() {
+  const button = $('#biliRunNow');
+  if (button) button.disabled = true;
+  try {
+    const result = await automationMutation('/api/automation/bilibili/run', 'POST', {});
+    snackbar(result.message || 'B站检查已排队');
+    await loadAutomation();
+  } catch (err) {
+    snackbar(`执行失败：${err.message}`, { duration: 5200 });
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function importBilibiliCookie() {
+  const button = $('#biliCookieImport');
+  if (button) button.disabled = true;
+  try {
+    const result = await automationMutation('/api/automation/bilibili/cookie', 'POST', { browser: $('#biliCookieBrowser')?.value ?? 'edge' });
+    snackbar(result.message || 'B站登录态已导入');
+    await loadAutomation();
+  } catch (err) {
+    snackbar(`导入失败：${err.message}`, { duration: 5200 });
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
@@ -2084,7 +2379,7 @@ function renderPaths(data) {
   if (memory && document.activeElement !== memory) memory.value = data.memory?.raw ?? '';
   if (workspace && document.activeElement !== workspace) workspace.value = data.workspace?.raw ?? '';
   const ph = $('#personaPathHint');
-  const mh = $('#memoryRootHint');
+  const mh = $('#memoryPathHint');
   const wh = $('#workspaceCwdHint');
   if (ph) ph.textContent = pathHint(data.persona, 'file');
   if (mh) mh.textContent = pathHint(data.memory, 'dir');
@@ -2095,7 +2390,7 @@ async function loadPaths() {
   try {
     renderPaths(await api('/api/paths'));
   } catch (err) {
-    for (const id of ['#personaPathHint', '#memoryRootHint', '#workspaceCwdHint']) {
+    for (const id of ['#personaPathHint', '#memoryPathHint', '#workspaceCwdHint']) {
       const node = $(id);
       if (node) node.textContent = `读取失败：${err.message}`;
     }
@@ -2406,6 +2701,23 @@ function initEvents() {
 
   // 设置
   $('#settingsSave')?.addEventListener('click', saveSettings);
+  $('#biliSave')?.addEventListener('click', saveAutomation);
+  $('#biliRunNow')?.addEventListener('click', runAutomationNow);
+  $('#biliCookieImport')?.addEventListener('click', importBilibiliCookie);
+  $('#biliQrLogin')?.addEventListener('click', startBiliQrLogin);
+  $('#biliQrRefresh')?.addEventListener('click', startBiliQrLogin);
+  $('#biliQrCancel')?.addEventListener('click', () => stopBiliQrLogin());
+  $('#biliQrImage')?.addEventListener('error', () => {
+    if (biliQrSession && ['waiting', 'scanned'].includes(biliQrSession.status)) finishBiliQr(biliQrSession, 'error');
+  });
+  $('#biliRefresh')?.addEventListener('click', () => loadAutomation());
+  document.addEventListener('visibilitychange', () => {
+    const session = biliQrSession;
+    if (!session) return;
+    if (document.hidden) { clearTimeout(session.timer); session.timer = null; }
+    else scheduleBiliQrPoll(session);
+  });
+  window.addEventListener('pagehide', () => stopBiliQrLogin({ keepalive: true, notify: false }));
   $('#setAutostart')?.addEventListener('change', (event) => setAutostart(Boolean(event.target.checked)));
   $('#updatesCheck')?.addEventListener('click', checkUpdates);
   $('#updatesAutomatic')?.addEventListener('change', (event) => setUpdateAutomatic(Boolean(event.target.checked)));
@@ -2425,7 +2737,7 @@ function initEvents() {
   });
   for (const [inputId, hintId] of [
     ['#setPersonaPath', '#personaPathHint'],
-    ['#setMemoryRoot', '#memoryRootHint'],
+    ['#setMemoryRoot', '#memoryPathHint'],
     ['#setWorkspaceCwd', '#workspaceCwdHint'],
   ]) {
     const input = $(inputId);

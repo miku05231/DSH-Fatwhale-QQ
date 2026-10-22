@@ -89,6 +89,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Administrator boundary tests failed.' }
           node tests/dsh-web-test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'DSH Web compatibility checks failed.' }
+      - name: Test conversation, voice and platform automation
+        shell: pwsh
+        env:
+          QQ_PLATFORM_BROWSER_TEST: '1'
+        run: |
+          foreach ($taskFile in @(
+            'jev-classifier-test', 'jev-admission-test', 'reply-tts-test',
+            'reply-delivery-test', 'bilibili-test', 'bili-cookies-test',
+            'bilibili-login-test', 'bilibili-login-integration-test',
+            'platform-scheduler-test', 'platform-model-test',
+            'platform-webui-test', 'e2e-platform-voice'
+          )) {
+            node ("tests/{0}.mjs" -f $taskFile)
+            if ($LASTEXITCODE -ne 0) { throw "Feature tests failed: $taskFile" }
+          }
       - name: Build portable files and checksums
         shell: powershell
         run: |
@@ -107,7 +122,9 @@ jobs:
         run: |
           $taskAssets = @(Get-ChildItem -LiteralPath dist/release -File | ForEach-Object { $_.FullName })
           if ($taskAssets.Count -ne 4) { throw 'Expected three packages and SHA256SUMS.txt.' }
-          gh release create $env:RELEASE_TAG @taskAssets --verify-tag --title "QQ-DSH $env:RELEASE_TAG" --generate-notes --latest
+          $taskNotes = Join-Path 'docs/releases' ($env:RELEASE_TAG + '.md')
+          if (-not (Test-Path -LiteralPath $taskNotes -PathType Leaf)) { throw 'Release notes are required.' }
+          gh release create $env:RELEASE_TAG @taskAssets --verify-tag --title "QQ-DSH $env:RELEASE_TAG" --notes-file $taskNotes --latest
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed; existing releases are never overwritten.' }
       - name: Save isolated test diagnostics
         if: always()

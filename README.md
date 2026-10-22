@@ -7,6 +7,8 @@
 
 你在手机或电脑 QQ 里发消息，本机 DSH 执行并回复。
 
+当前版本：**v3.0.0**。新增群聊免唤醒判定、回复语音、B站定时浏览与推送，详见 [发行说明](docs/releases/v3.0.0.md)。
+
 应用图标源文件：[deepseek-waitou.png](deepseek-waitou.png)（保留原始 PNG）。
 
 ## 项目展示
@@ -38,6 +40,35 @@
 
 只有明确配置的管理员 QQ 账号可读取、发送本机文件和调用电脑工具；普通成员使用独立的无工具聊天通道。
 
+**v3.0.0 · JEV / 默认模型接话判定**
+
+![系统页的 JEV 地址、模型、掩码 Token、超时和上下文设置](docs/screenshots/console-jev-settings.png)
+
+JEV URL 和 Token 均已填写时使用 JEV，缺任一项时使用当前 DSH 默认模型。按群读取有限上下文与机器人回答，判定失败或超时保持静默；白名单、黑名单和限流先执行。
+
+**v3.0.0 · 回复语音插件**
+
+![插件页的 Edge TTS 引擎、音色、Python 命令、长度与超时配置](docs/screenshots/console-reply-tts.png)
+
+文字发送成功后可追加 QQ 语音。语音默认关闭，合成或发送失败保留文字；此版本不包含语音识别和翻译。
+
+**v3.0.0 · B站自动化**
+
+![B站扫码登录入口、Cron、关键词、UP 主与 QQ 推送配置](docs/screenshots/console-bilibili-automation.png)
+
+支持扫码登录、关键词搜索、UP 动态订阅、本地时间 Cron、去重和 QQ 摘要推送。自动化默认关闭，需自行配置来源与目标。
+
+<details>
+<summary>自动评论、指定 UID @ 与审计</summary>
+
+![指定 UID、评论开关、人工验收确认与评论审计](docs/screenshots/console-bilibili-safeguards.png)
+
+自动评论默认关闭，还需显式确认已完成人工验收；同一动态最多尝试一次，每日最多 3 次、间隔至少 30 分钟，失败或结果不确定时停止发布，不自动重试。
+
+</details>
+
+以上新功能截图由实际前端在隔离演示服务中渲染；地址、账号、登录状态与运行结果均为演示数据，不代表真实发布记录。重现方式：`node scripts/capture-showcase.mjs --features-only`。
+
 <details>
 <summary>更多控制台页面：深色概览、记忆、人格、模型与移动端更新提醒</summary>
 
@@ -68,6 +99,21 @@
 </details>
 <!-- showcase:end -->
 
+## v3.0.0 配置与验证范围
+
+| 功能 | 配置入口 | 默认状态 |
+| --- | --- | --- |
+| 群聊免唤醒判定 | 系统 → 行为设置；沿用群与用户准入规则 | 未填写完整 JEV URL / Token 时使用默认模型 |
+| 回复语音 | 插件 → 回复语音；安装 `tools/requirements-voice.txt` | 关闭，保留文字回复 |
+| B站浏览与推送 | 自动化 → 扫码登录、来源、Cron 与 QQ 目标 | 关闭 |
+| B站评论与 @ | 自动化 → 指定 UID、评论开关与人工验收确认 | 关闭；每日 3 次、间隔 30 分钟 |
+
+完整步骤见 [免唤醒、语音和自动化配置](docs/automation-and-voice.md)。本版仅实现 B站平台适配器、Edge TTS 输出引擎；其他平台和引擎为后续扩展接口。
+
+**已验证**：隔离全量测试 67/67 组、实际 Electron 12/12 项、便携包升级 66/66 项；真实只读检查覆盖 QQ 登录 / OneBot 状态、B站登录 / 搜索 / 动态，真实 Edge TTS 中文合成成功。
+
+**尚未实测**：真实 QQ 文字和语音投递、长期真实群聊免唤醒表现、定时任务向真实 QQ 推送、B站实际评论和 @、v3.0.0 的 Docker 容器及其他操作系统。相关账号发送和发布链路使用模拟服务验证，不能据此视为真实平台验收。详细范围与复测方法见 [测试与未测试说明](docs/verification-v3.0.0.md)。
+
 ## 工作方式
 
 ```
@@ -86,11 +132,11 @@
              统一管理 NapCat / 桥接 / DSH 与配置
 ```
 
-全链路只经过本机的 NapCat 和一个 Node 进程，不经过任何第三方服务。
+QQ 桥接运行在本机的 NapCat 和 Node 进程中；模型请求发送到你配置的供应商，启用语音或平台自动化时还会访问对应服务。
 
 > 文档里的 `D:\code\qq-bridge` 只是**示例路径**，克隆到哪就是哪；`config.json` 里的账号、群号、路径都是占位值，按自己的改。
 
-> **验证范围**：DSH Desktop（Windows 桌面版）已实测。Docker 已在 WSL2 Linux 引擎上完成镜像构建、真实 NapCat 连接、真实 DeepSeek 推理和隔离消息链路验证；默认配置发现的问题与复测结果见 [Docker 验证报告](docs/Docker验证报告.md)。`node tests/docker-runtime-test.mjs` 提供真实容器回归测试；真人 QQ 消息完整收发与其他系统仍需各自验收。
+> **验证范围**：DSH Desktop（Windows 桌面版）已实测。历史版本的 WSL2 Docker 验证见 [Docker 验证报告](docs/Docker验证报告.md)，不代表本次 v3.0.0 已完成容器验证。`node tests/docker-runtime-test.mjs` 提供真实容器回归测试；本版 Docker 仅完成静态部署检查，真人 QQ 消息完整收发与其他系统仍需各自验收。
 
 全新克隆、安装与共享磁盘的验证过程见 [从零验证报告](docs/从零验证报告.md)；
 当前源码与历史提交的隐私问题见 [隐私审计报告](docs/隐私审计报告.md)。
@@ -108,7 +154,7 @@
 | `qq-bridge-launcher-<版本>.exe` | 只要启动器 | 放进工程根目录双击用，单独跑不了 |
 | `SHA256SUMS.txt` | 下载后校验 | 三个文件的 SHA-256 |
 
-前提只有两个：Node.js 18+（本项目零第三方 npm 依赖，不用 `npm install`）、一个能登录 QQ 的 NapCat / OneBot 实现。
+基础环境需要 Node.js 22+、可用的 DSH，以及能登录 QQ 的 NapCat / OneBot 实现。运行源码无需 `npm install`；可选语音与浏览器登录态提取另需安装对应 Python 依赖。
 
 控制台「系统 → 应用更新」会自动检查 GitHub 稳定版 Release。在 Windows 上，发现新版后点击「安装并重启」并确认，即可自动更新、重启桥接与托盘，保留配置、人格与记忆。便携版会下载并校验完整更新包；Git 源码版会拉取对应的正式发布标签，只在当前分支可以快进且已跟踪文件没有未提交修改时安装，失败时尝试恢复原版本。源码版需要安装 Git，并保留完整的启动脚本；自定义配置或状态目录、Git worktree、Docker 和其他系统仍请手动更新。自动检查仅提醒，不会自行安装；旧版须先手动更新一次才能使用新增的更新方式。
 
@@ -144,7 +190,7 @@
 
 托盘 **左键单击**，或直接访问 `http://127.0.0.1:5830`（端口写在 `state\webui-port.txt`，默认 5830）。
 
-底部八项导航，全部是安卓原生风格的 Material 3 设计，跟随系统深浅色：
+底部九项导航，采用 Material 3 设计，跟随系统深浅色：
 
 | 页 | 能干什么 |
 |---|---|
@@ -155,7 +201,8 @@
 | 会话 | 列出每个 QQ（私聊/群）对应的 DSH 会话，可单个删除（等于让它忘掉这段对话） |
 | 模型 | 看当前生效的供应商/模型，切「跟随 DSH」或「手动指定」（见一·八） |
 | 插件 | 每个插件一张卡：开关、说明、钩子、按 `configSchema` 自动生成的配置表单、加载失败清单（见一·九） |
-| 系统 | 运行信息、NapCat / 桥接日志切换、行为设置（会话间隔、群上下文条数、唤醒词、群成员能否呼唤它等） |
+| 自动化 | B站扫码登录、定时搜索与 UP 动态、QQ 摘要推送、指定 UID @ 和评论审计 |
+| 系统 | 运行信息、NapCat / 桥接日志、会话与准入设置、JEV 地址 / Token / 模型与上下文设置 |
 
 右下角悬浮按钮会按当前页做最常用的事（刷新 / 新记一条 / 新建对话）。
 服务卡上的按钮可以直接启停 NapCat、桥接和 DSH。
@@ -303,6 +350,7 @@ export async function onMessage(ctx) {
 - 开关存 `state\plugins.json`，配置存 `config.json` 的 `plugins.<name>`，都能在控制台改。
 - **改完要重启桥接才生效**（控制台会提示，不会假装热加载）。
 - 自带示例：`src\plugins\ping.js`（私聊或 @ 它发 `/ping`，回一句 pong，不消耗 dsh 调用）。
+- 内置「回复语音」通过 `afterReply` 注册文字发送成功后的任务；合成或语音投递失败保留文字。安装与 provider 接口见 [语音配置](docs/automation-and-voice.md#回复语音)。
 - 想关掉整套插件系统：`config.json` 里 `"plugins": { "enabled": false }`。
 
 完整设计、钩子契约与「加功能该加在哪」见 [`docs\控制台架构.md`](docs/控制台架构.md)。
@@ -616,6 +664,8 @@ QQ 里也能直接切（这几个指令不需要 @，主人发才算）：
 `persona.path`、`memory.root`、`dsh.cwd` 三条路径都可以在控制台「系统 → 路径」里改，也可以手写在这里；支持绝对路径、相对项目根、`~` 与 `%VAR%`，改完重启桥接生效（详见「一·十二、自定义路径」）。
 
 `behavior.wakeWord` 的语义（2026-10-20 修正，见 `SPEC-2.md` §12）：私聊直接说话即可；群里 **@ 了就不看唤醒词**；群里没 @ 时才按 `behavior.wakeWordMatch` 判断正文——默认 `contains`（正文里出现唤醒词就算，整句原样交给 DSH），改成 `prefix` 则要求以唤醒词开头并把它剥掉。被故意忽略的消息会把原因写进 `state\status.json` 的 `lastDrop`，控制台「系统 → 运行信息」有一行「最近忽略」。
+
+从 v3.0.0 起，已通过准入的群消息即使没有 @ 或唤醒词，也可根据本群上下文由模型决定是否接话。JEV `baseUrl` 和 `token` 均非空时使用 JEV；否则使用当前 DSH 默认模型。独立 JEV 还需填写模型名；已配置 JEV 的调用失败不会自动切换供应商。参见 [对话处理](docs/automation-and-voice.md#对话处理)。
 
 `security.allowGroupMembers`（默认 `false`）：群里**非白名单成员**能不能唤起它。`false` 时只有 `allowFrom` 里的人算数，群友喊破喉咙也不会回（`lastDrop` 会写「群成员不在 allowFrom」）。想让它跟整个群互动就设成 `true`，控制台「系统 → 行为设置」里有同名开关，旁边还有「唤醒词出现在句中就算」。
 

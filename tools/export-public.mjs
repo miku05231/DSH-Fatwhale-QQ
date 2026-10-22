@@ -40,6 +40,9 @@ const INCLUDE = [
   'docs/从零验证报告.md',
   'docs/screenshots',
   'docs/更新发布.md',
+  'docs/automation-and-voice.md',
+  'docs/verification-v3.0.0.md',
+  'docs/releases',
   '.github',
   'README.md',
   'package.json',
@@ -108,13 +111,16 @@ const PUBLIC_README = `> 非官方项目。QQ 侧通过第三方协议端 [NapCa
 
 ## 它能做什么
 
-- **私聊 / 群聊**：白名单控制；群里 @ 或喊唤醒词才搭话，其余消息只记入群记忆
+- **私聊 / 群聊**：私聊免唤醒；白名单群可由 JEV 或当前默认模型判断是否接话，明确 @ 或唤醒词沿用原规则
+- **JEV 判定**：URL 和 Token 均非空时使用 JEV，否则使用当前 DSH 默认模型；按群使用有限上下文，失败或超时不回复
+- **回复语音**：可选 Edge TTS 插件，文字成功发送后追加 OneBot 语音；失败保留文字，默认关闭
+- **B站自动化**：扫码登录、关键词搜索、UP 动态订阅、本地时间 Cron、QQ 摘要推送和评论审计；可选低频评论与指定 UID @，默认关闭
 - **长期记忆**：对话自动落盘到 Obsidian 笔记库（日志 / 人物页 / 群页 / 反思），回复前按相关度召回
 - **记忆反思**：控制台记忆页「立即反思」手动跑一次；也能每天定时（默认 04:00，关机错过会补跑），重写前自动备份成 \`.bak-时间戳\`
 - **模型跟随**：读 DSH 桌面端的当前模型，QQ 侧下一条消息立刻跟着换，无需重启
 - **人格**：用一份 \`AGENTS.md\` 定义它是谁、怎么说话
 - **Native 能力**：DSH 的 MCP 工具与 skills 原样可用（drawio、duckduckgo、windows…）
-- **控制台**：\`127.0.0.1:5830\`，八个页签（概览 / 记忆 / 表情 / 人格 / 会话 / 模型 / 插件 / 系统），可启停服务、改设置、看日志
+- **控制台**：\`127.0.0.1:5830\`，九个页签（概览 / 记忆 / 表情 / 人格 / 会话 / 模型 / 插件 / 自动化 / 系统），可启停服务、改设置、看日志
 - **表情包库**：自动收集聊天里的表情并打标签（来源 / 群 / 谁发的 / 关键词 / 动图静态 / 尺寸），可筛选、改标签、换存放目录、重建索引
 - **插件**：往 \`src/plugins/\` 扔一个 .js 就能加功能，控制台自动生成开关与配置表单
 - **托盘 / 自启**：一键启动全部、左键直达控制台、开机自启；托盘与窗口图标用 \`assets/app-icon.png\`
@@ -123,9 +129,11 @@ const PUBLIC_README = `> 非官方项目。QQ 侧通过第三方协议端 [NapCa
 ## 环境要求
 
 - Windows 10/11（托盘用 WinForms，测试与 CDP 用 Edge）
-- Node.js ≥ 20（无第三方 npm 依赖）
+- Node.js ≥ 22（无需 npm install；内置第三方代码保留许可证）
 - DSH（DeepSeek Harness）已安装并可用 \`dsh\` 命令
 - NapCat（同一个发布包里的无头版本即可，无需另装 QQ 客户端）
+
+Docker 部署见 [部署说明](docs/Docker部署.md)；[历史容器验证](docs/Docker验证报告.md) 不代表 v3.0.0 已完成真实容器测试。
 
 ## 快速开始
 
@@ -163,6 +171,14 @@ node tests\\plugins-test.mjs # 单跑插件宿主
 \`\`\`
 
 全量套件使用临时配置与 DSH_HOME、假 NapCat 和本机模型端点，不需要真实 QQ 账号或在线模型密钥。真实 NapCat、Docker 和 Electron 桌面验证按各测试的要求单独执行。
+
+## v3.0.0 验证范围与未测试项
+
+本次隔离全量测试 67/67 组通过，另有实际 Electron 12/12 项、便携包升级 66/66 项。真实只读检查验证了 QQ 登录/OneBot 状态、B站登录/搜索/动态以及 Edge TTS 中文合成。
+
+**未实测**：真实 QQ 文字/语音投递、长期群聊免唤醒表现、真实 QQ 定时推送、B站实际评论与 @、本版 Docker 容器和其他操作系统。账号发送与发布链路使用模拟响应验证，不能视为真实平台验收。语音、自动化和自动评论默认关闭；评论还要求显式确认人工验收。
+
+详见 [新功能配置](docs/automation-and-voice.md)、[测试与未测试说明](docs/verification-v3.0.0.md) 和 [v3.0.0 发行说明](docs/releases/v3.0.0.md)。
 
 ## 插件
 
@@ -213,6 +229,10 @@ node_modules/
 .DS_Store
 Thumbs.db
 session*.json
+docs/testing/
+docs/work-progress.md
+docs/full-verification-*.md
+docs/update-program.md
 `;
 
 const GITATTRIBUTES = `# .ps1 必须保持「UTF-8 带 BOM + CRLF」原样：PS 5.1 没有 BOM 会按 ANSI 读、

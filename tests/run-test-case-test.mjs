@@ -102,6 +102,25 @@ setInterval(() => {}, 1000);
   check('Spawn failures are recorded after close rather than aborting the suite', (
     missing.code === -1 && !testCaseRecord(item, missing).pass && missing.stderr.includes('ENOENT')
   ));
+
+  const oldBrowserFlag = process.env.QQ_PLATFORM_BROWSER_TEST;
+  const oldPrivateToken = process.env.QQ_PRIVATE_FIXTURE_TOKEN;
+  try {
+    process.env.QQ_PLATFORM_BROWSER_TEST = '1';
+    process.env.QQ_PRIVATE_FIXTURE_TOKEN = 'synthetic-isolation-token';
+    await writeFile(path.join(root, item.file), `
+if (process.env.QQ_PLATFORM_BROWSER_TEST !== '1') throw new Error('Required browser flag was discarded');
+if (process.env.QQ_PRIVATE_FIXTURE_TOKEN !== undefined) throw new Error('Private environment leaked');
+console.log('fixture stdout');
+`);
+    const flagged = await runTestCase(root, item.file, 10_000);
+    check('Required platform browser coverage is enabled without forwarding private environment values', testCaseRecord(item, flagged).pass);
+  } finally {
+    if (oldBrowserFlag === undefined) delete process.env.QQ_PLATFORM_BROWSER_TEST;
+    else process.env.QQ_PLATFORM_BROWSER_TEST = oldBrowserFlag;
+    if (oldPrivateToken === undefined) delete process.env.QQ_PRIVATE_FIXTURE_TOKEN;
+    else process.env.QQ_PRIVATE_FIXTURE_TOKEN = oldPrivateToken;
+  }
 } finally {
   for (const directory of retained) await rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
   await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
