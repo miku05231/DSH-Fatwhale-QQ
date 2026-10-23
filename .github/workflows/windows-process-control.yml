@@ -1,0 +1,42 @@
+name: Windows Process Control
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/windows-process-control.yml'
+      - 'tests/process-control-test.mjs'
+      - 'tests/helpers/isolated-fixtures.mjs'
+      - 'tests/run-all.mjs'
+      - 'launcher/bootstrap.ps1'
+      - 'launcher/lib/ProcessControl.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  process-control:
+    if: github.repository == 'miku05231/DSH-Fatwhale-QQ'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Verify isolated Windows PowerShell process control
+        shell: pwsh
+        run: |
+          node tests/run-all.mjs --only 'NapCat Windows'
+          if ($LASTEXITCODE -ne 0) { throw 'Windows process control checks failed.' }
+      - name: Save isolated test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-process-control-reports
+          path: state/test-log/
+          retention-days: 7
+          if-no-files-found: ignore

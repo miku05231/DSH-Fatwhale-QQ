@@ -7,26 +7,47 @@ import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { isolatedEnv } from './helpers/isolated-fixtures.mjs';
+import { isolatedEnv, prepareIsolatedHome } from './helpers/isolated-fixtures.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const PS = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
+const READY = 'qq-process-control:ready';
 
-async function powershell(code, root, executable = PS) {
+async function powershell(code, root, executable = PS, { executionTimeoutMs = 15_000 } = {}) {
   return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    let readyAt;
+    let phase = 'startup';
+    let timedOut = false;
+    let timer;
     const child = spawn(executable, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand',
-      Buffer.from(`[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n${code}`, 'utf16le').toString('base64')],
+      Buffer.from(`[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n[Console]::Error.WriteLine('${READY}')\n${code}`, 'utf16le').toString('base64')],
     { windowsHide: true, env: isolatedEnv(root), stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
-    child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
-    child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
-    const timer = setTimeout(() => child.kill(), 15_000);
-    child.once('error', reject);
-    child.once('close', (code) => {
+    const armTimeout = (timeoutMs) => {
       clearTimeout(timer);
-      if (code !== 0) reject(new Error(`PowerShell exited ${code}: ${stderr}`));
+      timer = setTimeout(() => { timedOut = true; child.kill(); }, timeoutMs);
+    };
+    // A fresh Windows runner may spend longer starting PowerShell than running the fixture.
+    armTimeout(60_000);
+    child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+    child.stderr.setEncoding('utf8').on('data', (chunk) => {
+      stderr += chunk;
+      if (phase === 'startup' && stderr.includes(READY)) {
+        readyAt = Date.now();
+        phase = 'execution';
+        armTimeout(executionTimeoutMs);
+      }
+    });
+    child.once('error', (error) => { clearTimeout(timer); reject(error); });
+    child.once('close', (code, signal) => {
+      clearTimeout(timer);
+      const diagnostic = stderr.replaceAll(READY, '').trim();
+      if (process.env.CI) console.log(`PowerShell ${path.basename(executable)}: startup=${readyAt === undefined ? 'not ready' : `${readyAt - startedAt}ms`}, total=${Date.now() - startedAt}ms`);
+      if (timedOut) reject(new Error(`PowerShell ${phase} timed out after ${phase === 'startup' ? 60_000 : executionTimeoutMs}ms (total=${Date.now() - startedAt}ms, signal=${signal ?? 'none'}): ${diagnostic}`));
+      else if (code !== 0) reject(new Error(`PowerShell exited ${code} during ${phase} (signal=${signal ?? 'none'}): ${diagnostic}`));
       else {
         try { resolve(JSON.parse(stdout.trim())); } catch { reject(new Error(`Invalid fixture output: ${stdout}\n${stderr}`)); }
       }
@@ -36,8 +57,16 @@ async function powershell(code, root, executable = PS) {
 
 async function fixture(run) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-process-health-'));
-  try { await run(root); } finally { await fs.rm(root, { recursive: true, force: true }); }
+  try {
+    await prepareIsolatedHome(root);
+    await run(root);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 }
+
+test('a fixture command remains bounded after PowerShell startup', { skip: process.platform !== 'win32' }, () => fixture(async (root) => {
+  await assert.rejects(powershell('Start-Sleep -Seconds 5; "{}"', root, PS, { executionTimeoutMs: 100 }),
+    /PowerShell execution timed out after 100ms/);
+}));
 
 test('a listening port and saved account never establish QQ login', { skip: process.platform !== 'win32' }, () => fixture(async (root) => {
   const result = await powershell(`

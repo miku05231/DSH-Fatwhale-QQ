@@ -35,7 +35,7 @@ const SUITE = [
     note: '当前 WebUI 鉴权、显式在线证据、OneBot 降级、凭据刷新与脱敏日志',
   },
   {
-    name: 'NapCat Windows 进程控制', file: 'tests/process-control-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
+    name: 'NapCat Windows 进程控制', file: 'tests/process-control-test.mjs', expect: ['fail 0'], timeoutMs: 900_000,
     note: 'Windows PowerShell 5.1、安装归属、自动登录账号、日志保留与状态可信度',
   },
   {
