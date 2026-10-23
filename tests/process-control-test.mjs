@@ -17,11 +17,14 @@ const READY = 'qq-process-control:ready';
 async function powershell(code, root, executable = PS, { executionTimeoutMs = 15_000 } = {}) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
+    const modulePath = path.join(path.dirname(executable), 'Modules');
     let readyAt;
     let phase = 'startup';
     let timedOut = false;
     let timer;
     const command = `[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$env:PSModulePath = ${quote(modulePath)}
+Import-Module Microsoft.PowerShell.Management, Microsoft.PowerShell.Utility -ErrorAction Stop
 [Console]::Error.WriteLine('${READY}')
 try {
 ${code}
@@ -32,14 +35,14 @@ ${code}
 }`;
     const child = spawn(executable, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand',
       Buffer.from(command, 'utf16le').toString('base64')],
-    { windowsHide: true, env: isolatedEnv(root), stdio: ['ignore', 'pipe', 'pipe'] });
+    { windowsHide: true, env: isolatedEnv(root, { PSModulePath: modulePath }), stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     const armTimeout = (timeoutMs) => {
       clearTimeout(timer);
       timer = setTimeout(() => { timedOut = true; child.kill(); }, timeoutMs);
     };
-    // A fresh Windows runner may spend longer starting PowerShell than running the fixture.
+    // Load only this runtime's built-in modules before the fixture execution budget starts.
     armTimeout(60_000);
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
     child.stderr.setEncoding('utf8').on('data', (chunk) => {
@@ -92,12 +95,13 @@ $mockCommand = Get-Command Get-CimInstance -ErrorAction Stop
 [Console]::Error.WriteLine(('probe mock command: ' + $mockCommand.CommandType))
 $process = Get-CimInstance -ClassName Win32_Process -Filter "Name='node.exe'" -OperationTimeoutSec 3 -ErrorAction Stop
 [Console]::Error.WriteLine('probe after fixture function')
-@{ joined = $joined; processId = $process.ProcessId; commandType = [string]$mockCommand.CommandType } | ConvertTo-Json -Compress
+@{ joined = $joined; processId = $process.ProcessId; commandType = [string]$mockCommand.CommandType; modulePath = $env:PSModulePath } | ConvertTo-Json -Compress
 [Console]::Error.WriteLine('probe after JSON')
-`, root, PS, { executionTimeoutMs: 60_000 });
+`, root);
   assert.equal(result.joined, path.join(root, 'fixture'));
   assert.equal(result.processId, 202);
   assert.equal(result.commandType, 'Function');
+  assert.equal(result.modulePath, path.join(path.dirname(PS), 'Modules'));
 }));
 
 test('a listening port and saved account never establish QQ login', { skip: process.platform !== 'win32' }, () => fixture(async (root) => {
