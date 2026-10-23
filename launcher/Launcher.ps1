@@ -1070,7 +1070,8 @@ function Start-LauncherStatusRefresh {
         # An implicit runspace can initialize synchronously in BeginInvoke.
         # Open one reusable pool asynchronously before submitting any probes.
         if ($null -eq $script:StatusPool) {
-            $script:StatusPool = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspacePool(1, 1)
+            $initialState = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault2()
+            $script:StatusPool = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspacePool(1, 1, $initialState, $Host)
             $script:StatusPoolOpen = $script:StatusPool.BeginOpen($null, $null)
             return
         }
