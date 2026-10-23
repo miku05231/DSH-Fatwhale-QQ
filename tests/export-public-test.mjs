@@ -67,6 +67,15 @@ async function verifyOutputSafety(tmpRoot) {
   await fsp.writeFile(path.join(fixtureRoot, 'README.md'), '<!-- showcase:start -->\nSynthetic fixture\n<!-- showcase:end -->\n');
   await fsp.writeFile(path.join(fixtureRoot, 'config.json'), '{"synthetic":true}\n');
   await fsp.writeFile(path.join(fixtureRoot, 'AGENTS.md'), 'private-maintenance-fixture\n');
+  const privateFiles = [
+    'docs/model-switch-session-reuse-implementation.md', 'docs/model-switch-session-reuse-repair-plan.md',
+    'docs/napcat-login-persistence-diagnosis.md', 'docs/napcat-login-persistence-implementation.md',
+    'docs/napcat-login-persistence-investigation-progress.md', 'tools/sticker.mjs',
+  ];
+  for (const file of privateFiles) {
+    await fsp.mkdir(path.dirname(path.join(fixtureRoot, file)), { recursive: true });
+    await fsp.writeFile(path.join(fixtureRoot, file), 'synthetic-private-maintenance-fixture\n');
+  }
   await fsp.writeFile(sourceSentinel, 'preserve-source-fixture\n');
   const runFixture = (target) => spawnSync(process.execPath, [fixtureTool, '--out', target, '--force'], {
     cwd: tmpRoot, encoding: 'utf8', windowsHide: true, timeout: 30_000,
@@ -103,6 +112,9 @@ async function verifyOutputSafety(tmpRoot) {
     const accepted = runFixture(target);
     ok(accepted.status === 0 && !fs.existsSync(stale), 'separate output can be rebuilt with --force');
     ok(!fs.existsSync(path.join(target, 'AGENTS.md')), 'maintenance AGENTS.md is not exported');
+    for (const file of privateFiles) {
+      ok(!fs.existsSync(path.join(target, file)), `private maintenance evidence is not exported: ${file}`);
+    }
   }
 }
 
@@ -153,6 +165,8 @@ async function main() {
     'docs/automation-and-voice.md',
     'docs/verification-v3.0.0.md',
     'docs/releases/v3.0.0.md',
+    'docs/verification-v3.1.0.md',
+    'docs/releases/v3.1.0.md',
     'scripts/install-update.ps1',
     '.github/workflows/release.yml',
     'deepseek-waitou.png',

@@ -71,7 +71,16 @@ const services = {
       record({ type: 'prompt', mode, text: request.content[0].text });
       promptCount += 1;
       if (scenario === 'prompt-hang' && promptCount === 1) return new Promise(() => {});
-      append({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'fixture reply' }] } } });
+      const actual = { provider: 'actual-route', model: 'actual-model' };
+      if (scenario === 'header-reuse' && promptCount !== 2) {
+        append({ type: 'request/header', data: { header: { config: {
+          ...actual, ...(promptCount === 1 ? { reasoningEffort: 'high' } : {}),
+        } } } });
+      }
+      append({ type: 'assistant/message', data: { message: {
+        ...(scenario === 'header-reuse' ? { source: { kind: 'llm', ...actual } } : {}),
+        content: [{ type: 'text', text: 'fixture reply' }],
+      } } });
       append({ type: 'turn/end', data: { reason: { kind: 'complete' } } });
     },
     cancel: () => {
@@ -80,9 +89,12 @@ const services = {
       return { accepted: true };
     },
   },
-  agents: { get: () => ({ session, whenIdle: async () => {} }), selectForNextRequest: () => record({ type: 'selected' }) },
+  agents: { get: () => ({ session, whenIdle: async () => {} }), selectForNextRequest: (_agent, model) => record({
+    type: 'selected', ...(scenario === 'header-reuse' ? { model } : {}),
+  }) },
   llm: {
     resolveCallConfig: async (model, signal) => {
+      if (scenario === 'header-reuse') return model;
       record({ type: 'model-waiting' });
       signal.addEventListener('abort', () => record({ type: 'model-aborted' }), { once: true });
       return new Promise(() => {});
@@ -211,6 +223,34 @@ await check('custom preset alias is selected by sandbox and approval bundle', as
   assert.equal(result.message.type, 'final');
   assert.equal(result.records.find((record) => record.type === 'set').name, 'safe-alias');
   assert.equal(result.records.find((record) => record.type === 'prompt').mode, 'safe-alias');
+});
+
+await check('actual host inherits an omitted header effort and clears it on a new header without effort', async () => {
+  const requested = { provider: 'requested-route', model: 'requested-model', reasoningEffort: 'max' };
+  const actual = { provider: 'actual-route', model: 'actual-model', reasoningEffort: 'high' };
+  const cleared = { provider: actual.provider, model: actual.model };
+  const result = await runHost('header-reuse', 'workspace-write', 'existing-admin-session', {
+    initialRequest: { model: requested },
+    onMessage: (message, send) => {
+      if (message.type !== 'final') return;
+      const next = message.id === 'test-request' ? 'reused-header-request'
+        : message.id === 'reused-header-request' ? 'cleared-header-request' : null;
+      if (next) send({ op: 'prompt', id: next, sessionId: message.sessionId, text: next, cwd: tmp, model: requested });
+    },
+    finishOn: (message) => ['error', 'fatal'].includes(message.type)
+      || (message.type === 'final' && message.id === 'cleared-header-request'),
+  });
+  assert.equal(result.message.type, 'final');
+  const finals = result.messages.filter((message) => message.type === 'final');
+  assert.equal(finals.length, 3);
+  assert.deepEqual(finals.map((message) => message.id), ['test-request', 'reused-header-request', 'cleared-header-request']);
+  assert.deepEqual(finals.map((message) => message.sessionId), Array(3).fill('existing-admin-session'));
+  assert.deepEqual(finals.map((message) => message.model), [actual, actual, cleared]);
+  assert.deepEqual(finals.map((message) => message.modelsUsed), [[actual], [actual], [cleared]]);
+  assert.deepEqual(result.records.filter((record) => record.type === 'selected').map((record) => record.model),
+    [requested, requested, requested]);
+  assert.equal(result.records.filter((record) => record.type === 'prompt').length, 3);
+  assert.equal(result.messages.some((message) => ['error', 'fatal'].includes(message.type)), false);
 });
 
 const sendNext = (send) => send({

@@ -180,13 +180,14 @@ function isMissingSession(error) {
 
 /** 把父进程给的模型选择装到本次请求上（不改桌面端的默认模型） */
 async function applyModel(agent, model, signal) {
-  if (!model || typeof model !== 'object') return null;
+  if (model === undefined || model === null) return null;
+  if (typeof model !== 'object') throw new Error('模型选择必须是对象');
   const provider = String(model.provider ?? '').trim();
   const modelId = String(model.model ?? '').trim();
-  if (!provider || !modelId) return null;
-  if (!llm?.resolveCallConfig || !agents?.selectForNextRequest) {
-    logStderr('当前 profile 没有 llm / agents 服务，跳过手动模型');
-    return null;
+  if (!provider || !modelId) throw new Error('模型选择需要 provider 和 model');
+  const modelSelections = controller?.agents?.selectForNextRequest ? controller.agents : agents;
+  if (!llm?.resolveCallConfig || !modelSelections?.selectForNextRequest) {
+    throw new Error('当前 profile 没有可用的模型选择服务');
   }
   const resolved = await llm.resolveCallConfig({
     provider,
@@ -199,7 +200,7 @@ async function applyModel(agent, model, signal) {
     model: resolved.model,
     ...(resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {}),
   };
-  agents.selectForNextRequest(agent, selected);
+  await modelSelections.selectForNextRequest(agent, selected);
   return selected;
 }
 
@@ -295,21 +296,47 @@ function readTurnResult(session, firstSeq) {
   let text = '';
   let end = null;
   const eventTypes = [];
+  const modelsUsed = [];
+  let model = null;
+  const seen = new Set();
+  let activeHeader = null;
+  // DSH omits unchanged request headers; the preceding snapshot stays in force.
+  for (let seq = firstSeq - 1; seq >= 0; seq -= 1) {
+    const event = session.eventAt(seq);
+    if (event?.type === 'request/header') {
+      activeHeader = event.data?.header?.config ?? null;
+      break;
+    }
+  }
+  const record = (value, header = false) => {
+    if (typeof value?.provider !== 'string' || typeof value?.model !== 'string') return;
+    const effort = !header && value.reasoningEffort === undefined &&
+      activeHeader?.provider === value.provider && activeHeader?.model === value.model
+      ? activeHeader.reasoningEffort : value.reasoningEffort;
+    model = { provider: value.provider, model: value.model,
+      ...(typeof effort === 'string' ? { reasoningEffort: effort } : {}) };
+    const key = JSON.stringify(model);
+    if (!seen.has(key)) { seen.add(key); modelsUsed.push(model); }
+  };
   for (let seq = firstSeq; seq < session.seq; seq += 1) {
     const event = session.eventAt(seq);
     if (!event) continue;
     eventTypes.push(event.type);
     if (event.type === 'assistant/message' && event.data?.message?.content) {
+      record(event.data.message.source);
       const joined = event.data.message.content
         .filter((block) => block?.type === 'text' && typeof block.text === 'string')
         .map((block) => block.text)
         .join('');
       if (joined.trim()) text = joined;
+    } else if (event.type === 'request/header') {
+      activeHeader = event.data?.header?.config ?? null;
+      record(activeHeader, true);
     } else if (event.type === 'turn/end') {
       end = event.data ?? null;
     }
   }
-  return { text, end, eventTypes };
+  return { text, end, eventTypes, model, modelsUsed };
 }
 
 async function handlePrompt(request, active) {
@@ -318,8 +345,15 @@ async function handlePrompt(request, active) {
   const permission = permissionPlan();
   let created = null;
   let adopted = false;
+  let restoredAgent;
 
-  if (requestedSessionId) {
+  if (requestedSessionId && typeof controller.resolveAgent === 'function') {
+    const restored = await waitForRequest(active, () => controller.resolveAgent(requestedSessionId));
+    if (restored?.error) throw restored.error;
+    restoredAgent = restored?.agent ?? restored;
+    created = { sessionId: requestedSessionId };
+    adopted = true;
+  } else if (requestedSessionId) {
     const knownCwd = await waitForRequest(active, () => lookupSessionCwd(requestedSessionId));
     try {
       created = await waitForRequest(active, () => controller.create({
@@ -337,15 +371,20 @@ async function handlePrompt(request, active) {
 
   const sessionId = created.sessionId;
   active.sessionId = sessionId;
-  const agent = agents.get(sessionId);
+  const agent = restoredAgent ?? agents.get(sessionId);
   if (!agent) throw new Error(`会话 ${sessionId} 创建后没有活的 agent`);
 
-  let selectedModel = null;
+  if (agent.status === 'running') await waitForRequest(active, () => agent.whenIdle());
   try {
-    selectedModel = await waitForRequest(active, () => applyModel(agent, request.model, active.abort.signal));
+    const select = () => applyModel(agent, request.model, active.abort.signal);
+    const modelSelections = controller?.agents?.selectForNextRequest ? controller.agents : agents;
+    await waitForRequest(active, () => typeof modelSelections?.serializeImageAdmission === 'function'
+      ? modelSelections.serializeImageAdmission(agent, select) : select());
   } catch (error) {
     if (active.abort.signal.aborted) throw error;
-    throw new Error(`指定的模型不可用：${error instanceof Error ? error.message : String(error)}`);
+    throw Object.assign(new Error(`指定的模型不可用：${error instanceof Error ? error.message : String(error)}`), {
+      code: 'desktop/model-unavailable', sessionAccepted: true,
+    });
   }
   await waitForRequest(active, () => applyPermission(permission, agent.session));
   if (active.abort.signal.aborted) throw cancelledError();
@@ -384,7 +423,7 @@ async function handlePrompt(request, active) {
     }
   }
 
-  const { text, end } = readTurnResult(agent.session, firstSeq);
+  const { text, end, model, modelsUsed } = readTurnResult(agent.session, firstSeq);
   if (text) {
     send({
       v: 1,
@@ -392,7 +431,8 @@ async function handlePrompt(request, active) {
       id: request.id,
       sessionId,
       text,
-      model: selectedModel,
+      model,
+      modelsUsed,
       reason: end?.reason?.kind ?? null,
     });
     return;
@@ -453,6 +493,7 @@ async function runQueue() {
           id: request.id,
           sessionId: active.sessionId,
           code: error?.code ?? 'internal',
+          sessionAccepted: error?.sessionAccepted ?? Boolean(active.sessionId),
           message: sanitize(error instanceof Error ? error.message : String(error)),
         });
         logStderr(`处理失败：${sanitize(error?.stack ?? error)}`);

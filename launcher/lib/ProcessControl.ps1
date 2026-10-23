@@ -46,13 +46,17 @@ function Get-ProcessControlConfig {
     }
     if (-not $dshExe -and $candidates.Count -gt 0) { $dshExe = $candidates[0] }
 
-    # NapCat WebUI token 随安装位置变，从它自己的配置里读；读不到就不带头（本机访问通常不需要）。
+    # 同时兼容 Shell 包的嵌套目录和普通安装目录。
     $webUiToken = ''
+    $webUiBase = 'http://127.0.0.1:6099'
     try {
-        $webUiFile = Join-Path $root 'napcat\config\webui.json'
-        if (Test-Path -LiteralPath $webUiFile) {
+        foreach ($relative in @('napcat\napcat\config\webui.json', 'napcat\config\webui.json')) {
+            $webUiFile = Join-Path $root $relative
+            if (-not (Test-Path -LiteralPath $webUiFile)) { continue }
             $webUiJson = Get-Content -LiteralPath $webUiFile -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($webUiJson -and $webUiJson.token) { $webUiToken = [string]$webUiJson.token }
+            if ($webUiJson.port) { $webUiBase = 'http://127.0.0.1:' + [string]$webUiJson.port }
+            break
         }
     } catch {
         $webUiToken = ''
@@ -66,7 +70,7 @@ function Get-ProcessControlConfig {
         NapCatProcess = 'node.exe'
         # 'apcat.mjs' 也能匹配到 'napcat.mjs'，两种命名都能识别。
         NapCatMarker  = 'apcat.mjs'
-        WebUiBase     = 'http://127.0.0.1:6099'
+        WebUiBase     = $webUiBase
         WebUiToken    = $webUiToken
         OneBotPort    = 3001
         HttpTimeoutMs = 3000
@@ -264,18 +268,29 @@ function Show-SafeMessage {
 function Get-NapCatAccountFromConfig {
     <#
     .SYNOPSIS
-        从 NapCat 的 napcat_<QQ号>.json 配置文件推测已登录账号（仅作展示用）。
+        读取已保存的自动登录账号，未设置时再查找账号配置。
     .DESCRIPTION
-        按修改时间取最新的一个匹配文件，取文件名里的数字作为 QQ 号；
-        找不到返回空字符串。
+        配置中的账号仅用于尝试恢复登录，不是当前在线的证据。
     #>
     param($Config)
 
     try {
         if ($null -eq $Config) { return '' }
 
-        $configDir = [System.IO.Path]::Combine($Config.NapCatDir, 'napcat', 'config')
-        if (-not [System.IO.Directory]::Exists($configDir)) { return '' }
+        $configDir = ''
+        foreach ($relative in @('napcat\config', 'config')) {
+            $directory = Join-Path $Config.NapCatDir $relative
+            if (-not [System.IO.Directory]::Exists($directory)) { continue }
+            if (-not $configDir) { $configDir = $directory }
+            $webuiFile = Join-Path $directory 'webui.json'
+            if (-not [System.IO.File]::Exists($webuiFile)) { continue }
+            try {
+                $webui = [System.IO.File]::ReadAllText($webuiFile, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+                $account = [string]$webui.autoLoginAccount
+                if ($account -match '^\d{5,20}$') { return $account }
+            } catch { }
+        }
+        if (-not $configDir) { return '' }
 
         $files = @([System.IO.Directory]::GetFiles($configDir, 'napcat_*.json'))
         if ($files.Count -eq 0) { return '' }
@@ -349,12 +364,44 @@ function Remove-AnsiEscape {
 # 二、NapCat 进程
 # =====================================================================
 
+function Test-NapCatOwnedProcess {
+    param($Process, $Config)
+    try {
+        $commandLine = ([string]$Process.CommandLine).Replace('/', '\')
+        if ([string]::IsNullOrWhiteSpace($commandLine)) { return $false }
+        $directory = [System.IO.Path]::GetFullPath($Config.NapCatDir).TrimEnd('\') + '\'
+        foreach ($relative in @('index.js', 'napcat\napcat.mjs', 'napcat.mjs', 'napcat\apcat.mjs', 'apcat.mjs')) {
+            $entry = $directory + $relative
+            if ([regex]::IsMatch($commandLine, '(?i)(?:^|[\s"])' + [regex]::Escape($entry) + '(?:[\s"]|$)')) { return $true }
+        }
+        # 相对入口只有在此安装的 node.exe 下才可归属，防止命中其他安装。
+        $image = (Get-ProcessImagePath -Process $Process).Replace('/', '\')
+        if (-not $image.StartsWith($directory, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+        return [regex]::IsMatch($commandLine, '(?i)(?:^|[\s"])(?:\.\\)?(?:index\.js|(?:napcat\\)?n?apcat\.mjs)(?:[\s"]|$)')
+    } catch { return $false }
+}
+
+function Save-NapCatConsoleLogs {
+    param([string]$LogDirectory)
+    # Move first: if preservation fails, the caller must not truncate evidence.
+    $archive = Join-Path $LogDirectory 'archive\napcat'
+    foreach ($name in @('napcat-console.log', 'napcat-console.err.log')) {
+        $source = Join-Path $LogDirectory $name
+        if (-not [System.IO.File]::Exists($source)) { continue }
+        if ((Get-Item -LiteralPath $source -ErrorAction Stop).Length -eq 0) { continue }
+        $null = [System.IO.Directory]::CreateDirectory($archive)
+        $suffix = (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+        $destination = Join-Path $archive ($name.Replace('.log', '') + '-' + $suffix + '.log')
+        [System.IO.File]::Move($source, $destination)
+    }
+}
+
 function Get-NapCatProcess {
     <#
     .SYNOPSIS
         探测 NapCat 主进程。
     .DESCRIPTION
-        判定规则：进程名为 node.exe，且命令行包含 apcat.mjs。
+        只识别当前安装的入口或 worker；worker 重启时入口进程仍算运行。
         返回 PSCustomObject：
             Running   [bool]
             ProcessId [int]      未运行时为 0
@@ -380,7 +427,7 @@ function Get-NapCatProcess {
         foreach ($process in $candidates) {
             $commandLine = [string]$process.CommandLine
             if ([string]::IsNullOrEmpty($commandLine)) { continue }
-            if ($commandLine.IndexOf($config.NapCatMarker, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            if (Test-NapCatOwnedProcess -Process $process -Config $config) {
                 $matched += $process
             }
         }
@@ -434,8 +481,9 @@ function Start-NapCat {
 
             $consoleLog = [System.IO.Path]::Combine($logDirectory, 'napcat-console.log')
             $errorLog = [System.IO.Path]::Combine($logDirectory, 'napcat-console.err.log')
+            Save-NapCatConsoleLogs -LogDirectory $logDirectory
 
-            # 快速登录：NapCat 支持 -q <QQ号>，带上已登录过的账号就能跳过扫码。
+            # 快速登录仅尝试恢复已有身份；被 QQ 撤销后仍需重新授权。
             # 账号从 napcat_<QQ号>.json 里读；读不到就不加参数，退回扫码流程。
             $quickAccount = Get-NapCatAccountFromConfig -Config $config
             $argumentLine = '"' + $entryJs + '"'
@@ -455,7 +503,7 @@ function Start-NapCat {
             return $true
         }
 
-        # 兜底：没有 node.exe / index.js 时退回批处理（会有可见控制台）
+        # 兜底：没有 node.exe / index.js 时退回批处理。
         $batchFile = $config.NapCatBat
         if (-not [System.IO.File]::Exists($batchFile)) { return $false }
 
@@ -466,7 +514,7 @@ function Start-NapCat {
 
         $null = Start-Process -FilePath $batchFile `
             -WorkingDirectory $workingDirectory `
-            -WindowStyle Minimized `
+            -WindowStyle Hidden `
             -PassThru `
             -ErrorAction Stop
 
@@ -498,8 +546,6 @@ function Stop-NapCat {
         }
 
         # ---- 2) 清扫残留（最多 5 轮，防止包装进程反复拉起） ----
-        $marker = $config.NapCatMarker
-        $napcatDirectory = $config.NapCatDir
         $filter = "Name='" + $config.NapCatProcess + "'"
 
         for ($round = 1; $round -le 5; $round++) {
@@ -512,25 +558,7 @@ function Stop-NapCat {
 
             $hit = 0
             foreach ($process in $procs) {
-                $commandLine = [string]$process.CommandLine
-                $imagePath = Get-ProcessImagePath -Process $process
-
-                $isNapCat = $false
-                if (-not [string]::IsNullOrEmpty($commandLine)) {
-                    if ($commandLine.IndexOf($marker, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                        $isNapCat = $true
-                    }
-                }
-                if (-not $isNapCat) {
-                    if (-not [string]::IsNullOrEmpty($imagePath) -and
-                        -not [string]::IsNullOrEmpty($commandLine) -and
-                        $imagePath.StartsWith($napcatDirectory, [System.StringComparison]::OrdinalIgnoreCase) -and
-                        $commandLine.IndexOf('index.js', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                        $isNapCat = $true
-                    }
-                }
-
-                if (-not $isNapCat) { continue }
+                if (-not (Test-NapCatOwnedProcess -Process $process -Config $config)) { continue }
 
                 $hit++
                 try { Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction Stop } catch { }
@@ -738,128 +766,75 @@ function Get-NapCatLoginState {
     .SYNOPSIS
         探测 NapCat 是否已登录 QQ。
     .DESCRIPTION
-        1) 优先请求 WebUI：GET http://127.0.0.1:6099/api/QQLoginInfo
-           （带 Authorization: Bearer <token>，超时 3 秒），解析 JSON 判断；
-        2) WebUI 不可用 / 未授权 / 返回异常时，降级为探测 OneBot 端口 3001
-           是否在监听；
-        3) 都失败时区分“进程没起来”和“起来了但没登录”。
-        返回 PSCustomObject：LoggedIn / Account / Nickname / Detail。
-        本函数每秒都可能被调用，任何异常都收敛为“未登录 + 说明”。
+        与控制台共用 Node 检测器，使用已鉴权的 WebUI 或 OneBot 在线状态。
+        短期 WebUI 凭据只在当前 runspace 内存中缓存，经 stdin 传递给子进程。
+        兼容原有字段，并增加 State / Known / Phase；检测失败返回未知状态。
     #>
     $result = [PSCustomObject]@{
         LoggedIn = $false
         Account  = ''
         Nickname = ''
-        Detail   = ''
+        Detail   = '暂时无法确认 QQ 登录状态'
+        State    = 'unknown'
+        Known    = $false
+        Phase    = ''
     }
 
+    $child = $null
     try {
         $config = Get-ProcessControlConfig
-        $httpDetail = ''
+        $process = Get-NapCatProcess
+        $runningFlag = '--stopped'
+        if ($null -ne $process -and $process.Running) { $runningFlag = '--running' }
+        $helper = Join-Path $config.Root 'scripts\napcat-health.mjs'
+        if (-not [System.IO.File]::Exists($helper)) { return $result }
+        $node = Resolve-NodeExe
+        if ([string]::IsNullOrWhiteSpace($node)) { return $result }
 
-        # ---------- 1) WebUI ----------
-        try {
-            $url = $config.WebUiBase + '/api/QQLoginInfo'
-            $request = [System.Net.WebRequest]::Create($url)
-            $request.Method = 'GET'
-            $request.Timeout = $config.HttpTimeoutMs
-            $request.ReadWriteTimeout = $config.HttpTimeoutMs
-            $request.Proxy = $null
-            $request.UserAgent = 'qq-dsh-launcher/1.0'
-            $request.Headers.Add('Authorization', 'Bearer ' + $config.WebUiToken)
-
-            $response = $request.GetResponse()
-            $body = ''
-            try {
-                $reader = New-Object System.IO.StreamReader($response.GetResponseStream(), [System.Text.Encoding]::UTF8)
-                $body = $reader.ReadToEnd()
-                $reader.Close()
-            } finally {
-                try { $response.Close() } catch { }
-            }
-
-            $json = $null
-            if (-not [string]::IsNullOrWhiteSpace($body)) {
-                try { $json = $body | ConvertFrom-Json } catch { $json = $null }
-            }
-
-            if ($null -ne $json) {
-                $code = $null
-                try {
-                    if ($null -ne $json.PSObject.Properties['code']) { $code = $json.code }
-                } catch { $code = $null }
-
-                if ($null -ne $code -and [string]$code -ne '0') {
-                    # 例如 {"code":-1,"message":"Unauthorized"}：接口在，但没拿到登录信息
-                    $message = Get-JsonTextValue -InputObject $json -Names @('message')
-                    $httpDetail = 'WebUI 返回未授权（code=' + [string]$code + '，message=' + $message + '）'
-                } else {
-                    $node = $json
-                    if ($null -ne $json.PSObject.Properties['data'] -and $null -ne $json.data) {
-                        $node = $json.data
-                    }
-
-                    $selfInfo = $null
-                    if ($null -ne $node.PSObject.Properties['selfInfo']) { $selfInfo = $node.selfInfo }
-
-                    $account = Get-JsonTextValue -InputObject $selfInfo -Names @('uin', 'uid', 'userId', 'user_id', 'account', 'qq')
-                    if ([string]::IsNullOrEmpty($account)) {
-                        $account = Get-JsonTextValue -InputObject $node -Names @('uin', 'uid', 'userId', 'user_id', 'account', 'qq')
-                    }
-
-                    $nickname = Get-JsonTextValue -InputObject $selfInfo -Names @('nick', 'nickname', 'nickName', 'name')
-                    if ([string]::IsNullOrEmpty($nickname)) {
-                        $nickname = Get-JsonTextValue -InputObject $node -Names @('nick', 'nickname', 'nickName', 'name')
-                    }
-
-                    $hasEvidence = ($null -ne $selfInfo)
-                    if (-not $hasEvidence -and -not [string]::IsNullOrEmpty($account)) { $hasEvidence = $true }
-                    if (-not $hasEvidence -and -not [string]::IsNullOrEmpty($nickname)) { $hasEvidence = $true }
-                    if (-not $hasEvidence -and $body -match '(?i)("selfInfo"|"uin")') { $hasEvidence = $true }
-
-                    if ($hasEvidence) {
-                        $result.LoggedIn = $true
-                        $result.Account = $account
-                        $result.Nickname = $nickname
-                        $result.Detail = 'WebUI 已确认登录'
-                        if (-not [string]::IsNullOrEmpty($account)) {
-                            $result.Detail = $result.Detail + '（' + $account + '）'
-                        }
-                        return $result
-                    }
-
-                    $httpDetail = 'WebUI 未返回登录信息'
-                }
-            } else {
-                $httpDetail = 'WebUI 返回内容无法解析为 JSON'
-            }
-        } catch {
-            $httpDetail = 'WebUI 请求失败（' + $_.Exception.Message + '）'
-        }
-
-        # ---------- 2) 降级：OneBot 端口 ----------
-        $listening = Test-TcpEndPoint -ComputerName '127.0.0.1' -Port $config.OneBotPort -TimeoutMs $config.HttpTimeoutMs
-        if ($listening) {
-            $result.LoggedIn = $true
-            $result.Account = Get-NapCatAccountFromConfig -Config $config
-            $result.Nickname = Get-NapCatNicknameFromLog
-            $result.Detail = $httpDetail + '；已降级为端口探测：OneBot 端口 ' + $config.OneBotPort + ' 正在监听'
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $startInfo.FileName = $node
+        $startInfo.Arguments = '"' + $helper + '" --root "' + $config.Root.TrimEnd('\') + '" ' + $runningFlag + ' --exchange-session'
+        $startInfo.WorkingDirectory = $config.Root
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $startInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+        $child = New-Object System.Diagnostics.Process
+        $child.StartInfo = $startInfo
+        $null = $child.Start()
+        $stdout = $child.StandardOutput.ReadToEndAsync()
+        $stderr = $child.StandardError.ReadToEndAsync()
+        $cachedSession = $null
+        $variable = Get-Variable -Name 'NapCatHealthSession' -Scope Script -ErrorAction SilentlyContinue
+        if ($null -ne $variable) { $cachedSession = $variable.Value }
+        $child.StandardInput.WriteLine((@{ session = $cachedSession } | ConvertTo-Json -Depth 5 -Compress))
+        $child.StandardInput.Close()
+        if (-not $child.WaitForExit(4500)) {
+            try { $child.Kill() } catch { }
+            $result.Detail = 'QQ 登录状态检测超时'
             return $result
         }
-
-        # ---------- 3) 都失败 ----------
-        $process = Get-NapCatProcess
-        if ($null -eq $process -or -not $process.Running) {
-            $result.Detail = 'NapCat 进程未运行（' + $httpDetail + '，端口 ' + $config.OneBotPort + ' 未监听）'
-        } else {
-            $result.Detail = 'NapCat 已运行但尚未登录（' + $httpDetail + '，端口 ' + $config.OneBotPort + ' 未监听）'
-        }
-
+        if ($child.ExitCode -ne 0) { return $result }
+        $payload = $stdout.GetAwaiter().GetResult() | ConvertFrom-Json
+        $script:NapCatHealthSession = $payload.session
+        $health = $payload.health
+        if ($null -eq $health) { return $result }
+        $result.LoggedIn = ($health.loggedIn -eq $true -and $health.state -eq 'online')
+        $result.Account = [string]$health.account
+        $result.Nickname = [string]$health.nickname
+        $result.Detail = [string]$health.detail
+        $result.State = [string]$health.state
+        $result.Known = [bool]$health.known
+        $result.Phase = [string]$health.phase
         return $result
     } catch {
-        $result.LoggedIn = $false
-        $result.Detail = '登录态探测异常：' + $_.Exception.Message
+        # Do not expose child output: it can contain a cached WebUI credential.
         return $result
+    } finally {
+        if ($null -ne $child) { $child.Dispose() }
     }
 }
 
@@ -1060,13 +1035,13 @@ function Get-BridgeProcess {
             Account    = ''
         }
 
-        $marker = [string]$config.BridgeMarker
+        $entryPattern = '(?i)(?:^|[\s"])' + [regex]::Escape(([string]$config.BridgeScript).Replace('/', '\')) + '(?:[\s"]|$)'
 
         $processes = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -OperationTimeoutSec 3 -ErrorAction SilentlyContinue
         foreach ($process in @($processes)) {
             $commandLine = [string]$process.CommandLine
             if ([string]::IsNullOrWhiteSpace($commandLine)) { continue }
-            if ($commandLine.IndexOf($marker, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+            if (-not [regex]::IsMatch($commandLine.Replace('/', '\'), $entryPattern)) { continue }
 
             $result.Running = $true
             try { $result.ProcessId = [int]$process.ProcessId } catch { }
@@ -1081,7 +1056,17 @@ function Get-BridgeProcess {
                 if (-not [string]::IsNullOrWhiteSpace($text)) {
                     $status = $text | ConvertFrom-Json
                     try { $result.Sessions = [int]$status.sessions } catch { }
-                    try { $result.Connected = [bool]$status.connected } catch { }
+                    try {
+                        # PS 7 converts ISO JSON timestamps to DateTime; keep its Kind.
+                        if ($status.updatedAt -is [datetime] -or $status.updatedAt -is [DateTimeOffset]) {
+                            $updated = [DateTimeOffset]$status.updatedAt
+                        } else {
+                            $updated = [DateTimeOffset]::Parse([string]$status.updatedAt)
+                        }
+                        $age = ([DateTimeOffset]::UtcNow - $updated).TotalSeconds
+                        $result.Connected = ($result.Running -and [int]$status.pid -eq $result.ProcessId -and
+                            $age -ge -5 -and $age -lt 20 -and $status.connected -eq $true)
+                    } catch { $result.Connected = $false }
                     try { $result.InFlight = [int]$status.inFlight } catch { }
                     try { $result.QueueDepth = [int]$status.queueDepth } catch { }
                 }

@@ -68,7 +68,7 @@ export function drainFrames(state) {
  * @param {(call: {action: string, params: any, echo: any, reply: (data:any)=>void}) => void} [opts.onCall]
  *        收到客户端 API 调用时回调；默认对任何 action 回 {status:'ok', retcode:0, data:null}
  */
-export function createFakeNapCat({ token = null, onCall = null } = {}) {
+export function createFakeNapCat({ token = null, onCall = null, respondToClose = true } = {}) {
   const server = http.createServer((req, res) => {
     res.writeHead(426, { 'content-type': 'text/plain' });
     res.end('upgrade required');
@@ -126,7 +126,7 @@ export function createFakeNapCat({ token = null, onCall = null } = {}) {
           if (onCall) onCall(call);
           else call.reply(null);
         } else if (frame.opcode === 0x8) {
-          socket.end(encodeFrame(0x8));
+          if (respondToClose) socket.end(encodeFrame(0x8));
         } else if (frame.opcode === 0x9) {
           socket.write(encodeFrame(0xa, frame.payload));
         }

@@ -284,6 +284,7 @@ class DesktopHost {
         sessionId: message.sessionId ?? pending.sessionId ?? pending.requestedSessionId,
         finalText: typeof message.text === 'string' ? message.text : '',
         model: message.model ?? null,
+        modelsUsed: message.modelsUsed ?? [],
         reason: message.reason ?? null,
       });
       return;
@@ -292,6 +293,7 @@ class DesktopHost {
       const error = new Error(redactSecrets(message.message || 'desktop host 返回错误'));
       error.code = message.code ?? 'desktop-error';
       error.sessionId = message.sessionId ?? pending.sessionId ?? null;
+      if (message.sessionAccepted === true || message.code === 'desktop/model-unavailable') error.sessionAccepted = true;
       if (!error.sessionId) error.sessionId = pending.requestedSessionId ?? null;
       this._settle(pending, error);
     }

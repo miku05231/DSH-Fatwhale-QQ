@@ -51,6 +51,8 @@ jobs:
       contents: write
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      QQ_TEST_DSH_COMMAND: ${{ github.workspace }}/state/test-dsh/node_modules/@deepseek-ai/dsh/lib/bin.js
+      QQ_TEST_REQUIRE_DSH: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -71,20 +73,23 @@ jobs:
           }
           git rev-parse --verify ('refs/tags/' + $env:RELEASE_TAG)
           if ($LASTEXITCODE -ne 0) { throw 'The version tag does not exist.' }
+      - name: Install the pinned Windows DSH test kernel
+        shell: pwsh
+        run: |
+          npm install --prefix state/test-dsh --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.0-rc.2
+          if ($LASTEXITCODE -ne 0) { throw 'The pinned DSH test runtime could not be installed.' }
+          $taskDshBin = Join-Path (Get-Location).Path 'state/test-dsh/node_modules/.bin'
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $taskDshBin -Encoding utf8
       - name: Test updates, packaging and the executable
         shell: pwsh
         run: |
-          foreach ($taskGroup in @('测试运行器', '托盘', '表情', '打开本地', '更新', 'exe', '封装应用', '公开导出', '桌面连伴')) {
+          foreach ($taskGroup in @('测试运行器', '托盘', '表情', '打开本地', '更新', 'exe', '封装应用', '公开导出', '桌面连伴', '模型跟随', 'webui', 'NapCat')) {
             node tests/run-all.mjs --only $taskGroup
             if ($LASTEXITCODE -ne 0) { throw "Tests failed: $taskGroup" }
           }
       - name: Test administrator boundaries with the pinned DSH kernel
         shell: pwsh
         run: |
-          npm install --prefix state/test-dsh --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.0-rc.2
-          if ($LASTEXITCODE -ne 0) { throw 'The pinned DSH test runtime could not be installed.' }
-          $env:QQ_TEST_DSH_COMMAND = Join-Path (Get-Location).Path 'state/test-dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'
-          $env:QQ_TEST_REQUIRE_DSH = '1'
           node tests/run-all.mjs --only 管理员权限
           if ($LASTEXITCODE -ne 0) { throw 'Administrator boundary tests failed.' }
           node tests/dsh-web-test.mjs

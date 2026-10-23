@@ -62,8 +62,10 @@ const EXCLUDE = [
   /(^|[\\/])\.git([\\/]|$)/,
   /(^|[\\/])config\.json$/,
   /^docs[\\/](?:testing(?:[\\/]|$)|work-progress\.md$|full-verification-[^\\/]*\.md$|update-program\.md$)/,
+  /^docs[\\/](?:model-switch-session-reuse|napcat-login-persistence)-[^\\/]*\.md$/,
   // 开发用工具：它自己就写着本机的私有路径/QQ 号清单，不该进发行包
   /(^|[\\/])tools[\\/]export-public\.mjs$/,
+  /^tools[\\/]sticker\.mjs$/,
   // 本机专用的模型路由补丁（含私有中转地址）
   /\.local\.ya?ml$/,
   /\.tmp$/,

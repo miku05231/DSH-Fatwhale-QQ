@@ -54,11 +54,14 @@ function Test-DshRunning {
 # 任何异常都吞掉，绝不把整条启动链带崩。
 
 function Test-WebUiPortOpen {
-    param([int]$Port)
+    param([int]$Port, [int]$ExpectedProcessId)
 
     $client = $null
     try {
-        if ($Port -le 0 -or $Port -gt 65535) { return $false }
+        if ($Port -le 0 -or $Port -gt 65535 -or $ExpectedProcessId -le 0) { return $false }
+        $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop)
+        $owned = @($listeners | Where-Object { [int]$_.OwningProcess -eq $ExpectedProcessId })
+        if ($owned.Count -eq 0) { return $false }
         $client = New-Object System.Net.Sockets.TcpClient
         $async = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
         if (-not $async.AsyncWaitHandle.WaitOne(600, $false)) { return $false }
@@ -101,12 +104,17 @@ function Get-WebUiPortNumber {
 
 function Test-WebUiProcessRunning {
     try {
-        $processes = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue
+        $entry = [System.IO.Path]::GetFullPath((Join-Path $script:ProjectRoot 'src\webui\server.mjs'))
+        $escapedEntry = [regex]::Escape($entry.Replace('/', '\'))
+        $entryArgument = '"' + $escapedEntry + '"'
+        if ($entry -notmatch '\s') { $entryArgument += '|' + $escapedEntry }
+        # Managed launches put the entry directly after node.exe.
+        $entryPattern = '(?i)^\s*(?:"[^"]+"|[^\s"]+)\s+(?:' + $entryArgument + ')(?:\s|$)'
+        $processes = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -OperationTimeoutSec 3 -ErrorAction SilentlyContinue
         foreach ($process in @($processes)) {
             $commandLine = [string]$process.CommandLine
             if ([string]::IsNullOrWhiteSpace($commandLine)) { continue }
-            if ($commandLine.IndexOf('webui\server.mjs', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
-            if ($commandLine.IndexOf('webui/server.mjs', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+            if ([regex]::IsMatch($commandLine.Replace('/', '\'), $entryPattern)) { return $true }
         }
         return $false
     } catch {
@@ -118,7 +126,7 @@ Write-BootLog '启动流程开始'
 
 # ---------------------------------------------------------------- 1) NapCat
 #
-# 走 Start-NapCat（它会带上 -q <QQ号> 做快速登录，跳过扫码）。
+# 走 Start-NapCat（带上 -q 尝试恢复已有 QQ 身份）。
 # 只有拿不到 lib 时才退回直接跑 napcat.bat。
 
 $napcatRunning = $false
@@ -141,8 +149,8 @@ if ($napcatRunning) {
     }
 
     if ($started) {
-        Write-BootLog 'NapCat 已启动（快速登录）'
-        Write-Host '[+] NapCat 已启动（快速登录，无需扫码）'
+        Write-BootLog 'NapCat 进程已启动，正在尝试恢复登录'
+        Write-Host '[+] NapCat 进程已启动，正在尝试恢复登录；需要时请在登录页确认'
         # 给 NapCat 一点时间起来，避免托盘一上来就是红的
         Start-Sleep -Seconds 4
     } else {
@@ -158,7 +166,7 @@ if ($napcatRunning) {
         try {
             Start-Process -FilePath $napcatBat `
                 -WorkingDirectory (Join-Path $script:ProjectRoot 'napcat') `
-                -WindowStyle Minimized -ErrorAction Stop | Out-Null
+                -WindowStyle Hidden -ErrorAction Stop | Out-Null
             Write-Host '[+] NapCat 已启动（批处理模式，可能需要扫码）'
         } catch {
             Write-BootLog ('NapCat 启动失败：' + $_.Exception.Message)
@@ -215,10 +223,6 @@ try {
 } catch {
     $consoleRunning = $false
 }
-if ((-not $consoleRunning) -and (Test-WebUiPortOpen $consolePort)) {
-    $consoleRunning = $true
-}
-
 if ($consoleRunning) {
     Write-BootLog ('控制台已在运行（端口 ' + $consolePort + '），跳过')
     Write-Host '[=] 控制台已在运行'
@@ -254,7 +258,7 @@ if ($consoleRunning) {
             $consoleErr = Join-Path $logDirectory 'webui-console.err.log'
             $argumentLine = '"' + $webUiScript + '"'
 
-            $null = Start-Process -FilePath $nodeExe `
+            $consoleProcess = Start-Process -FilePath $nodeExe `
                 -ArgumentList $argumentLine `
                 -WorkingDirectory $script:ProjectRoot `
                 -WindowStyle Hidden `
@@ -270,7 +274,8 @@ if ($consoleRunning) {
             $deadline = (Get-Date).AddSeconds(6)
             while ((Get-Date) -lt $deadline) {
                 Start-Sleep -Milliseconds 400
-                if (Test-WebUiPortOpen (Get-WebUiPortNumber -Fallback $consolePort)) {
+                if ($consoleProcess.HasExited) { break }
+                if (Test-WebUiPortOpen -Port (Get-WebUiPortNumber -Fallback $consolePort) -ExpectedProcessId $consoleProcess.Id) {
                     $consoleReady = $true
                     break
                 }

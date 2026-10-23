@@ -22,8 +22,7 @@
  *      于是换模型后**下一条 QQ 消息**就生效，不需要重启任何进程。
  *   3. 给控制台提供读取/写入接口用的数据结构（模式、可选供应商、当前生效模型）。
  *
- * 容错原则：任何环节出问题都退回「不加 runtime patch」，让基础 patch 继续兜底，
- * 绝不能让机器人因为读不到桌面端配置而失联。
+ * 跟随配置暂不可读时可用基础 patch；明确无效的模型组合交给调用者停止本轮。
  */
 
 import fs from 'node:fs';
@@ -31,12 +30,11 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
+import { resolveDshInstallRoot } from './dsh-desktop.js';
 
 /** 支持的两种模式 */
 export const MODEL_MODES = ['follow', 'manual'];
-
-/** 手动模式下没给 reasoningEffort 时的默认值 */
-const DEFAULT_REASONING_EFFORT = 'max';
 
 /** 常见的 reasoning effort 档位（供应商可能只支持其中几档，这里只用于下拉框候选） */
 export const REASONING_EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -96,8 +94,73 @@ function normalizeManual(manual) {
   return {
     provider,
     model,
-    reasoningEffort: text(manual.reasoningEffort) || DEFAULT_REASONING_EFFORT,
+    ...(text(manual.reasoningEffort) ? { reasoningEffort: text(manual.reasoningEffort) } : {}),
   };
+}
+
+let yaml;
+function parseModelCapabilities(source, { command = 'dsh', cwd = process.cwd() } = {}) {
+  try {
+    if (!yaml) {
+      for (const candidate of new Set([command, 'dsh'])) {
+        try {
+          const requireDsh = createRequire(path.join(resolveDshInstallRoot(candidate, cwd), 'package.json'));
+          yaml = requireDsh('js-yaml');
+          break;
+        } catch { /* An alternate runner may not ship a YAML parser. */ }
+      }
+      if (!yaml) return [];
+    }
+    // Expressions stay opaque data; never execute desktop configuration code.
+    const opaqueExpression = {
+      kind: 'scalar', construct: () => ({ __qqModelExpression: true }),
+    };
+    const schema = yaml.JSON_SCHEMA.extend(['!js', 'tag:yaml.org,2002:js']
+      .map((tag) => new yaml.Type(tag, opaqueExpression)));
+    const entries = yaml.load(source, { schema });
+    const providers = entries?.find((entry) => entry?.id === 'llm-pi-ai')?.config?.providers;
+    if (!providers || typeof providers !== 'object') return [];
+    return Object.entries(providers).flatMap(([provider, config]) =>
+      (Array.isArray(config?.models) ? config.models : []).filter((model) => typeof model?.id === 'string')
+        .map((model) => {
+          const declared = model.reasoningEfforts;
+          const efforts = declared && typeof declared === 'object' && !Array.isArray(declared)
+            && !declared.__qqModelExpression ? Object.keys(declared) : [];
+          return { provider, model: model.id, reasoning: {
+            status: declared === false ? 'none' : efforts.length ? 'known' : 'unknown',
+            efforts,
+          } };
+        }));
+  } catch {
+    // Parser errors may include private YAML snippets. Leave capability unknown.
+    return [];
+  }
+}
+
+/** Validate only declared capabilities; the live host resolves inherited defaults. */
+export function validateModelSelection(selection, { providers = [], modelCapabilities = [], allowUnlisted = false } = {}) {
+  if (!selection?.provider || !selection?.model) {
+    return { status: 'invalid', message: '需要同时指定供应商和模型', selection };
+  }
+  const provider = providers.find((item) => item.id === selection.provider);
+  if (!allowUnlisted && providers.length && (!provider || !provider.models.includes(selection.model))) {
+    return { status: 'invalid', message: `模型目录中没有 ${selection.provider}/${selection.model}`, selection };
+  }
+  const capability = modelCapabilities.find((item) => item.provider === selection.provider && item.model === selection.model);
+  const reasoning = capability?.reasoning ?? { status: 'unknown', efforts: [] };
+  const effort = text(selection.reasoningEffort);
+  if (reasoning.status === 'none' && effort) {
+    return { status: 'invalid', message: '该模型不支持思考强度，请清空 reasoningEffort', selection, reasoning };
+  }
+  if (reasoning.status === 'known' && effort && !reasoning.efforts.includes(effort)) {
+    return { status: 'invalid', message: `不支持思考强度 ${effort}；可选：${reasoning.efforts.join(' / ')}`, selection, reasoning };
+  }
+  const normalized = { provider: selection.provider, model: selection.model };
+  if (reasoning.status !== 'none' && (effort || reasoning.defaultEffort)) {
+    normalized.reasoningEffort = effort || reasoning.defaultEffort;
+  }
+  return { status: reasoning.status === 'unknown' ? 'pending' : 'valid', selection: normalized, reasoning,
+    message: reasoning.status === 'unknown' ? '模型能力未知，等待下一轮由宿主校验' : '' };
 }
 
 function text(value) {
@@ -178,7 +241,7 @@ function indentOf(line) {
  *   providers: Array<{id: string, models: string[]}>,
  * }}
  */
-export function parseDesktopLayer(source) {
+export function parseDesktopLayer(source, parserOptions = {}) {
   const empty = {
     ok: false,
     reason: '',
@@ -186,6 +249,7 @@ export function parseDesktopLayer(source) {
     modelBlock: [],
     model: null,
     providers: [],
+    modelCapabilities: [],
   };
 
   const blocks = splitTopLevelBlocks(source);
@@ -208,6 +272,7 @@ export function parseDesktopLayer(source) {
   if (providersBlock.length === 0) return { ...empty, reason: 'providers 段是空的' };
 
   const providers = parseProviders(providersBlock);
+  const modelCapabilities = parseModelCapabilities(llmBlock.lines.join('\n'), parserOptions);
 
   let model = null;
   let modelBlock = [];
@@ -223,6 +288,7 @@ export function parseDesktopLayer(source) {
     modelBlock,
     model,
     providers,
+    modelCapabilities,
   };
 }
 
@@ -267,8 +333,7 @@ function parseModelConfig(lines) {
     out[match[1]] = match[2];
   }
   if (!out.provider || !out.model) return null;
-  if (!out.reasoningEffort) out.reasoningEffort = DEFAULT_REASONING_EFFORT;
-  return out;
+  return { provider: out.provider, model: out.model, ...(out.reasoningEffort ? { reasoningEffort: out.reasoningEffort } : {}) };
 }
 
 /* ------------------------------------------------------------------ 生成 */
@@ -314,14 +379,16 @@ export function buildRuntimePatch({ providersBlock, modelLines }) {
  *   },
  * }}
  */
-export function resolveModelPlan({ stateDir, basePatchPath = '', homedir = os.homedir(), log, force = false } = {}) {
+export function resolveModelPlan({ stateDir, basePatchPath = '', homedir = os.homedir(), command = 'dsh', cwd = process.cwd(), log, force = false } = {}) {
   const paths = modelPaths(stateDir);
   const store = readModelState(stateDir);
   const info = {
     mode: store.mode,
-    effective: null,
+    effective: store.mode === 'manual' && store.manual ? { ...store.manual, source: 'manual' } : null,
     desktop: null,
     providers: [],
+    modelCapabilities: [],
+    validation: null,
     runtimePatch: null,
     generatedAt: null,
     reason: '',
@@ -337,7 +404,7 @@ export function resolveModelPlan({ stateDir, basePatchPath = '', homedir = os.ho
     return { patchPaths: [], info };
   }
 
-  let parsed = parseDesktopLayer(layerText);
+  let parsed = parseDesktopLayer(layerText, { command, cwd });
   // 桌面端换模型的瞬间这个文件可能正在被重写，读到半截会解析失败。
   // 这里再读一次：两次内容不同就按新的算，多数情况下这一下就拿到完整文件了。
   // 仍然失败就退回基础 patch（机器人照常说话，只是这一轮模型不跟随）。
@@ -346,13 +413,14 @@ export function resolveModelPlan({ stateDir, basePatchPath = '', homedir = os.ho
       const again = fs.readFileSync(layerPath, 'utf8');
       if (again !== layerText) {
         layerText = again;
-        parsed = parseDesktopLayer(layerText);
+        parsed = parseDesktopLayer(layerText, { command, cwd });
       }
     } catch {
       // 第二次也读不到就用第一次的结果走兜底
     }
   }
   info.providers = parsed.providers;
+  info.modelCapabilities = parsed.modelCapabilities;
   info.desktop = parsed.model;
   if (!parsed.ok) {
     info.reason = parsed.reason;
@@ -360,7 +428,7 @@ export function resolveModelPlan({ stateDir, basePatchPath = '', homedir = os.ho
     return { patchPaths: [], info };
   }
 
-  // 手动模式优先；手动值不在供应商清单里也照用（用户可能知道自己在干什么），但记一条警告
+  // Keep an invalid saved target visible; the caller must stop instead of falling back.
   const manual = store.mode === 'manual' ? normalizeManual(store.manual) : null;
   const chosen = manual
     ? { ...manual, source: 'manual' }
@@ -378,13 +446,18 @@ export function resolveModelPlan({ stateDir, basePatchPath = '', homedir = os.ho
   }
 
   info.effective = chosen;
+  info.validation = validateModelSelection(chosen, { ...info, allowUnlisted: true });
+  if (info.validation.status === 'invalid') {
+    info.reason = info.validation.message;
+    return { patchPaths: [], info };
+  }
 
   // 生成模型块（手动模式用自己拼的三行；跟随模式原样搬运桌面端块）
   const modelLines = manual
     ? [
-        `    provider: ${manual.provider}`,
-        `    model: ${manual.model}`,
-        `    reasoningEffort: ${manual.reasoningEffort}`,
+        `    provider: ${JSON.stringify(manual.provider)}`,
+        `    model: ${JSON.stringify(manual.model)}`,
+        ...(manual.reasoningEffort ? [`    reasoningEffort: ${JSON.stringify(manual.reasoningEffort)}`] : []),
       ]
     : parsed.modelBlock;
 
@@ -447,15 +520,17 @@ function providerHasModel(providers, providerId, modelId) {
  * 控制台用的完整快照：当前模式、手动值、桌面端模型、可选供应商、生效模型。
  * 会调用 resolveModelPlan（顺带按需重建 runtime patch）。
  */
-export function describeModelState({ stateDir, basePatchPath = '', homedir = os.homedir(), log } = {}) {
+export function describeModelState({ stateDir, basePatchPath = '', homedir = os.homedir(), command = 'dsh', cwd = process.cwd(), log } = {}) {
   const store = readModelState(stateDir);
-  const plan = resolveModelPlan({ stateDir, basePatchPath, homedir, log });
+  const plan = resolveModelPlan({ stateDir, basePatchPath, homedir, command, cwd, log });
   return {
     mode: store.mode,
     manual: store.manual,
     updatedAt: store.updatedAt,
     desktop: plan.info.desktop,
     providers: plan.info.providers,
+    modelCapabilities: plan.info.modelCapabilities,
+    validation: plan.info.validation,
     effective: plan.info.effective,
     runtimePatch: plan.info.runtimePatch,
     generatedAt: plan.info.generatedAt,

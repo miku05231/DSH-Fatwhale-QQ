@@ -804,6 +804,7 @@ function Get-LauncherStatus {
     $account = ''
     $nickname = ''
     $loginDetail = ''
+    $loginStateName = 'stopped'
     $dshRunning = $false
     $dshPid = 0
     $problem = ''
@@ -824,6 +825,7 @@ function Get-LauncherStatus {
 
     # --- NapCat 登录态（进程没起来就不去请求 WebUI，避免每 3 秒空转一次）
     if ($napcatRunning) {
+        $loginStateName = 'unknown'
         try {
             $loginState = Invoke-LibFunction 'Get-NapCatLoginState'
             if ($null -ne $loginState) {
@@ -831,6 +833,7 @@ function Get-LauncherStatus {
                 $account = [string]$loginState.Account
                 $nickname = [string]$loginState.Nickname
                 $loginDetail = [string]$loginState.Detail
+                if ($null -ne $loginState.PSObject.Properties['State']) { $loginStateName = [string]$loginState.State }
             }
         } catch {
             $problem = 'NapCat 登录态探测失败：' + $_.Exception.Message
@@ -857,6 +860,7 @@ function Get-LauncherStatus {
     $bridgePid = 0
     $bridgeSessions = 0
     $bridgeInFlight = 0
+    $bridgeConnected = $false
     try {
         $bridgeProcess = Invoke-LibFunction 'Get-BridgeProcess'
         if ($null -ne $bridgeProcess) {
@@ -865,6 +869,7 @@ function Get-LauncherStatus {
                 try { $bridgePid = [int]$bridgeProcess.ProcessId } catch { $bridgePid = 0 }
                 try { $bridgeSessions = [int]$bridgeProcess.Sessions } catch { $bridgeSessions = 0 }
                 try { $bridgeInFlight = [int]$bridgeProcess.InFlight } catch { $bridgeInFlight = 0 }
+                try { $bridgeConnected = [bool]$bridgeProcess.Connected } catch { $bridgeConnected = $false }
             }
         }
     } catch {
@@ -888,7 +893,13 @@ function Get-LauncherStatus {
             $napcatText = 'NapCat 已登录(' + $who + ')'
         }
     } else {
-        $napcatText = 'NapCat 未登录'
+        $napcatText = switch ($loginStateName) {
+            'login-required' { 'NapCat 需重新登录' }
+            'offline' { 'NapCat 已离线' }
+            'reconnecting' { 'NapCat 重连中' }
+            'starting' { 'NapCat 登录中' }
+            default { 'NapCat 登录状态待确认' }
+        }
         # 异常时把原因带出来，太长就截断
         if (-not [string]::IsNullOrWhiteSpace($loginDetail)) {
             $reason = $loginDetail.Trim()
@@ -904,7 +915,9 @@ function Get-LauncherStatus {
     }
 
     if ($bridgeRunning) {
-        if ($bridgeInFlight -gt 0) {
+        if (-not $bridgeConnected) {
+            $bridgeText = '桥接等待连接'
+        } elseif ($bridgeInFlight -gt 0) {
             $bridgeText = '桥接运行中(处理 ' + $bridgeInFlight + ')'
         } else {
             $bridgeText = '桥接运行中'
@@ -926,7 +939,7 @@ function Get-LauncherStatus {
         $level = 'yellow'
     } elseif ($script:RequireDsh -and (-not $dshRunning)) {
         $level = 'red'
-    } elseif (-not $bridgeRunning) {
+    } elseif (-not $bridgeRunning -or -not $bridgeConnected) {
         # NapCat 登录了、DSH 也在，但桥接没起来 —— QQ 消息送不到 DSH，降级成黄色
         $level = 'yellow'
     } else {
@@ -964,10 +977,12 @@ function Get-LauncherStatus {
         Account       = $account
         Nickname      = $nickname
         LoginDetail   = $loginDetail
+        LoginState    = $loginStateName
         DshRunning    = $dshRunning
         DshPid        = $dshPid
         BridgeRunning = $bridgeRunning
         BridgePid     = $bridgePid
+        BridgeConnected = $bridgeConnected
         BridgeSessions = $bridgeSessions
         Level         = $level
         Summary       = $summary

@@ -295,12 +295,21 @@ function statusTone(overview) {
   if (!overview) return { state: 'unknown', text: '连接中' };
   const { napcat, bridge, dsh } = overview;
   if (!napcat.running) return { state: 'bad', text: 'NapCat 未运行' };
+  if (!napcat.loggedIn) return { state: 'warn', text: napcatBadge(napcat) };
   if (!dsh.running) return { state: 'warn', text: 'DSH 未运行' };
   if (!bridge.running) return { state: 'warn', text: '桥接未运行' };
   if (!bridge.connected) return { state: 'warn', text: '桥接未连接' };
   if (bridge.inFlight > 0) return { state: 'busy', text: '正在思考' };
   if (bridge.queueDepth > 0) return { state: 'busy', text: '排队中' };
   return { state: 'ok', text: '一切正常' };
+}
+
+function napcatBadge(napcat) {
+  if (napcat.loggedIn) return 'QQ 在线';
+  return ({
+    stopped: '未运行', offline: 'QQ 已离线', reconnecting: 'QQ 重连中',
+    starting: 'QQ 登录中', 'login-required': 'QQ 需重新登录', unknown: '登录状态待确认',
+  })[napcat.state] || (napcat.running ? '登录状态待确认' : '未运行');
 }
 
 function serviceCard({ key, name, running, badge, tone, meta, actions }) {
@@ -342,9 +351,9 @@ function renderServiceCards(overview) {
       key: 'napcat',
       name: 'NapCat',
       running: napcat.running,
-      badge: napcat.running ? (napcat.portOpen ? '已就绪' : '运行中') : '未运行',
-      tone: napcat.running ? (napcat.portOpen ? 'ok' : 'warn') : 'bad',
-      meta: `OneBot 端口 ${overview.ports.onebot}${napcat.qqRunning ? ' · QQ 在线' : ''}<br>WebUI ${escapeHtml(overview.ports.napcatWebui)}`,
+      badge: napcatBadge(napcat),
+      tone: napcat.loggedIn ? 'ok' : napcat.running ? 'warn' : 'bad',
+      meta: `${escapeHtml(napcat.detail || '')}<br>OneBot ${overview.ports.onebot} · ${napcat.portOpen ? '端口可连接' : '端口未监听'}`,
       actions: [
         napcat.running
           ? { label: '停止', action: 'stop' }
@@ -1386,6 +1395,32 @@ function fillSelect(node, values, selected) {
   }
 }
 
+function updateModelEfforts(savedEffort, preserveInvalid = false) {
+  const provider = $('#modelProvider')?.value;
+  const model = $('#modelModel')?.value;
+  const node = $('#modelEffort');
+  if (!node) return;
+  const capability = STATE.model?.modelCapabilities?.find((item) => item.provider === provider && item.model === model);
+  const reasoning = capability?.reasoning ?? { status: 'unknown', efforts: [] };
+  const current = savedEffort ?? node.value;
+  const efforts = reasoning.status === 'none' ? []
+    : reasoning.status === 'known' ? reasoning.efforts : STATE.model?.efforts ?? [];
+  const invalid = Boolean(current && !efforts.includes(current));
+  const values = ['', ...efforts];
+  if (invalid && preserveInvalid) values.push(current);
+  fillSelect(node, values, invalid && !preserveInvalid ? '' : current);
+  node.options[0].textContent = reasoning.status === 'none' ? '不适用'
+    : reasoning.status === 'unknown' ? '模型默认（待宿主验证）' : '模型默认';
+  if (invalid && preserveInvalid) node.options[node.options.length - 1].textContent = `${current}（当前值无效）`;
+  const editable = STATE.model?.mode === 'manual';
+  node.disabled = !editable || (reasoning.status === 'none' && !(invalid && preserveInvalid));
+  const save = $('#modelSave');
+  if (save) save.disabled = !editable || (invalid && preserveInvalid) || !provider || !model;
+  $('#modelHint').textContent = invalid && preserveInvalid ? '已保存的思考强度不受该模型支持，请重新选择。'
+    : reasoning.status === 'unknown' ? '能力尚未确认，保存后等待下一轮由宿主校验。'
+    : '等待下一条 QQ 消息应用到原会话。';
+}
+
 function renderModel(data) {
   if (!data || data.error) {
     const tip = data?.error || '读取失败';
@@ -1400,6 +1435,16 @@ function renderModel(data) {
   const desktop = data.desktop;
 
   $('#modelCurrent').textContent = effective ? `${effective.provider}/${effective.model}` : '未确定（将使用基础 patch）';
+  const applied = data.applied;
+  $('#modelApplied').textContent = applied
+    ? `最近实际使用：${applied.provider}/${applied.model} · 思考强度 ${applied.reasoningEffort ?? '默认'} · ${relTime(applied.at)}`
+    : '最近实际使用：尚无宿主回执';
+  $('#modelModelsUsed').textContent = applied?.modelsUsed?.length > 1
+    ? `本轮使用过：${applied.modelsUsed.map((item) => `${item.provider}/${item.model} (${item.reasoningEffort ?? '默认'})`).join('、')}` : '';
+  $('#modelApplicationHint').textContent = data.applicationError ? `应用失败：${data.applicationError.message}`
+    : data.validation?.status === 'invalid' ? `配置无效：${data.validation.message}`
+    : data.application === 'applied' ? '目标与最近实际使用一致'
+    : '已保存目标，等待下一条 QQ 消息的实际模型回执';
   $('#modelModeChip').textContent = mode === 'manual' ? '手动' : '跟随 DSH';
   $('#modelDesktop').textContent = desktop
     ? `桌面端当前：${desktop.provider}/${desktop.model}`
@@ -1424,12 +1469,11 @@ function renderModel(data) {
   const providers = Array.isArray(data.providers) ? data.providers : [];
   fillSelect(
     $('#modelProvider'),
-    providers.map((p) => p.id),
+    [...new Set([...providers.map((p) => p.id), ...(manual.provider ? [manual.provider] : [])])],
     manual.provider,
   );
-  const currentProvider = providers.find((p) => p.id === manual.provider) || providers[0];
-  fillSelect($('#modelModel'), currentProvider ? currentProvider.models : [], manual.model);
-  fillSelect($('#modelEffort'), Array.isArray(data.efforts) ? data.efforts : ['off', 'high', 'max'], manual.reasoningEffort || 'max');
+  const currentProvider = providers.find((p) => p.id === manual.provider);
+  fillSelect($('#modelModel'), [...new Set([...(currentProvider?.models ?? []), ...(manual.model ? [manual.model] : [])])], manual.model);
 
   const editable = mode === 'manual';
   for (const node of $$('#modelManualCard .select-field')) node.disabled = !editable;
@@ -1439,9 +1483,7 @@ function renderModel(data) {
     save.textContent = '保存';
   }
   if (card) card.classList.toggle('is-muted', !editable);
-  $('#modelHint').textContent = editable
-    ? '改完下一条 QQ 消息就会用新模型，不需要重启桥接。'
-    : '当前是「跟随 DSH」模式：去桌面端换模型即可；想在这里固定，请先切到手动指定。';
+  updateModelEfforts(manual.reasoningEffort ?? '', true);
   $('#modelUpdated').textContent = data.updatedAt ? `更新于${relTime(data.updatedAt)}` : '还未手动设置过';
 }
 
@@ -1457,12 +1499,24 @@ async function loadModel() {
 
 async function setModelMode(mode) {
   try {
+    if (mode === 'manual' && STATE.model?.manual) {
+      const manual = STATE.model.manual;
+      const reasoning = STATE.model.modelCapabilities?.find((item) =>
+        item.provider === manual.provider && item.model === manual.model)?.reasoning;
+      if (manual.reasoningEffort && (reasoning?.status === 'none' ||
+          reasoning?.status === 'known' && !reasoning.efforts.includes(manual.reasoningEffort))) {
+        STATE.model = { ...STATE.model, mode: 'manual' };
+        renderModel(STATE.model);
+        snackbar('请先修正手动配置，保存后切换模式');
+        return;
+      }
+    }
     const body = { mode };
     if (mode === 'manual' && !STATE.model?.manual) {
       body.manual = {
         provider: $('#modelProvider')?.value,
         model: $('#modelModel')?.value,
-        reasoningEffort: $('#modelEffort')?.value || 'max',
+        ...($('#modelEffort')?.value ? { reasoningEffort: $('#modelEffort').value } : {}),
       };
       if (!body.manual.provider || !body.manual.model) {
         snackbar('没有可用的供应商和模型，请先配置模型');
@@ -1483,7 +1537,7 @@ async function saveModel() {
   if (!btn) return;
   const provider = $('#modelProvider')?.value;
   const model = $('#modelModel')?.value;
-  const reasoningEffort = $('#modelEffort')?.value || 'max';
+  const reasoningEffort = $('#modelEffort')?.value;
   if (!provider || !model) {
     snackbar('请先选供应商和模型');
     return;
@@ -1494,7 +1548,7 @@ async function saveModel() {
   try {
     const data = await api('/api/model', {
       method: 'PUT',
-      body: JSON.stringify({ mode: 'manual', manual: { provider, model, reasoningEffort } }),
+      body: JSON.stringify({ mode: 'manual', manual: { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) } }),
     });
     STATE.model = data;
     renderModel(data);
@@ -1502,8 +1556,8 @@ async function saveModel() {
   } catch (err) {
     snackbar(`保存失败：${err.message}`, { duration: 5200 });
   } finally {
-    btn.disabled = false;
     btn.textContent = '保存';
+    updateModelEfforts(undefined, true);
   }
 }
 
@@ -2669,7 +2723,10 @@ function initEvents() {
     const providers = Array.isArray(STATE.model?.providers) ? STATE.model.providers : [];
     const provider = providers.find((p) => p.id === $('#modelProvider')?.value) || providers[0];
     fillSelect($('#modelModel'), provider ? provider.models : [], STATE.model?.manual?.model);
+    updateModelEfforts();
   });
+  $('#modelModel')?.addEventListener('change', () => updateModelEfforts());
+  $('#modelEffort')?.addEventListener('change', () => updateModelEfforts(undefined, true));
   $('#modelReload')?.addEventListener('click', () => loadModel());
   $('#modelSave')?.addEventListener('click', () => saveModel());
 

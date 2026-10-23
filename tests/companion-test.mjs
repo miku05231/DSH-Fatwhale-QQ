@@ -19,6 +19,7 @@ import {
   readCompanionDiscovery,
   resolveCompanionDiscoveryPath,
   runCompanionDsh,
+  fetchCompanionModelCatalog,
 } from '../src/dsh-companion.js';
 import { runAgent } from '../src/agent-runner.js';
 import { apply as applyCompanion } from '../src/companion/lib/index.js';
@@ -27,7 +28,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-bridge-companion-'));
 const TOKEN = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718';
 const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access'];
-const HEALTH = { ok: true, pid: process.pid, permissionProtocol: 1, permissionModes: PERMISSION_MODES };
+const HEALTH = { ok: true, pid: process.pid, permissionProtocol: 1, permissionModes: PERMISSION_MODES, modelProtocol: 1 };
 let passed = 0;
 
 function ok(label, fn) {
@@ -130,11 +131,12 @@ function callPlugin(info, pathname, body = {}) {
 async function pluginFixture({
   cancel = () => ({ accepted: true }), promptTimeoutMs, idle = false, complete = false, permissionService,
   historicalSessions, sessionHeaders = {}, resolveModel, resolveSession,
+  turnModels, turnEvents, catalog,
 } = {}) {
   const pluginDiscovery = path.join(tmp, `plugin-${randomUUID()}.json`);
   const calls = {
     cancelled: 0, flushed: 0, prompted: 0, created: 0, permissions: [], warnings: [], attached: [], observed: [],
-    modelSignals: [], selections: [], restored: [],
+    modelSignals: [], selections: [], restored: [], admissions: 0,
   };
   let historyAttached;
   const historyFinished = new Promise((resolve) => { historyAttached = resolve; });
@@ -156,8 +158,10 @@ async function pluginFixture({
   const events = [];
   const session = { seq: 0, eventAt: (seq) => events[seq] };
   const agent = { session, whenIdle: () => complete ? Promise.resolve() : new Promise(() => {}) };
+  let selected;
   let effectivePermission = 'danger-full-access';
   const controller = {
+    ...(catalog ? { modelCatalog: async () => catalog } : {}),
     ...(resolveSession ? { resolveAgent: async (sessionId) => {
       calls.restored.push(sessionId);
       return await resolveSession(sessionId, agent) ?? agent;
@@ -170,6 +174,17 @@ async function pluginFixture({
       calls.prompted += 1;
       started();
       if (idle || complete) {
+        if (turnEvents) {
+          events.push(...turnEvents({ turn: calls.prompted, selected }));
+        } else {
+          for (const model of turnModels ?? (selected ? [selected] : [])) {
+            events.push({ type: 'request/header', data: { header: { config: model } } });
+            events.push({ type: 'assistant/message', data: { message: {
+              source: { kind: 'llm', provider: model.provider, model: model.model },
+              content: [{ type: 'text', text: 'test reply' }],
+            } } });
+          }
+        }
         events.push({
           type: 'assistant/message',
           data: { message: { content: [{ type: 'text', text: 'test reply' }] } },
@@ -196,7 +211,13 @@ async function pluginFixture({
     },
     agents: {
       get: () => agent,
-      selectForNextRequest: (_agent, model) => { calls.selections.push(model); },
+      serializeImageAdmission: async (_agent, operation) => { calls.admissions += 1; return operation(); },
+      selectForNextRequest: (_agent, model) => {
+        calls.selections.push(model);
+        selected = model;
+        events.push({ type: 'model/selection', data: model });
+        session.seq = events.length;
+      },
     },
     llm: {
       resolveCallConfig: (model, signal) => {
@@ -222,6 +243,12 @@ async function pluginFixture({
       },
     } : permissionService,
   };
+  controller.agents = {
+    selectForNextRequest: services.agents.selectForNextRequest,
+    serializeImageAdmission: services.agents.serializeImageAdmission,
+  };
+  delete services.agents.selectForNextRequest;
+  delete services.agents.serializeImageAdmission;
   await applyCompanion({
     get: (name) => services[name],
     logger: {
@@ -555,6 +582,24 @@ await okAsync('runAgent：companion 可用时优先走 companion', async () => {
   }
 });
 
+await okAsync('runAgent：旧连伴未加载切模协议时明确报错，不提交或回退重跑', async () => {
+  let prompts = 0;
+  const server = await listen((_req, res) => {
+    if (_req.url === '/prompt') prompts += 1;
+    res.end(JSON.stringify({ ...HEALTH, modelProtocol: undefined }));
+  });
+  writeDiscovery(server.address().port);
+  try {
+    await assert.rejects(() => runAgent('do not execute with an old companion', {
+      cfg: { security: { adminUserIds: [123456] }, dsh: {
+        mode: 'desktop', companionDiscovery: discoveryPath,
+      } }, requesterId: 123456, cwd: tmp,
+      model: { provider: 'fixture', model: 'new-model' },
+    }), (error) => error.code === 'companion/model-unavailable' && !error.channelError && /重启/.test(error.message));
+    assert.equal(prompts, 0);
+  } finally { await close(server); }
+});
+
 await okAsync('runAgent：探测成功后 discovery 消失或过期只安全回退执行一次', async () => {
   const fallbackBin = path.join(tmp, 'preflight-fallback.cjs');
   const marker = path.join(tmp, 'preflight-fallback-calls.jsonl');
@@ -704,6 +749,173 @@ await okAsync('真实插件：正常完成返回最终文本且不执行取消',
   } finally {
     fixture.dispose();
   }
+});
+
+await okAsync('真实插件：非法模型组合不得继续用旧模型回答，修正后复用同一会话', async () => {
+  const fixture = await pluginFixture({
+    complete: true,
+    resolveSession: (_id, agent) => agent,
+    resolveModel: (model) => {
+      if (model.reasoningEffort === 'low') throw new Error('UNSUPPORTED_REASONING_EFFORT: off, high, max');
+      return model;
+    },
+  });
+  try {
+    await assert.rejects(() => runCompanionDsh('invalid selection', {
+      cfg: fixture.cfg, sessionId: 'fixture-session',
+      model: { provider: 'fixture', model: 'new-model', reasoningEffort: 'low' },
+    }), (error) => {
+      assert.equal(error.code, 'companion/model-unavailable');
+      assert.equal(error.sessionAccepted, true);
+      assert.equal(error.channelError, undefined);
+      assert.equal(error.sessionId, 'fixture-session');
+      return true;
+    });
+    assert.equal(fixture.calls.prompted, 0);
+    assert.deepEqual(fixture.calls.selections, []);
+    const result = await runCompanionDsh('valid retry', {
+      cfg: fixture.cfg, sessionId: 'fixture-session',
+      model: { provider: 'fixture', model: 'new-model', reasoningEffort: 'high' },
+    });
+    assert.equal(result.sessionId, 'fixture-session');
+    assert.equal(fixture.calls.created, 0);
+    assert.equal(fixture.calls.prompted, 1);
+    assert.deepEqual(result.model, { provider: 'fixture', model: 'new-model', reasoningEffort: 'high' });
+    assert.equal(fixture.calls.admissions, 2);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+await okAsync('真实插件：切换 provider/model/effort 持久选择且保留同一会话', async () => {
+  const fixture = await pluginFixture({ complete: true, resolveSession: (_id, agent) => agent });
+  try {
+    const models = [
+      { provider: 'p1', model: 'm1', reasoningEffort: 'high' },
+      { provider: 'p2', model: 'm2', reasoningEffort: 'low' },
+      { provider: 'p2', model: 'm2', reasoningEffort: 'high' },
+    ];
+    let sessionId;
+    for (const model of models) {
+      const result = await runCompanionDsh('switch', { cfg: fixture.cfg, sessionId, model });
+      sessionId ??= result.sessionId;
+      assert.equal(result.sessionId, sessionId);
+      assert.deepEqual(result.model, model);
+      assert.deepEqual(result.modelsUsed, [model]);
+    }
+    assert.equal(fixture.calls.created, 1);
+    assert.deepEqual(fixture.calls.selections, models);
+    const logged = Array.from({ length: fixture.session.seq }, (_, seq) => fixture.session.eventAt(seq));
+    assert.deepEqual(logged.filter((event) => event.type === 'model/selection').map((event) => event.data), models);
+  } finally { fixture.dispose(); }
+});
+
+await okAsync('真实插件：返回本轮实际路由及去重列表，不照抄目标或前一轮', async () => {
+  const actual = [
+    { provider: 'route-a', model: 'actual-a', reasoningEffort: 'high' },
+    { provider: 'route-b', model: 'actual-b' },
+  ];
+  const fixture = await pluginFixture({ complete: true, turnModels: [...actual, actual[0]] });
+  try {
+    const result = await runCompanionDsh('routed', {
+      cfg: fixture.cfg, model: { provider: 'requested', model: 'target' },
+    });
+    assert.deepEqual(result.model, actual[0]);
+    assert.deepEqual(result.modelsUsed, actual);
+  } finally { fixture.dispose(); }
+});
+
+await okAsync('真实插件：省略重复请求头时继承实际 effort，不照抄本轮请求目标', async () => {
+  const actual = { provider: 'actual-route', model: 'actual-model', reasoningEffort: 'high' };
+  const source = { provider: actual.provider, model: actual.model };
+  const target = { ...source, reasoningEffort: 'max' };
+  const fixture = await pluginFixture({
+    complete: true,
+    turnEvents: ({ turn }) => [
+      ...(turn === 1 ? [{ type: 'request/header', data: { header: { config: actual } } }] : []),
+      { type: 'assistant/message', data: { message: { source: { kind: 'llm', ...source } } } },
+    ],
+  });
+  try {
+    const first = await runCompanionDsh('actual header first round', { cfg: fixture.cfg, model: actual });
+    assert.deepEqual(first.model, actual);
+    const continued = await runCompanionDsh('same actual config without another header', {
+      cfg: fixture.cfg, sessionId: first.sessionId, model: target,
+    });
+    assert.equal(continued.sessionId, first.sessionId);
+    assert.deepEqual(fixture.calls.selections, [actual, target]);
+    assert.deepEqual(continued.model, actual, 'the effective actual header remains authoritative instead of requested max');
+    assert.deepEqual(continued.modelsUsed, [actual]);
+  } finally { fixture.dispose(); }
+});
+
+await okAsync('真实插件：省略请求头时不同路由或模型不能继承前轮 effort', async () => {
+  for (const source of [
+    { provider: 'different-route', model: 'actual-model' },
+    { provider: 'actual-route', model: 'different-model' },
+  ]) {
+    const previous = { provider: 'actual-route', model: 'actual-model', reasoningEffort: 'high' };
+    const fixture = await pluginFixture({
+      complete: true,
+      turnEvents: ({ turn }) => turn === 1
+        ? [{ type: 'request/header', data: { header: { config: previous } } },
+          { type: 'assistant/message', data: { message: { source: { kind: 'llm', provider: previous.provider, model: previous.model } } } }]
+        : [{ type: 'assistant/message', data: { message: { source: { kind: 'llm', ...source } } } }],
+    });
+    try {
+      const first = await runCompanionDsh('previous actual route', { cfg: fixture.cfg, model: previous });
+      const continued = await runCompanionDsh('different actual source without another header', {
+        cfg: fixture.cfg, sessionId: first.sessionId, model: { ...source, reasoningEffort: 'max' },
+      });
+      assert.equal(continued.sessionId, first.sessionId);
+      assert.deepEqual(continued.model, source);
+      assert.deepEqual(continued.modelsUsed, [source]);
+    } finally { fixture.dispose(); }
+  }
+});
+
+await okAsync('真实插件：本轮新请求头无 effort 时清除同模型前轮 effort', async () => {
+  const source = { provider: 'actual-route', model: 'actual-model' };
+  const previous = { ...source, reasoningEffort: 'high' };
+  const fixture = await pluginFixture({
+    complete: true,
+    turnEvents: ({ turn }) => [
+      { type: 'request/header', data: { header: { config: turn === 1 ? previous : source } } },
+      { type: 'assistant/message', data: { message: { source: { kind: 'llm', ...source } } } },
+    ],
+  });
+  try {
+    const first = await runCompanionDsh('explicit high actual header', { cfg: fixture.cfg, model: previous });
+    assert.deepEqual(first.model, previous);
+    const continued = await runCompanionDsh('new actual header clears effort', {
+      cfg: fixture.cfg, sessionId: first.sessionId, model: { ...source, reasoningEffort: 'max' },
+    });
+    assert.equal(continued.sessionId, first.sessionId);
+    assert.deepEqual(continued.model, source);
+    assert.deepEqual(continued.modelsUsed, [source]);
+  } finally { fixture.dispose(); }
+});
+
+await okAsync('真实插件：模型目录只包含公开能力，旧宿主返回 null', async () => {
+  const fixture = await pluginFixture({ catalog: {
+    default: { provider: 'private-default' },
+    failures: [{ message: 'secret diagnostic' }],
+    groups: [{ id: 'p', apiKey: 'private-key', models: [
+      { id: 'reasoning', reasoning: { efforts: [{ id: 'off' }, { id: 'high' }, { id: 'max' }], defaultEffort: 'high' } },
+      { id: 'plain' },
+    ] }],
+  } });
+  const legacy = await pluginFixture();
+  try {
+    assert.equal((await probeCompanion(fixture.cfg)).health.modelProtocol, 1);
+    assert.deepEqual(await fetchCompanionModelCatalog(fixture.cfg), { providers: [{ id: 'p', models: [
+      { id: 'reasoning', reasoning: { status: 'known', efforts: ['off', 'high', 'max'], defaultEffort: 'high' } },
+      { id: 'plain', reasoning: { status: 'none', efforts: [] } },
+    ] }] });
+    assert.equal(await fetchCompanionModelCatalog(legacy.cfg), null);
+    assert.equal(fixture.calls.created, 0);
+    assert.equal(fixture.calls.prompted, 0);
+  } finally { fixture.dispose(); legacy.dispose(); }
 });
 
 await okAsync('真实插件：已有对话通过宿主恢复，不再调用 create 换 ID', async () => {

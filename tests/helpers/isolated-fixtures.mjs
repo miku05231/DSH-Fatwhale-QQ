@@ -141,7 +141,7 @@ export async function createLocalDshFixture({ prefix = 'qq-local-dsh-', reply = 
   };
 }
 
-export async function createConsoleFixture(root) {
+export async function createConsoleFixture(root, { napcatHealth, platformQrLogin } = {}) {
   const configPath = path.join(root, 'config.json');
   const restoreEnv = useIsolatedEnv(root, { QQ_CONFIG: configPath });
   let instance;
@@ -178,7 +178,7 @@ export async function createConsoleFixture(root) {
       installReason: 'Isolated test console', progress: null, error: '',
     };
     instance = createWebUiServer({
-      config, configRoot: root, port: await freePort(),
+      config, configRoot: root, port: await freePort(), napcatHealth, platformQrLogin,
       updateManager: {
         async start() {}, stop() {}, async status() { return { ...updateStatus }; },
       },

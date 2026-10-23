@@ -25,6 +25,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { createFakeNapCat } from './ws-harness.mjs';
+import { parseDesktopLayer } from '../src/model-follow.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(HERE, '..');
@@ -279,7 +280,8 @@ async function main() {
     });
     const argv2 = invocations2[1];
     const body2 = fs.readFileSync(runtimePatch, 'utf8');
-    if (body2.includes('provider: manual-provider') && body2.includes('model: manual-model') && body2.includes('reasoningEffort: high')) {
+    const manualModel = parseDesktopLayer(body2).model;
+    if (manualModel?.provider === 'manual-provider' && manualModel?.model === 'manual-model' && manualModel?.reasoningEffort === 'high') {
       ok('runtime patch 换成了手动模型');
     } else {
       bad('runtime patch 没换手动模型', body2.slice(0, 200));

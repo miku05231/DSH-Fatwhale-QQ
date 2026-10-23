@@ -47,6 +47,9 @@ function check(cond, name, detail = '') {
 
 const REQUIRED = [
   'src/index.js',
+  'src/napcat-health.js',
+  'src/napcat-health-onebot.js',
+  'scripts/napcat-health.mjs',
   'src/security.js',
   'src/computer-access.js',
   'src/chat-only.js',
@@ -104,6 +107,8 @@ const REQUIRED = [
   'docs/automation-and-voice.md',
   'docs/verification-v3.0.0.md',
   'docs/releases/v3.0.0.md',
+  'docs/verification-v3.1.0.md',
+  'docs/releases/v3.1.0.md',
   'docs/screenshots/console-jev-settings.png',
   'docs/screenshots/console-reply-tts.png',
   'docs/screenshots/console-bilibili-automation.png',
@@ -126,6 +131,12 @@ const MUST_NOT_EXIST = [
   'docs/testing',
   'docs/work-progress.md',
   'docs/update-program.md',
+  'docs/model-switch-session-reuse-implementation.md',
+  'docs/model-switch-session-reuse-repair-plan.md',
+  'docs/napcat-login-persistence-diagnosis.md',
+  'docs/napcat-login-persistence-implementation.md',
+  'docs/napcat-login-persistence-investigation-progress.md',
+  'tools/sticker.mjs',
 ];
 
 const FORBIDDEN = [
@@ -187,7 +198,12 @@ async function verifyOutputSafety(tmpRoot) {
   await fsp.writeFile(path.join(fixtureRoot, 'config.json'), '{"synthetic":true}\n');
   await fsp.writeFile(path.join(fixtureRoot, 'AGENTS.md'), 'private-maintenance-fixture\n');
   await fsp.writeFile(sourceSentinel, 'preserve-source-fixture\n');
-  const privateReports = ['docs/testing/private.md', 'docs/work-progress.md', 'docs/full-verification-fixture.md', 'docs/update-program.md'];
+  const privateReports = [
+    'docs/testing/private.md', 'docs/work-progress.md', 'docs/full-verification-fixture.md', 'docs/update-program.md',
+    'docs/model-switch-session-reuse-implementation.md', 'docs/model-switch-session-reuse-repair-plan.md',
+    'docs/napcat-login-persistence-diagnosis.md', 'docs/napcat-login-persistence-implementation.md',
+    'docs/napcat-login-persistence-investigation-progress.md', 'tools/sticker.mjs',
+  ];
   for (const file of privateReports) {
     await fsp.mkdir(path.dirname(path.join(fixtureRoot, file)), { recursive: true });
     await fsp.writeFile(path.join(fixtureRoot, file), 'synthetic-private-test-evidence\n');

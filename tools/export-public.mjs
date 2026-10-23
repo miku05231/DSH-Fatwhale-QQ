@@ -42,6 +42,7 @@ const INCLUDE = [
   'docs/更新发布.md',
   'docs/automation-and-voice.md',
   'docs/verification-v3.0.0.md',
+  'docs/verification-v3.1.0.md',
   'docs/releases',
   '.github',
   'README.md',
@@ -58,7 +59,7 @@ const INCLUDE = [
 ];
 
 /** 这些即使在白名单里也不复制 */
-const EXCLUDE = [/^AGENTS\.md$/i, /state[\\/]/, /logs[\\/]/, /napcat[\\/]/, /node_modules[\\/]/, /\.tmp$/, /config\.json$/, /\.credentials/];
+const EXCLUDE = [/^AGENTS\.md$/i, /^tools[\\/]sticker\.mjs$/, /state[\\/]/, /logs[\\/]/, /napcat[\\/]/, /node_modules[\\/]/, /\.tmp$/, /config\.json$/, /\.credentials/];
 
 /** 文本文件后缀：参与脱敏 */
 const TEXT_EXT = new Set(['.js', '.mjs', '.cjs', '.ps1', '.cmd', '.sh', '.bat', '.css', '.html', '.md', '.json', '.yml', '.yaml', '.txt', '.example']);
@@ -133,7 +134,7 @@ const PUBLIC_README = `> 非官方项目。QQ 侧通过第三方协议端 [NapCa
 - DSH（DeepSeek Harness）已安装并可用 \`dsh\` 命令
 - NapCat（同一个发布包里的无头版本即可，无需另装 QQ 客户端）
 
-Docker 部署见 [部署说明](docs/Docker部署.md)；[历史容器验证](docs/Docker验证报告.md) 不代表 v3.0.0 已完成真实容器测试。
+Docker 部署见 [部署说明](docs/Docker部署.md)；[历史容器验证](docs/Docker验证报告.md) 不代表 v3.1.0 已完成真实容器测试。
 
 ## 快速开始
 
@@ -172,13 +173,15 @@ node tests\\plugins-test.mjs # 单跑插件宿主
 
 全量套件使用临时配置与 DSH_HOME、假 NapCat 和本机模型端点，不需要真实 QQ 账号或在线模型密钥。真实 NapCat、Docker 和 Electron 桌面验证按各测试的要求单独执行。
 
-## v3.0.0 验证范围与未测试项
+## v3.1.0 修复与验证范围
 
-本次隔离全量测试 67/67 组通过，另有实际 Electron 12/12 项、便携包升级 66/66 项。真实只读检查验证了 QQ 登录/OneBot 状态、B站登录/搜索/动态以及 Edge TTS 中文合成。
+本版修复原会话的模型与思考档位切换，控制台区分目标、实际、待应用与失败；保存合法目标后下一条 QQ 消息应用并同步已打开页面，选择失败不继续使用旧模型。改进 NapCat 实际登录检测、安装归属、端口冲突恢复与脱敏健康日志。
 
-**未实测**：真实 QQ 文字/语音投递、长期群聊免唤醒表现、真实 QQ 定时推送、B站实际评论与 @、本版 Docker 容器和其他操作系统。账号发送与发布链路使用模拟响应验证，不能视为真实平台验收。语音、自动化和自动评论默认关闭；评论还要求显式确认人工验收。
+真实隔离 Electron 24/24、DSH Web + Edge 19/19、companion 55/55、独立宿主 13/13 通过；其他专项结果见验证说明，不把旧版全量结果计为本版全量验证。真实只读检查覆盖 QQ 在线和一次 NapCat 快速登录恢复，不发送真实 QQ 验收消息。
 
-详见 [新功能配置](docs/automation-and-voice.md)、[测试与未测试说明](docs/verification-v3.0.0.md) 和 [v3.0.0 发行说明](docs/releases/v3.0.0.md)。
+**未完成**：真实 QQ 文字/语音投递、QQ 定时推送、B站实际评论与 @、长期真实群聊判定，以及完整工作日登录稳定性、网络切换、休眠及 Windows 用户注销恢复，本版 Docker 和其他系统。语音与平台功能沿用旧版的未实测边界；不能承诺永久免重新授权，也不自动启用自启。
+
+详见 [功能配置](docs/automation-and-voice.md)、[测试与未测试说明](docs/verification-v3.1.0.md) 和 [v3.1.0 发行说明](docs/releases/v3.1.0.md)。
 
 ## 插件
 

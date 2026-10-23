@@ -43,6 +43,7 @@ const MAX_BODY_BYTES = 256 * 1024;
 const ATTACH_HISTORY_MS = 7 * 24 * 60 * 60 * 1000;
 const PERMISSION_MODES = ['read-only', 'workspace-write', 'danger-full-access'];
 const PERMISSION_ERROR_CODE = 'companion/permission-unsupported';
+const MODEL_ERROR_CODE = 'companion/model-unavailable';
 
 /** DSH home：优先 $DSH_HOME，否则 ~/.dsh（和桥接 src/dsh-desktop.js 保持一致） */
 function resolveDshHome() {
@@ -182,10 +183,36 @@ async function applyPermission(plan, session) {
 function readTurnResult(session, firstSeq) {
   let text = '';
   let reason = null;
+  let model = null;
+  const modelsUsed = [];
+  const seen = new Set();
+  let activeHeader = null;
+  // DSH omits unchanged request headers; the preceding snapshot stays in force.
+  for (let seq = firstSeq - 1; seq >= 0; seq -= 1) {
+    const event = session.eventAt(seq);
+    if (event?.type === 'request/header') {
+      activeHeader = event.data?.header?.config ?? null;
+      break;
+    }
+  }
+  const recordModel = (value, header = false) => {
+    if (typeof value?.provider !== 'string' || typeof value?.model !== 'string') return;
+    const effort = !header && value.reasoningEffort === undefined &&
+      activeHeader?.provider === value.provider && activeHeader?.model === value.model
+      ? activeHeader.reasoningEffort : value.reasoningEffort;
+    model = {
+      provider: value.provider,
+      model: value.model,
+      ...(typeof effort === 'string' ? { reasoningEffort: effort } : {}),
+    };
+    const key = JSON.stringify(model);
+    if (!seen.has(key)) { seen.add(key); modelsUsed.push(model); }
+  };
   for (let seq = firstSeq; seq < session.seq; seq += 1) {
     const event = session.eventAt(seq);
     if (!event) continue;
     if (event.type === 'assistant/message') {
+      recordModel(event.data?.message?.source);
       const content = event.data?.message?.content;
       if (Array.isArray(content)) {
         const parts = content
@@ -193,11 +220,31 @@ function readTurnResult(session, firstSeq) {
           .map((block) => block.text);
         if (parts.length > 0) text = parts.join('');
       }
+    } else if (event.type === 'request/header') {
+      activeHeader = event.data?.header?.config ?? null;
+      recordModel(activeHeader, true);
     } else if (event.type === 'turn/end') {
       reason = event.data?.reason ?? null;
     }
   }
-  return { text, reason };
+  return { text, reason, model, modelsUsed };
+}
+
+/** Return only public model identifiers and resolved reasoning capabilities. */
+function publicModelCatalog(catalog) {
+  return { providers: (catalog.groups ?? []).map((group) => ({
+    id: group.id,
+    models: (group.models ?? []).map((model) => ({
+      id: model.id,
+      reasoning: model.reasoning === undefined
+        ? { status: 'none', efforts: [] }
+        : {
+            status: 'known',
+            efforts: model.reasoning.efforts.map((effort) => effort.id),
+            ...(model.reasoning.defaultEffort === undefined ? {} : { defaultEffort: model.reasoning.defaultEffort }),
+          },
+    })),
+  })) };
 }
 
 /** 在 workspaceRegistry 里按路径找工作区。 */
@@ -308,6 +355,8 @@ export async function apply(ctx, rawConfig) {
     const controller = ctx.get('sessionController');
     const registry = ctx.get('workspaceRegistry');
     const agents = ctx.get('agents');
+    // DSH 0.2.x owns session selections on the controller, not the Agent registry.
+    const modelSelections = controller?.agents?.selectForNextRequest ? controller.agents : agents;
     const sessions = ctx.get('sessions');
     if (!controller || !agents || !sessions) throw new Error('DSH 会话服务尚未就绪');
     const permission = permissionPlan(ctx, body.permissionMode);
@@ -370,7 +419,7 @@ export async function apply(ctx, rawConfig) {
       else requestAbort.signal.addEventListener('abort', onRequestAbort, { once: true });
     }
 
-    const firstSeq = agent.session.seq;
+    let firstSeq = agent.session.seq;
     let timer;
     let timedOut = false;
     let promptSubmitted = false;
@@ -391,51 +440,69 @@ export async function apply(ctx, rawConfig) {
         onAbort();
         await abortedPromise;
       }
-      const model = body.model && typeof body.model === 'object' ? body.model : null;
-      if (model?.provider && model?.model) {
-        try {
-          const selected = await Promise.race([
-            ctx.get('llm').resolveCallConfig({
-              provider: model.provider,
-              model: model.model,
-              ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}),
-            }, abort.signal),
-            abortedPromise,
-          ]);
-          if (abort.signal.aborted) await abortedPromise;
-          agents.selectForNextRequest(agent, {
-            provider: selected.provider,
-            model: selected.model,
-            ...(selected.reasoningEffort ? { reasoningEffort: selected.reasoningEffort } : {}),
-          });
-        } catch (error) {
-          if (abort.signal.aborted) throw error;
-          log.warn(`companion: 应用模型选择失败，按默认模型继续：${String(error)}`);
+      // Leave a desktop turn in flight on its original selection.
+      if (agent.status === 'running') await Promise.race([agent.whenIdle(), abortedPromise]);
+      const admit = async () => {
+        if (abort.signal.aborted) await abortedPromise;
+        let selected = null;
+        if (body.model !== undefined && body.model !== null) {
+          const model = body.model;
+          try {
+            if (typeof model.provider !== 'string' || !model.provider.trim() ||
+                typeof model.model !== 'string' || !model.model.trim()) throw new Error('模型选择需要 provider 和 model');
+            selected = await Promise.race([
+              ctx.get('llm').resolveCallConfig({
+                provider: model.provider,
+                model: model.model,
+                ...(model.reasoningEffort === undefined ? {} : { reasoningEffort: model.reasoningEffort }),
+              }, abort.signal),
+              abortedPromise,
+            ]);
+            if (abort.signal.aborted) await abortedPromise;
+          } catch (error) {
+            if (abort.signal.aborted) throw error;
+            throw Object.assign(new Error(`指定的模型不可用：${String(error?.message ?? error)}`), {
+              code: MODEL_ERROR_CODE, sessionAccepted: true,
+            });
+          }
         }
-      }
-      await Promise.race([applyPermission(permission, agent.session), abortedPromise]);
-      if (abort.signal.aborted) await abortedPromise;
-      promptSubmitted = true;
-      const promptPromise = controller.prompt(
-        {
-          requestId: randomUUID(),
-          sessionId,
-          mode: 'queue',
+        await Promise.race([applyPermission(permission, agent.session), abortedPromise]);
+        if (abort.signal.aborted) await abortedPromise;
+        firstSeq = agent.session.seq;
+        if (selected) {
+          try {
+            await modelSelections.selectForNextRequest(agent, {
+              provider: selected.provider,
+              model: selected.model,
+              ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }),
+            });
+          } catch (error) {
+            throw Object.assign(new Error(`不能应用模型选择：${String(error?.message ?? error)}`), {
+              code: MODEL_ERROR_CODE, sessionAccepted: true,
+            });
+          }
+        }
+        if (abort.signal.aborted) await abortedPromise;
+        promptSubmitted = true;
+        await Promise.race([controller.prompt({
+          requestId: randomUUID(), sessionId, mode: 'queue',
           content: [{ type: 'text', text }],
           clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        },
-        abort.signal,
-      );
-      await Promise.race([promptPromise, abortedPromise]);
+        }, abort.signal), abortedPromise]);
+      };
+      await Promise.race([
+        typeof modelSelections?.serializeImageAdmission === 'function' ? modelSelections.serializeImageAdmission(agent, admit) : admit(),
+        abortedPromise,
+      ]);
       await Promise.race([agent.whenIdle(), abortedPromise]);
       if (timedOut) throw new Error(`对话超时（${timeoutMs}ms）`);
-      const { text: finalText, reason } = readTurnResult(agent.session, firstSeq);
+      const { text: finalText, reason, model, modelsUsed } = readTurnResult(agent.session, firstSeq);
       if (finalText.trim().length === 0) {
         const kind = reason?.kind ?? 'empty';
         const detail = reason?.error?.message ? `：${reason.error.message}` : '';
         throw new Error(`本轮没有生成回复（${String(kind)}${detail}）`);
       }
-      return { sessionId, text: finalText, reason, workspaceId: workspace?.id ?? null };
+      return { sessionId, text: finalText, reason, model, modelsUsed, workspaceId: workspace?.id ?? null };
     } catch (error) {
       if (timedOut) error = new Error(`对话超时（${timeoutMs}ms）`);
       if (error && typeof error === 'object' && !error.sessionId) error.sessionId = sessionId;
@@ -483,7 +550,21 @@ export async function apply(ctx, rawConfig) {
         running: [...running.keys()],
         permissionProtocol: 1,
         permissionModes: supportedPermissionModes(ctx),
+        modelProtocol: 1,
       });
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/models') {
+      const controller = ctx.get('sessionController');
+      if (typeof controller?.modelCatalog !== 'function') {
+        sendJson(res, 404, { ok: false, error: '模型目录不可用' });
+      } else {
+        try {
+          sendJson(res, 200, { ok: true, ...publicModelCatalog(await controller.modelCatalog()) });
+        } catch {
+          sendJson(res, 503, { ok: false, error: '模型目录暂不可用' });
+        }
+      }
       return;
     }
     if (req.method !== 'POST') {
@@ -534,13 +615,14 @@ export async function apply(ctx, rawConfig) {
       sessionId = sessionId ?? error?.sessionId ?? null;
       const message = String(error?.message ?? error);
       log.warn(`companion: 对话失败：${message}`);
-      sendJson(res, 500, {
+      sendJson(res, error?.code === MODEL_ERROR_CODE ? 400 : 500, {
         ok: false,
         error: message,
         sessionId,
         ...(error?.code === PERMISSION_ERROR_CODE && error?.sessionAccepted === false
           ? { code: PERMISSION_ERROR_CODE, sessionAccepted: false }
           : {}),
+        ...(error?.code === MODEL_ERROR_CODE ? { code: MODEL_ERROR_CODE, sessionAccepted: true } : {}),
       });
     }
   }

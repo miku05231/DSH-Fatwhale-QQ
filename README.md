@@ -7,7 +7,7 @@
 
 你在手机或电脑 QQ 里发消息，本机 DSH 执行并回复。
 
-当前版本：**v3.0.0**。新增群聊免唤醒判定、回复语音、B站定时浏览与推送，详见 [发行说明](docs/releases/v3.0.0.md)。
+当前版本：**v3.1.0**。修复同一会话切换模型与思考档位的同步，改进 QQ 登录检测、启动恢复及日志保留，详见 [发行说明](docs/releases/v3.1.0.md)。
 
 应用图标源文件：[deepseek-waitou.png](deepseek-waitou.png)（保留原始 PNG）。
 
@@ -99,7 +99,16 @@ JEV URL 和 Token 均已填写时使用 JEV，缺任一项时使用当前 DSH �
 </details>
 <!-- showcase:end -->
 
-## v3.0.0 配置与验证范围
+## v3.1.0 修复与验证范围
+
+- 控制台按供应商和模型校验思考档位，分别显示保存目标、最近实际使用、待应用和失败状态。保存合法目标后，下一条 QQ 消息继续使用原会话，并同步已打开的 DSH 对话页；在途回复不重跑。
+- 显式模型选择失败时返回明确错误，不再用旧模型继续回复。恢复会话和重复请求配置时仍按实际持久事件记录模型与思考档位，不改桌面全局默认模型。
+- QQ 登录状态使用 NapCat WebUI 或已鉴权的 OneBot 实际查询；开放端口或过期状态文件不再被视为已登录。改进本安装进程识别、端口冲突恢复和跨启动日志归档。
+- 控制台持续保存脱敏健康记录，便于区分 QQ 身份失效、桥接断线和进程退出。用户注销会结束会话内进程；本版不自动开启开机自启，也不承诺 QQ 永久免重新授权。
+
+已完成真实隔离 Electron 24 项、DSH Web + Edge 19 项及针对性模型、登录、启动器回归。真实 QQ 只读在线与一次 NapCat 快速登录恢复已验证；真实消息投递、完整工作日、网络变化、休眠和用户注销恢复仍未全部验收。完整计数与边界见 [v3.1.0 验证说明](docs/verification-v3.1.0.md)。
+
+## v3.0.0 功能与历史验证范围
 
 | 功能 | 配置入口 | 默认状态 |
 | --- | --- | --- |
@@ -136,7 +145,7 @@ QQ 桥接运行在本机的 NapCat 和 Node 进程中；模型请求发送到你
 
 > 文档里的 `D:\code\qq-bridge` 只是**示例路径**，克隆到哪就是哪；`config.json` 里的账号、群号、路径都是占位值，按自己的改。
 
-> **验证范围**：DSH Desktop（Windows 桌面版）已实测。历史版本的 WSL2 Docker 验证见 [Docker 验证报告](docs/Docker验证报告.md)，不代表本次 v3.0.0 已完成容器验证。`node tests/docker-runtime-test.mjs` 提供真实容器回归测试；本版 Docker 仅完成静态部署检查，真人 QQ 消息完整收发与其他系统仍需各自验收。
+> **验证范围**：DSH Desktop（Windows 桌面版）已实测。历史版本的 WSL2 Docker 验证见 [Docker 验证报告](docs/Docker验证报告.md)，不代表本次 v3.1.0 已完成容器验证。`node tests/docker-runtime-test.mjs` 提供真实容器回归测试；本版没有新增真实 Docker 验证，真人 QQ 消息完整收发与其他系统仍需各自验收。
 
 全新克隆、安装与共享磁盘的验证过程见 [从零验证报告](docs/从零验证报告.md)；
 当前源码与历史提交的隐私问题见 [隐私审计报告](docs/隐私审计报告.md)。
@@ -709,7 +718,7 @@ node tools\install-companion.mjs --dry-run  # 只看要改什么
 node tools\install-companion.mjs --remove   # 卸载
 ```
 
-安装器只会往 `~/.dsh/profiles/desktop/cordis.patch.yml` 追加一个带标记的 `- insert:` 块（`file:///.../src/companion/lib/index.js`），不拷贝文件、不装 npm 依赖。装完即生效（实测桌面端会热加载；若没生效，重启一次 DSH）。插件只监听 `127.0.0.1` 随机端口，token 经 `~/.dsh/qq-bridge-companion.json` 交接；桥接连不上就自动退回独立宿主，不会影响 QQ 收发。
+安装器只会往 `~/.dsh/profiles/desktop/cordis.patch.yml` 追加一个带标记的 `- insert:` 块（`file:///.../src/companion/lib/index.js`），不拷贝文件、不装 npm 依赖。安装或升级后，在任务空闲时正常退出并重新启动 DSH，以加载新的插件代码。插件只监听 `127.0.0.1` 随机端口，token 经 `~/.dsh/qq-bridge-companion.json` 交接。连接不可用时可以在提交前选择独立宿主；若已连接的旧宿主不支持本轮模型选择，会明确报错，保留会话和已保存目标，需重启 DSH 后再试。
 
 在早期开发版中安装过顶级 `companion/` 的用户，升级后重新运行一次安装器，以更新插件入口。正式 v0.2.3 可直接使用控制台更新，无需先更换旧安装器。
 

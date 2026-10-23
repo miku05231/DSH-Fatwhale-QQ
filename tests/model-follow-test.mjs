@@ -22,8 +22,17 @@ import {
   readModelState,
   resolveModelPlan,
   writeModelState,
+  validateModelSelection,
 } from '../src/model-follow.js';
 import { resolvePatchChain } from '../src/dsh.js';
+import { useIsolatedEnv } from './helpers/isolated-fixtures.mjs';
+
+const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-model-follow-isolated-'));
+const restoreEnv = useIsolatedEnv(isolatedRoot);
+process.on('exit', () => {
+  restoreEnv();
+  fs.rmSync(isolatedRoot, { recursive: true, force: true });
+});
 
 let passed = 0;
 let failed = 0;
@@ -229,11 +238,46 @@ console.log('\n[7] 状态文件容错');
   writeFileDeep(paths.stateFile, JSON.stringify({ mode: '乱写', manual: { provider: 'a', model: 'b' } }));
   const s = readModelState(state);
   eq(s.mode, 'follow', '非法 mode 回退 follow');
-  eq(s.manual?.reasoningEffort, 'max', 'manual 缺 effort 时补 max');
+  eq(s.manual?.reasoningEffort, undefined, 'manual 缺 effort 时留给模型默认值');
 
   await writeModelState(state, { mode: 'manual', manual: { provider: '', model: '' } });
   eq(readModelState(state).manual, null, '空的 manual 归为 null');
   ok(MODEL_MODES.includes('manual') && MODEL_MODES.includes('follow'), 'MODEL_MODES 常量正确');
+}
+
+console.log('\n[能力校验] 按模型声明约束思考强度');
+{
+  const layer = LAYER_SAMPLE.replace('            contextWindow: 131072', `            contextWindow: 131072
+            reasoningEfforts: {off: null, high: high, max: max}`).replace('            name: DeepSeek Chat', `            name: DeepSeek Chat
+            reasoningEfforts: false`);
+  const parsed = parseDesktopLayer(layer);
+  const known = parsed.modelCapabilities.find((item) => item.model === 'deepseek-v4.1-flash');
+  eq(known?.reasoning.status, 'known', '结构化提取 flow YAML 能力');
+  eq(JSON.stringify(known?.reasoning.efforts), JSON.stringify(['off', 'high', 'max']), '能力只含声明档位');
+  const selection = { provider: 'relay-a', model: 'deepseek-v4.1-flash', reasoningEffort: 'low' };
+  eq(validateModelSelection(selection, parsed).status, 'invalid', '不支持 low 时拒绝');
+  eq(validateModelSelection({ ...selection, reasoningEffort: 'high' }, parsed).status, 'valid', '支持 high 时通过');
+  const plain = { provider: 'deepseek-official', model: 'deepseek-chat' };
+  eq(validateModelSelection(plain, parsed).selection.reasoningEffort, undefined, '无思考模型不附带默认 max');
+  eq(validateModelSelection({ ...plain, reasoningEffort: 'max' }, parsed).status, 'invalid', '无思考模型拒绝强度');
+  eq(validateModelSelection({ provider: 'relay-a', model: 'deepseek-v4.1-pro' }, parsed).status, 'pending', '省略声明为未知能力');
+  eq(validateModelSelection({ provider: 'missing', model: 'missing' }, parsed).status, 'invalid', '已知目录拒绝不存在的模型');
+  const home = makeHome(layer);
+  const state = tmpDir('invalid');
+  await writeModelState(state, { mode: 'manual', manual: selection });
+  const before = fs.readFileSync(modelPaths(state).stateFile, 'utf8');
+  const snap = describeModelState({ stateDir: state, homedir: home });
+  eq(snap.validation.status, 'invalid', '旧的非法保存配置可见');
+  eq(snap.manual.reasoningEffort, 'low', '不静默替换旧的非法配置');
+  eq(snap.runtimePatch, null, '非法配置不生成可执行补丁');
+  eq(fs.readFileSync(modelPaths(state).stateFile, 'utf8'), before, '读取非法配置不写状态');
+  await writeModelState(state, { mode: 'manual', manual: plain });
+  const plan = resolveModelPlan({ stateDir: state, homedir: home });
+  ok(!/reasoningEffort:/.test(fs.readFileSync(plan.patchPaths[0], 'utf8')), '无思考模型生成的选择不携带 effort');
+  delete globalThis.__qqCapabilityExecuted;
+  const expression = parseDesktopLayer(layer.replace('contextWindow: 131072', 'contextWindow: !js "globalThis.__qqCapabilityExecuted = true"'));
+  eq(globalThis.__qqCapabilityExecuted, undefined, '解析配置不执行 !js');
+  eq(expression.modelCapabilities.length, 3, '含 !js 时仍提取静态能力');
 }
 
 /* ----------------------------------------------------- 8. patch 文本结构 */

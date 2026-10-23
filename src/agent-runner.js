@@ -84,6 +84,12 @@ export async function runAgent(text, options = {}) {
         );
       }
       try {
+        if (options.model && probe.health?.modelProtocol !== 1) {
+          throw Object.assign(new Error('桌面连伴尚未加载模型同步协议，请重启 DSH 桌面端后重试'), {
+            code: 'companion/model-unavailable', companion: true,
+            sessionAccepted: false, sessionId: options.sessionId ?? null,
+          });
+        }
         return await runCompanionDsh(text, options);
       } catch (error) {
         const wrapped = error instanceof Error ? error : new Error(String(error));

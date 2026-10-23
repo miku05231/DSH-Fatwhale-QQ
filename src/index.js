@@ -363,13 +363,15 @@ async function main() {
 
   // ------------------------------------------------------ 模型跟随
   // 每条消息前读一次 DSH 桌面端的当前模型；变了就重建 runtime patch 叠加到基础 patch 之上。
-  // 任何失败都返回空数组 → 退回基础 patch 的模型，绝不让对话因此中断。
+  // 明确配置无效时停止本轮，避免复用会话继续使用旧模型。
   let modelInfo = null;
   let modelLabel = '';
+  let modelApplied = null;
+  let modelApplicationError = null;
 
   function refreshModelPlan() {
     try {
-      const plan = resolveModelPlan({ stateDir, basePatchPath: patchPath, log });
+      const plan = resolveModelPlan({ stateDir, basePatchPath: patchPath, command: config?.dsh?.command, cwd: configRoot, log });
       modelInfo = plan.info ?? null;
       const effective = plan.info?.effective;
       if (effective) {
@@ -377,11 +379,20 @@ async function main() {
         if (label !== modelLabel) {
           modelLabel = label;
           const source = plan.info.mode === 'manual' ? '控制台手动指定' : '跟随 DSH 桌面端';
-          log.info(`当前对话模型：${label}（${source}，effort=${effective.reasoningEffort}）`);
+          log.info(`目标对话模型：${label}（${source}，effort=${effective.reasoningEffort ?? '默认'}）`);
         }
+      }
+      if (plan.info?.validation?.status === 'invalid' ||
+          (plan.info?.mode === 'manual' && !plan.patchPaths?.length)) {
+        const error = Object.assign(new Error(plan.info.reason || '手动模型配置不可用'), {
+          code: 'model/invalid-selection', requested: effective,
+        });
+        modelApplicationError = { message: error.message, requested: effective, at: new Date().toISOString() };
+        throw error;
       }
       return plan.patchPaths ?? [];
     } catch (err) {
+      if (err?.code === 'model/invalid-selection') throw err;
       log.warn('模型跟随失败，本次使用基础 patch：', err?.message ?? err);
       return [];
     }
@@ -410,6 +421,8 @@ async function main() {
       lastError: lastErrorRef.value,
       model: modelLabel || null,
       modelMode: modelInfo?.mode ?? null,
+      modelApplied,
+      modelApplicationError,
       dshMode: dshMode.mode,
       plugins: plugins ? plugins.registry.size : 0,
       pluginsFailed: plugins ? plugins.failures.length : 0,
@@ -748,6 +761,7 @@ async function main() {
       let sessionStartedAt = null;
       let finalText;
       let usedSession;
+      let requestedModel = null;
       const abort = new AbortController();
       const permissionTimer = canUseComputer ? setInterval(() => {
         if (!grantUnchanged()) abort.abort();
@@ -808,6 +822,8 @@ async function main() {
         sessionWindowMinutes = readSessionWindowMinutes(configPath, sessionWindowMinutes);
         sessionStartedAt = Date.now();
         sessionId = sessions.get(sessionKey, { windowMinutes: sessionWindowMinutes, now: sessionStartedAt });
+        const extraPatchPaths = refreshModelPlan();
+        requestedModel = modelInfo?.effective ?? null;
         const result = await runAgent(dshPrompt, {
           sessionId,
           cfg: executionConfig,
@@ -818,11 +834,17 @@ async function main() {
           patchPath,
           projectRoot: configRoot,
           stateDir,
-          extraPatchPaths: refreshModelPlan(),
-          model: modelInfo?.effective ?? null,
+          extraPatchPaths,
+          model: requestedModel,
         });
         usedSession = result.sessionId;
         finalText = result.finalText;
+        modelApplied = result.model ? {
+          ...result.model, sessionId: result.sessionId, at: new Date().toISOString(),
+          modelsUsed: result.modelsUsed ?? [result.model],
+        } : null;
+        modelApplicationError = null;
+        if (result.model) log.info(`本轮实际模型：${result.model.provider}/${result.model.model}（effort=${result.model.reasoningEffort ?? '默认'}）`);
         if (usedSession && usedSession !== sessionId) {
           sessions.set(sessionKey, usedSession, { startedAt: sessionStartedAt });
           log.info(`${isGroup ? `群 ${msg.groupId}` : `用户 ${userId}`} 绑定会话 ${usedSession}`);
@@ -833,9 +855,14 @@ async function main() {
           return;
         }
         const reason = String(err?.message ?? err);
+        const modelRejected = ['companion/model-unavailable', 'model/invalid-selection', 'desktop/model-unavailable'].includes(err?.code);
+        if (modelRejected) {
+          modelApplicationError = { message: reason.slice(0, 500), requested: err.requested ?? requestedModel,
+            at: new Date().toISOString() };
+        }
         lastErrorRef.value = reason.slice(0, 300);
         log.error(`DSH 调用失败（${sessionKey}）：`, reason);
-        if (await maybeResetSession(sessionKey, reason)) {
+        if (!modelRejected && await maybeResetSession(sessionKey, reason)) {
           await sendReply(msg, '上一次会话好像失效了，我已经重置。再发一次试试？');
           return;
         }
@@ -851,6 +878,7 @@ async function main() {
         clearInterval(heartbeat);
         if (permissionTimer) clearInterval(permissionTimer);
         inFlightCount = Math.max(0, inFlightCount - 1);
+        writeStatus();
       }
 
       if (canUseComputer && !grantUnchanged()) {

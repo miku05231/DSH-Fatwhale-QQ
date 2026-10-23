@@ -8,7 +8,7 @@
  * 不碰真实数据：只写临时目录，人格/记忆只读。
  */
 
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -277,14 +277,52 @@ async function httpTests(tmpRoot) {
 
     const setManual = await putJson('/api/model', {
       mode: 'manual',
-      manual: { provider: 'test-provider', model: 'test-model', reasoningEffort: 'high' },
+      manual: { provider: 'test-local', model: 'test-chat', reasoningEffort: 'high' },
     });
     const manualBody = setManual.status === 200 ? await setManual.json() : null;
-    if (manualBody?.data?.mode === 'manual' && manualBody.data.effective?.provider === 'test-provider') {
-      ok('能切到手动模型并回显生效值');
+    if (manualBody?.data?.mode === 'manual' && manualBody.data.effective?.provider === 'test-local') {
+      ok('能切到手动模型并回显目标值');
     } else {
       bad('手动模式切换失败', `HTTP ${setManual.status} ${JSON.stringify(manualBody).slice(0, 160)}`);
     }
+
+    const modelStateFile = path.join(tmpRoot, 'state', 'model', 'model.json');
+    const beforeModel = await readFile(modelStateFile, 'utf8');
+    const badEffort = await putJson('/api/model', {
+      mode: 'manual', manual: { provider: 'test-local', model: 'test-chat', reasoningEffort: 'low' },
+    });
+    eq(badEffort.status, 400, '已知不支持的 low 在保存前拒绝');
+    const effortError = await badEffort.json();
+    eq(effortError.error.includes('high'), true, '错误包含合法思考档位');
+    eq(await readFile(modelStateFile, 'utf8'), beforeModel, '保存失败不覆盖原模型状态');
+    const unknownModel = await putJson('/api/model', {
+      mode: 'manual', manual: { provider: 'missing-provider', model: 'missing-model' },
+    });
+    eq(unknownModel.status, 400, '目录中不存在的模型被拒绝');
+    const oldInvalid = JSON.parse(beforeModel);
+    oldInvalid.manual.reasoningEffort = 'low';
+    await writeFile(modelStateFile, JSON.stringify(oldInvalid));
+    const invalidSnapshot = (await get('/api/model')).body.data;
+    eq(invalidSnapshot.validation.status, 'invalid', '旧非法配置明确显示无效');
+    eq(invalidSnapshot.manual.reasoningEffort, 'low', '旧非法值保持可见');
+    eq(invalidSnapshot.application, 'invalid', '无效目标不冒充已应用');
+    await writeFile(modelStateFile, beforeModel);
+
+    const desktopLayer = path.join(tmpRoot, 'home', '.dsh', 'profiles', 'desktop', 'cordis.patch.yml');
+    const originalLayer = await readFile(desktopLayer, 'utf8');
+    await writeFile(desktopLayer, originalLayer.replace('- id: agent-default-model', `          - id: plain-model
+            reasoningEfforts: false
+          - id: inherited-model
+- id: agent-default-model`));
+    const plainSave = await putJson('/api/model', { mode: 'manual', manual: { provider: 'test-local', model: 'plain-model' } });
+    eq(plainSave.status, 200, '无思考模型可保存');
+    const plainBody = await plainSave.json();
+    eq(Object.hasOwn(plainBody.data.manual, 'reasoningEffort'), false, '无思考模型不自动加入 max');
+    eq(plainBody.data.application, 'pending', '没有实际回执时只显示待应用');
+    const inheritedSave = await putJson('/api/model', { mode: 'manual', manual: { provider: 'test-local', model: 'inherited-model' } });
+    const inheritedBody = await inheritedSave.json();
+    eq(inheritedBody.data.validation.status, 'pending', '未声明的能力保持待宿主校验');
+    await writeFile(desktopLayer, originalLayer);
 
     const setFollow = await putJson('/api/model', { mode: 'follow' });
     const followBody = setFollow.status === 200 ? await setFollow.json() : null;

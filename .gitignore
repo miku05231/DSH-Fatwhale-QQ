@@ -10,6 +10,10 @@ docs/testing/
 docs/work-progress.md
 docs/full-verification-*.md
 docs/update-program.md
+/AGENTS.md
+docs/model-switch-session-reuse-*.md
+docs/napcat-login-persistence-*.md
+/tools/sticker.mjs
 # thinking-effort 插件启动时写在 cwd 的小文件（桌面宿主会带出来）
 thinking-effort-loaded.json
 

@@ -27,9 +27,11 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createUpdateManager } from '../updates.mjs';
 import { createPlatformScheduler } from '../platform-scheduler.js';
 import { createBilibiliQrLogin } from '../platforms/bilibili-login.js';
+import { createNapcatHealth, createNapcatHealthJournal, readNapcatSettings } from '../napcat-health.js';
 import { DEFAULT_SESSION_WINDOW_MINUTES, isValidSessionWindowMinutes } from '../sessions.js';
 import { openLocalPath, openExternalUrl } from '../open-path.js';
-import { describeModelState, writeModelState, MODEL_MODES, REASONING_EFFORTS } from '../model-follow.js';
+import { describeModelState, writeModelState, validateModelSelection, MODEL_MODES, REASONING_EFFORTS } from '../model-follow.js';
+import { fetchCompanionModelCatalog } from '../dsh-companion.js';
 import { PluginHost, PLUGIN_HOOKS, SCHEMA_TYPES, coerceValue } from '../plugins.js';
 import { resolvePersonaPath, resolveMemoryRoot, resolveWorkspace, expandPath } from '../persona.js';
 import {
@@ -595,7 +597,7 @@ function configFileOf(root) {
 
 export function createWebUiServer({
   config = {}, configRoot, log, port = DEFAULT_PORT, host = '127.0.0.1', updateManager,
-  openPath = openLocalPath, openUrl = openExternalUrl, platformControl, platformQrLogin,
+  openPath = openLocalPath, openUrl = openExternalUrl, platformControl, platformQrLogin, napcatHealth,
 } = {}) {
   const root = path.resolve(text(configRoot) || PROJECT_ROOT);
   const basePort = Number.isInteger(Number(port)) && Number(port) > 0 ? Number(port) : DEFAULT_PORT;
@@ -625,26 +627,11 @@ export function createWebUiServer({
   const basePatchPath = configuredPatch ? resolveFrom(root, configuredPatch) : '';
 
   const onebotPort = Number(config?.onebot?.port) || portFromUrl(config?.onebot?.url) || 3001;
-  const napcatWebUi = normalizeNapcatWebUi(config?.napcat?.webui);
+  const napcatWebUi = normalizeNapcatWebUi(readNapcatSettings(root, config).baseUrl);
 
   /** NapCat 的 WebUI token：先看配置，再读 napcat 自己的 webui.json（两种目录布局都认） */
   function readNapcatWebuiToken() {
-    const direct = text(config?.napcat?.webuiToken);
-    if (direct) return direct;
-    const candidates = [
-      path.join(configRoot, 'napcat', 'napcat', 'config', 'webui.json'),
-      path.join(configRoot, 'napcat', 'config', 'webui.json'),
-    ];
-    for (const file of candidates) {
-      try {
-        const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-        const token = text(parsed?.token);
-        if (token) return token;
-      } catch {
-        // 文件不存在/JSON 坏了都往下试
-      }
-    }
-    return '';
+    return readNapcatSettings(root, config).token;
   }
 
   /** 真正用来打开浏览器的地址（带 token，自动登录） */
@@ -658,6 +645,18 @@ export function createWebUiServer({
     warn: (...a) => log?.warn?.(...a),
     error: (...a) => log?.error?.(...a),
   };
+
+  const journalNapcatHealth = createNapcatHealthJournal({ logDir });
+  const healthProbe = napcatHealth ?? createNapcatHealth({
+    root, config,
+    onResult(health) {
+      try { journalNapcatHealth(health); }
+      catch { safeLog.warn?.('NapCat 状态记录写入失败'); }
+    },
+  });
+  let healthTimer = null;
+  let healthEnabled = false;
+  let healthSampling = null;
 
   const updates = updateManager ?? createUpdateManager({
     projectRoot: root,
@@ -715,28 +714,56 @@ export function createWebUiServer({
 
   // ---------------------------------------------------------------- 数据采集
 
-  let procCache = { at: 0, names: new Set() };
+  let procCache = { at: 0, snapshot: { names: new Set() } };
   let procPromise = null;
 
-  async function processNames() {
-    if (Date.now() - procCache.at < 6000) return procCache.names;
+  async function processSnapshot() {
+    if (Date.now() - procCache.at < 6000) return procCache.snapshot;
     if (procPromise) return procPromise;
     procPromise = (async () => {
-      const names = new Set();
+      const snapshot = { names: new Set() };
       try {
-        const { stdout } = await runProcess('tasklist', ['/FO', 'CSV', '/NH'], { timeoutMs: 5000 });
-        for (const line of stdout.split(/\r?\n/)) {
-          const m = /^"([^"]+)"/.exec(line.trim());
-          if (m) names.add(m[1].toLowerCase());
+        if (process.platform === 'win32' && fs.existsSync(libPath)) {
+          const script = [
+            '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
+            `. ${psQuote(libPath)}`,
+            '$napcat = Get-NapCatProcess',
+            '$bridge = Get-BridgeProcess',
+            '@{ names = @(Get-Process | Select-Object -ExpandProperty ProcessName); napcatRunning = [bool]$napcat.Running; napcatPid = $napcat.ProcessId; bridgeRunning = [bool]$bridge.Running; bridgePid = $bridge.ProcessId } | ConvertTo-Json -Compress',
+          ].join('\n');
+          const { stdout } = await runProcess(PS_EXE, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand',
+            Buffer.from(script, 'utf16le').toString('base64')], { timeoutMs: 5000 });
+          const parsed = JSON.parse(stdout.trim());
+          for (const name of parsed.names || []) snapshot.names.add(`${String(name).toLowerCase()}.exe`);
+          snapshot.napcatRunning = parsed.napcatRunning === true;
+          snapshot.napcatPid = Number(parsed.napcatPid) || 0;
+          snapshot.bridgeRunning = parsed.bridgeRunning === true;
+          snapshot.bridgePid = Number(parsed.bridgePid) || 0;
+        } else {
+          const { stdout } = await runProcess('tasklist', ['/FO', 'CSV', '/NH'], { timeoutMs: 5000 });
+          for (const line of stdout.split(/\r?\n/)) {
+            const m = /^"([^"]+)"/.exec(line.trim());
+            if (m) snapshot.names.add(m[1].toLowerCase());
+          }
         }
       } catch {
         /* 取不到就当空集合 */
       }
-      procCache = { at: Date.now(), names };
+      procCache = { at: Date.now(), snapshot };
       procPromise = null;
-      return names;
+      return snapshot;
     })();
     return procPromise;
+  }
+
+  async function sampleNapcatHealth() {
+    if (healthSampling) return healthSampling;
+    healthSampling = (async () => {
+      const snapshot = await processSnapshot();
+      if (!healthEnabled) return { state: 'unknown', loggedIn: false, known: false, reachable: false, detail: 'QQ 登录状态待确认' };
+      return healthProbe.check({ running: snapshot.napcatRunning });
+    })().finally(() => { healthSampling = null; });
+    return healthSampling;
   }
 
   async function countTodayMessages() {
@@ -784,15 +811,23 @@ export function createWebUiServer({
   async function buildOverview() {
     const status = await readJson(statusFile);
     const bridgePid = Number(status?.pid) || 0;
-    const bridgeAlive = isPidAlive(bridgePid);
-    const [portOpen, names, todayMessages, memStats] = await Promise.all([
+    const statusAge = Date.now() - Date.parse(status?.updatedAt);
+    const statusFresh = Number.isFinite(statusAge) && statusAge >= -5000 && statusAge < 20_000;
+    const [portOpen, snapshot, todayMessages, memStats, health] = await Promise.all([
       probeTcp(onebotPort),
-      processNames(),
+      processSnapshot(),
       countTodayMessages(),
       memoryResult('stats'),
+      sampleNapcatHealth(),
     ]);
 
-    const napcatRunning = portOpen || Boolean(status?.connected);
+    const { names } = snapshot;
+    const bridgeAlive = snapshot.bridgeRunning === undefined
+      ? (isPidAlive(bridgePid) && statusFresh)
+      : snapshot.bridgeRunning;
+    const bridgeConnected = Boolean(bridgeAlive && statusFresh && status?.connected === true
+      && (snapshot.bridgePid === undefined || snapshot.bridgePid === bridgePid));
+    const napcatRunning = Boolean(snapshot.napcatRunning || health.reachable);
     const dshRunning = names.has('deepseek harness.exe') || names.has('deepseek harness');
 
     return {
@@ -801,17 +836,20 @@ export function createWebUiServer({
       version: readPackageVersion(),
       ports: { webui: actualPort, onebot: onebotPort, napcatWebui: napcatWebUi, napcatWebuiToken: Boolean(readNapcatWebuiToken()) },
       napcat: {
+        ...health,
         running: napcatRunning,
+        processRunning: snapshot.napcatRunning ?? null,
+        pid: snapshot.napcatPid || 0,
         portOpen,
         port: onebotPort,
         webui: napcatWebUi,
         qqRunning: names.has('qq.exe'),
-        loggedIn: Boolean(status?.connected),
       },
       bridge: {
         running: bridgeAlive,
-        pid: bridgePid,
-        connected: Boolean(status?.connected),
+        pid: snapshot.bridgePid ?? bridgePid,
+        connected: bridgeConnected,
+        statusFresh,
         startedAt: status?.startedAt ?? null,
         updatedAt: status?.updatedAt ?? null,
         sessions: Number(status?.sessions) || 0,
@@ -2061,18 +2099,44 @@ export function createWebUiServer({
 
   // -------------------------------------------------------- 模型跟随
 
-  function modelSnapshot() {
+  async function modelSnapshot() {
     try {
-      const snap = describeModelState({ stateDir, basePatchPath, log: safeLog });
-      return { ...snap, efforts: REASONING_EFFORTS };
+      const snap = describeModelState({ stateDir, basePatchPath, command: config?.dsh?.command, cwd: root, log: safeLog });
+      const catalog = config?.dsh?.companion === false ? null : await fetchCompanionModelCatalog(config);
+      if (catalog) {
+        for (const group of catalog.providers) {
+          let provider = snap.providers.find((item) => item.id === group.id);
+          if (!provider) { provider = { id: group.id, models: [] }; snap.providers.push(provider); }
+          for (const model of group.models) {
+            if (!provider.models.includes(model.id)) provider.models.push(model.id);
+            const capability = { provider: group.id, model: model.id, reasoning: model.reasoning };
+            const index = snap.modelCapabilities.findIndex((item) => item.provider === group.id && item.model === model.id);
+            if (index < 0) snap.modelCapabilities.push(capability);
+            else snap.modelCapabilities[index] = capability;
+          }
+        }
+      }
+      if (snap.effective) snap.validation = validateModelSelection(snap.effective, snap);
+      const status = await readJson(statusFile);
+      const applied = status?.modelApplied ?? null;
+      const applicationError = status?.modelApplicationError
+        ? { ...status.modelApplicationError, message: redactSecrets(status.modelApplicationError.message) } : null;
+      const matches = (value) => value?.provider === snap.effective?.provider && value?.model === snap.effective?.model &&
+        (!snap.effective?.reasoningEffort || value?.reasoningEffort === snap.effective.reasoningEffort);
+      const relevantError = applicationError && matches(applicationError.requested) &&
+        (!snap.updatedAt || applicationError.at >= snap.updatedAt);
+      const application = snap.validation?.status === 'invalid' ? 'invalid'
+        : relevantError ? 'error' : applied && matches(applied) ? 'applied' : 'pending';
+      return { ...snap, efforts: REASONING_EFFORTS, catalogSource: catalog ? 'companion' : 'desktop-config',
+        applied, applicationError: relevantError ? applicationError : null, application };
     } catch (err) {
       safeLog.warn?.('读取模型状态失败：', err?.message ?? err);
       return { error: `读取模型状态失败：${err?.message ?? err}` };
     }
   }
 
-  function getModel(res) {
-    return ok(res, modelSnapshot());
+  async function getModel(res) {
+    return ok(res, await modelSnapshot());
   }
 
   /** 校验一段「标识符类」字符串：非空、不太长、无控制字符 */
@@ -2089,7 +2153,7 @@ export function createWebUiServer({
     const mode = text(body?.mode).toLowerCase();
     if (!MODEL_MODES.includes(mode)) return fail(res, 400, `mode 只能是 ${MODEL_MODES.join(' / ')}`);
 
-    const current = modelSnapshot();
+    const current = await modelSnapshot();
     // 切到「跟随」时可以不带 manual，沿用之前记住的手动值，方便来回来回切
     let manual = current.manual ?? null;
     if (body?.manual && typeof body.manual === 'object') {
@@ -2097,16 +2161,21 @@ export function createWebUiServer({
         manual = {
           provider: cleanId(body.manual.provider, '供应商 id', 120),
           model: cleanId(body.manual.model, '模型 id', 200),
-          reasoningEffort: text(body.manual.reasoningEffort) || 'max',
+          ...(text(body.manual.reasoningEffort) ? { reasoningEffort: text(body.manual.reasoningEffort) } : {}),
         };
       } catch (err) {
         return fail(res, 400, err?.message ?? err);
       }
-      if (manual.reasoningEffort.length > 40) return fail(res, 400, 'reasoningEffort 太长');
+      if ((manual.reasoningEffort?.length ?? 0) > 40) return fail(res, 400, 'reasoningEffort 太长');
     }
 
     if (mode === 'manual' && !manual) {
       return fail(res, 400, '手动模式需要同时提供供应商与模型');
+    }
+    if (mode === 'manual') {
+      const validation = validateModelSelection(manual, current);
+      if (validation.status === 'invalid') return fail(res, 400, validation.message);
+      manual = validation.selection;
     }
 
     try {
@@ -2116,8 +2185,7 @@ export function createWebUiServer({
     }
 
     safeLog.info?.(`模型设置已更新：${mode}${manual ? `（${manual.provider}/${manual.model}）` : ''}`);
-    // 立刻重算一次，把 runtime patch 与状态对齐，返回给前端最新的「生效模型」
-    return ok(res, modelSnapshot());
+    return ok(res, await modelSnapshot());
   }
 
   async function runServiceAction(name, action, res) {
@@ -2621,6 +2689,10 @@ export function createWebUiServer({
       safeLog.warn?.('写入控制台端口文件失败：', err?.message ?? err);
     }
     safeLog.info?.(`控制台已启动：http://127.0.0.1:${actualPort}/`);
+    healthEnabled = true;
+    void sampleNapcatHealth().catch(() => {});
+    healthTimer = setInterval(() => { void sampleNapcatHealth().catch(() => {}); }, 15_000);
+    healthTimer.unref?.();
     try {
       await updates.start();
     } catch (err) {
@@ -2632,6 +2704,11 @@ export function createWebUiServer({
   async function stop() {
     if (stopping) return;
     stopping = true;
+    healthEnabled = false;
+    clearInterval(healthTimer);
+    healthTimer = null;
+    healthProbe.close?.();
+    await healthSampling?.catch(() => {});
     updates.stop();
     await qrLogin.stop();
     const s = server;

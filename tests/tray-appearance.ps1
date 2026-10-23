@@ -421,7 +421,7 @@ function Get-NapCatProcess {
 }
 function Get-NapCatLoginState { [pscustomobject]@{ LoggedIn = $true; Account = ''; Nickname = 'fixture'; Detail = '' } }
 function Get-DshProcess { [pscustomobject]@{ Running = $true; ProcessId = 102 } }
-function Get-BridgeProcess { [pscustomobject]@{ Running = $true; ProcessId = 103; Sessions = 2; InFlight = 0 } }
+function Get-BridgeProcess { [pscustomobject]@{ Running = $true; ProcessId = 103; Sessions = 2; InFlight = 0; Connected = $true } }
 '@)
     $script:Exiting = $false
     $script:RequireDsh = $true

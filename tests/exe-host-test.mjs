@@ -398,12 +398,12 @@ function Start-NapCat { throw 'The isolated fixture must not start NapCat.' }
 function Start-Bridge { throw 'The isolated fixture must not start the bridge.' }
 function Get-CimInstance {
   [CmdletBinding()]
-  param([string]$ClassName, [string]$Filter)
+  param([string]$ClassName, [string]$Filter, [int]$OperationTimeoutSec)
   if ($Filter -eq "Name='DeepSeek Harness.exe'") {
     return [pscustomobject]@{ ProcessId = 1 }
   }
   if ($Filter -eq "Name='node.exe'") {
-    return [pscustomobject]@{ CommandLine = 'node.exe src\\webui\\server.mjs' }
+    return [pscustomobject]@{ CommandLine = ('node.exe "' + (Join-Path $script:ProjectRoot 'src\\webui\\server.mjs') + '"') }
   }
   throw ('Unexpected process query: ' + $Filter)
 }

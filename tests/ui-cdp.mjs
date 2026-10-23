@@ -10,7 +10,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
@@ -206,7 +206,24 @@ async function main() {
   let browserOutput = '';
   let cdp = null;
   try {
-    fixture = await createConsoleFixture(tmpRoot);
+    let napcatState = 'login-required';
+    fixture = await createConsoleFixture(tmpRoot, { napcatHealth: {
+      async check() { return { state: napcatState, loggedIn: napcatState === 'online', known: true, reachable: true, detail: 'fixture' }; },
+      close() {},
+    } });
+    const desktopLayer = path.join(tmpRoot, 'home', '.dsh', 'profiles', 'desktop', 'cordis.patch.yml');
+    const layer = await readFile(desktopLayer, 'utf8');
+    await writeFile(desktopLayer, layer.replace('- id: agent-default-model', `      switch-local:
+        api: openai-completions
+        baseURL: http://127.0.0.1:1/v1
+        apiKeyEnv: QQ_FIXTURE_API_KEY
+        models:
+          - id: switch-model
+            reasoningEfforts: {off: null, high: high, max: max}
+          - id: plain-model
+            reasoningEfforts: false
+          - id: inherited-model
+- id: agent-default-model`));
     const consolePort = fixture.port;
     const overview = await fetchJson(`http://127.0.0.1:${consolePort}/api/overview`, 8000);
     if (!overview?.ok) throw new Error('The isolated console did not return an overview.');
@@ -289,7 +306,13 @@ async function main() {
       await evaluate('(()=>{const v=document.getElementById("statMemory").textContent.trim();return v!=="—"&&Number(v)>0;})()'),
     );
     check('状态标签不是「连接中」', (await evaluate('document.getElementById("statusText").textContent')) !== '连接中');
+    check('需要重新登录时显示明确状态', (await evaluate('document.querySelector(".svc[data-service=napcat] .svc__badge").textContent')) === 'QQ 需重新登录');
+    check('需要重新登录时不会显示健康绿灯', (await evaluate('document.querySelector(".svc[data-service=napcat] .svc__badge").dataset.tone')) === 'warn');
     const shotOverview = await shot('cdp-overview');
+    napcatState = 'online';
+    await evaluate('document.querySelector(".nav-item[data-page=overview]").click()');
+    await sleep(600);
+    check('真实在线证据到达后页面更新为 QQ 在线', (await evaluate('document.querySelector(".svc[data-service=napcat] .svc__badge").textContent')) === 'QQ 在线');
 
     // ---------------------------------------------------------- 记忆
     await goto('memory');
@@ -390,12 +413,62 @@ async function main() {
     check('切手动后保存按钮可用', (await evaluate('document.getElementById("modelSave").disabled')) === false);
     check('切手动后供应商下拉可编辑', (await evaluate('document.getElementById("modelProvider").disabled')) === false);
     check('切手动后下拉有选项', (await evaluate('document.querySelectorAll("#modelModel option").length')) >= 1);
+    const form = async (id, value) => evaluate(`(() => {
+      const node = document.getElementById(${JSON.stringify(id)});
+      node.value = ${JSON.stringify(value)}; node.dispatchEvent(new Event('change', {bubbles: true}));
+      return node.value;
+    })()`);
+    check('初始模型只显示合法 high', JSON.stringify(await evaluate('[...document.querySelector("#modelEffort").options].map(o => o.value)')) === JSON.stringify(['', 'high']));
+    await form('modelProvider', 'switch-local');
+    check('切供应商重算 off/high/max', JSON.stringify(await evaluate('[...document.querySelector("#modelEffort").options].map(o => o.value)')) === JSON.stringify(['', 'off', 'high', 'max']));
+    await form('modelEffort', 'max');
+    await form('modelModel', 'plain-model');
+    check('无思考模型清空并禁用强度', await evaluate('document.querySelector("#modelEffort").disabled && document.querySelector("#modelEffort").value === ""'));
+    await evaluate('document.getElementById("modelSave").click()');
+    await sleep(700);
+    const plainState = await fetchJson(`http://127.0.0.1:${consolePort}/api/model`);
+    check('无思考模型保存时不发送 max', plainState.data.manual.model === 'plain-model' && !Object.hasOwn(plainState.data.manual, 'reasoningEffort'));
+    await form('modelModel', 'inherited-model');
+    check('未知能力明确显示待校验', await evaluate('document.getElementById("modelHint").textContent.includes("尚未确认")'));
+
+    const selected = { provider: 'switch-local', model: 'switch-model', reasoningEffort: 'low' };
+    const stateFile = path.join(tmpRoot, 'state', 'model', 'model.json');
+    await writeFile(stateFile, JSON.stringify({ mode: 'manual', manual: selected }));
+    await evaluate('document.getElementById("modelReload").click()');
+    await sleep(700);
+    check('旧非法 low 保持可见且阻止保存', await evaluate('document.getElementById("modelEffort").value === "low" && document.getElementById("modelSave").disabled && document.getElementById("modelApplicationHint").textContent.includes("配置无效")'));
+    await form('modelEffort', 'high');
+    await evaluate('document.getElementById("modelSave").click()');
+    await sleep(700);
+    check('合法配置只显示待应用', await evaluate('document.getElementById("modelApplicationHint").textContent.includes("等待下一条")'));
+    const applied = { ...selected, reasoningEffort: 'high', at: new Date().toISOString(), sessionId: 'synthetic-session', modelsUsed: [] };
+    await writeFile(path.join(tmpRoot, 'state', 'status.json'), JSON.stringify({ modelApplied: applied }));
+    await evaluate('document.getElementById("modelReload").click()');
+    await sleep(700);
+    check('页面区分目标与实际宿主回执', await evaluate('document.getElementById("modelApplied").textContent.includes("switch-local/switch-model") && document.getElementById("modelApplicationHint").textContent.includes("一致")'));
+    await writeFile(stateFile, JSON.stringify({ mode: 'follow', manual: selected }));
+    await evaluate('document.getElementById("modelReload").click()');
+    await sleep(500);
+    await evaluate('document.querySelector(\'#modelModeSwitch [data-mode="manual"]\').click()');
+    await sleep(200);
+    check('跟随模式记住的非法手动配置仍可进入编辑', await evaluate('!document.getElementById("modelProvider").disabled && document.getElementById("modelSave").disabled'));
+    await form('modelEffort', 'high');
+    await evaluate('document.getElementById("modelSave").click()');
+    await sleep(500);
+    check('修正后保存才切换手动模式', (await fetchJson(`http://127.0.0.1:${consolePort}/api/model`)).data.mode === 'manual');
 
     // 切回跟随（不改变用户原来的选择），并恢复下拉不可编辑
     await evaluate('(()=>{const b=document.querySelector(\'#modelModeSwitch .segmented__item[data-mode="follow"]\');b.click();return true;})()');
     await sleep(900);
     check('切回跟随后供应商下拉被禁用', (await evaluate('document.getElementById("modelProvider").disabled')) === true);
     const shotModel = await shot('cdp-model');
+    for (const width of [375, 768, 1440]) {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 1000, deviceScaleFactor: 1, mobile: width < 600 });
+      await sleep(150);
+      check(`模型页 ${width}px 不溢出`, await evaluate('document.documentElement.scrollWidth <= innerWidth + 1'));
+      await shot(`cdp-model-${width}`);
+    }
+    await cdp.send('Emulation.clearDeviceMetricsOverride');
 
     // ---------------------------------------------------------- 系统
     await goto('system');

@@ -183,6 +183,28 @@ export async function probeCompanion(cfg, { timeoutMs = HEALTH_TIMEOUT_MS } = {}
   }
 }
 
+/** Older/unavailable hosts have no catalog. Never expose other host fields. */
+export async function fetchCompanionModelCatalog(cfg, { timeoutMs = 2_000 } = {}) {
+  const info = readCompanionDiscovery(cfg);
+  if (!info || !isPidAlive(info.pid)) return null;
+  try {
+    const { status, body } = await requestJson(info, 'GET', '/models', undefined, { timeoutMs });
+    if (status !== 200 || body?.ok !== true || !Array.isArray(body.providers)) return null;
+    return { providers: body.providers.filter((provider) => typeof provider?.id === 'string' && Array.isArray(provider.models))
+      .map((provider) => ({ id: provider.id, models: provider.models.filter((model) => typeof model?.id === 'string')
+        .map((model) => {
+          const reasoning = model.reasoning;
+          return { id: model.id, reasoning: {
+            status: ['known', 'none'].includes(reasoning?.status) ? reasoning.status : 'unknown',
+            efforts: Array.isArray(reasoning?.efforts) ? reasoning.efforts.filter((effort) => typeof effort === 'string') : [],
+            ...(typeof reasoning?.defaultEffort === 'string' ? { defaultEffort: reasoning.defaultEffort } : {}),
+          } };
+        }) })) };
+  } catch {
+    return null;
+  }
+}
+
 /** 取消请求：用完即弃，不阻塞主流程。 */
 function cancelCompanion(info, sessionId) {
   if (!sessionId) return;
@@ -257,6 +279,7 @@ export async function runCompanionDsh(text, options = {}) {
     error.sessionId = body?.sessionId ?? requestedSessionId ?? null;
     const permissionRejected = body?.code === PERMISSION_ERROR_CODE && body?.sessionAccepted === false;
     error.sessionAccepted = !permissionRejected;
+    if (body?.code === 'companion/model-unavailable') error.code = body.code;
     if (permissionRejected) {
       error.code = PERMISSION_ERROR_CODE;
       error.channelError = true;
@@ -274,5 +297,7 @@ export async function runCompanionDsh(text, options = {}) {
     ],
     elapsedMs,
     workspaceId: body.workspaceId ?? null,
+    model: body.model ?? null,
+    modelsUsed: Array.isArray(body.modelsUsed) ? body.modelsUsed : [],
   };
 }
