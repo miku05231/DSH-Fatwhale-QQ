@@ -43,6 +43,7 @@ const INCLUDE = [
   'docs/automation-and-voice.md',
   'docs/verification-v3.0.0.md',
   'docs/verification-v3.1.0.md',
+  'docs/verification-v3.1.1.md',
   'docs/releases',
   '.github',
   'README.md',
@@ -134,7 +135,7 @@ const PUBLIC_README = `> 非官方项目。QQ 侧通过第三方协议端 [NapCa
 - DSH（DeepSeek Harness）已安装并可用 \`dsh\` 命令
 - NapCat（同一个发布包里的无头版本即可，无需另装 QQ 客户端）
 
-Docker 部署见 [部署说明](docs/Docker部署.md)；[历史容器验证](docs/Docker验证报告.md) 不代表 v3.1.0 已完成真实容器测试。
+Docker 部署见 [部署说明](docs/Docker部署.md)；[历史容器验证](docs/Docker验证报告.md) 不代表 v3.1.1 已完成真实容器测试。
 
 ## 快速开始
 
@@ -173,7 +174,7 @@ node tests\\plugins-test.mjs # 单跑插件宿主
 
 全量套件使用临时配置与 DSH_HOME、假 NapCat 和本机模型端点，不需要真实 QQ 账号或在线模型密钥。真实 NapCat、Docker 和 Electron 桌面验证按各测试的要求单独执行。
 
-## v3.1.0 修复与验证范围
+## v3.1.1 修复与验证范围
 
 本版修复原会话的模型与思考档位切换，控制台区分目标、实际、待应用与失败；保存合法目标后下一条 QQ 消息应用并同步已打开页面，选择失败不继续使用旧模型。改进 NapCat 实际登录检测、安装归属、端口冲突恢复与脱敏健康日志。
 
@@ -181,7 +182,7 @@ node tests\\plugins-test.mjs # 单跑插件宿主
 
 **未完成**：真实 QQ 文字/语音投递、QQ 定时推送、B站实际评论与 @、长期真实群聊判定，以及完整工作日登录稳定性、网络切换、休眠及 Windows 用户注销恢复，本版 Docker 和其他系统。语音与平台功能沿用旧版的未实测边界；不能承诺永久免重新授权，也不自动启用自启。
 
-详见 [功能配置](docs/automation-and-voice.md)、[测试与未测试说明](docs/verification-v3.1.0.md) 和 [v3.1.0 发行说明](docs/releases/v3.1.0.md)。
+详见 [功能配置](docs/automation-and-voice.md)、[测试与未测试说明](docs/verification-v3.1.1.md) 和 [v3.1.1 发行说明](docs/releases/v3.1.1.md)。
 
 ## 插件
 
