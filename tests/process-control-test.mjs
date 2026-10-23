@@ -78,16 +78,42 @@ test('a fixture command remains bounded after PowerShell startup', { skip: proce
     /PowerShell execution timed out after 100ms/);
 }));
 
+test('isolated PowerShell loads built-in commands and retains fixture functions', { skip: process.platform !== 'win32' }, () => fixture(async (root) => {
+  const result = await powershell(`
+$ErrorActionPreference = 'Stop'
+[Console]::Error.WriteLine(('probe runtime: ' + $PSHOME + '; modules: ' + $env:PSModulePath))
+[Console]::Error.WriteLine('probe before command discovery')
+$joinCommand = Get-Command Join-Path -ErrorAction Stop
+[Console]::Error.WriteLine(('probe after command discovery: ' + $joinCommand.ModuleName))
+$joined = Join-Path ${quote(root)} 'fixture'
+[Console]::Error.WriteLine('probe after Join-Path')
+function Get-CimInstance { [pscustomobject]@{ ProcessId = 202 } }
+$mockCommand = Get-Command Get-CimInstance -ErrorAction Stop
+[Console]::Error.WriteLine(('probe mock command: ' + $mockCommand.CommandType))
+$process = Get-CimInstance -ClassName Win32_Process -Filter "Name='node.exe'" -OperationTimeoutSec 3 -ErrorAction Stop
+[Console]::Error.WriteLine('probe after fixture function')
+@{ joined = $joined; processId = $process.ProcessId; commandType = [string]$mockCommand.CommandType } | ConvertTo-Json -Compress
+[Console]::Error.WriteLine('probe after JSON')
+`, root, PS, { executionTimeoutMs: 60_000 });
+  assert.equal(result.joined, path.join(root, 'fixture'));
+  assert.equal(result.processId, 202);
+  assert.equal(result.commandType, 'Function');
+}));
+
 test('a listening port and saved account never establish QQ login', { skip: process.platform !== 'win32' }, () => fixture(async (root) => {
   const result = await powershell(`
+[Console]::Error.WriteLine('login fixture before dot-source')
 . ${quote(path.join(ROOT, 'launcher/lib/ProcessControl.ps1'))}
+[Console]::Error.WriteLine('login fixture after dot-source')
 $fixtureRoot = ${quote(root)}
 function Get-ProcessControlConfig { @{ Root = $fixtureRoot; NapCatDir = $fixtureRoot; WebUiBase = 'invalid://fixture'; WebUiToken = ''; HttpTimeoutMs = 300; OneBotPort = 1 } }
 function Get-NapCatProcess { [pscustomobject]@{ Running = $true } }
 function Test-TcpEndPoint { $true }
 function Get-NapCatAccountFromConfig { '12345678' }
 function Get-NapCatNicknameFromLog { 'fixture' }
+[Console]::Error.WriteLine('login fixture before state query')
 Get-NapCatLoginState | ConvertTo-Json -Compress
+[Console]::Error.WriteLine('login fixture after state query')
 `, root);
   assert.equal(result.LoggedIn, false);
   assert.equal(result.State, 'unknown');
