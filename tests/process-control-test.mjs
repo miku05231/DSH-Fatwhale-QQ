@@ -69,7 +69,7 @@ ${code}
 }
 
 async function fixture(run) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-process-health-'));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'qq-process-health-')));
   try {
     await prepareIsolatedHome(root);
     await run(root);
@@ -95,13 +95,14 @@ $mockCommand = Get-Command Get-CimInstance -ErrorAction Stop
 [Console]::Error.WriteLine(('probe mock command: ' + $mockCommand.CommandType))
 $process = Get-CimInstance -ClassName Win32_Process -Filter "Name='node.exe'" -OperationTimeoutSec 3 -ErrorAction Stop
 [Console]::Error.WriteLine('probe after fixture function')
-@{ joined = $joined; processId = $process.ProcessId; commandType = [string]$mockCommand.CommandType; modulePath = $env:PSModulePath } | ConvertTo-Json -Compress
+@{ joined = $joined; processId = $process.ProcessId; commandType = [string]$mockCommand.CommandType; modulePath = $env:PSModulePath; canonicalRoot = [IO.Path]::GetFullPath(${quote(root)}) } | ConvertTo-Json -Compress
 [Console]::Error.WriteLine('probe after JSON')
 `, root);
   assert.equal(result.joined, path.join(root, 'fixture'));
   assert.equal(result.processId, 202);
   assert.equal(result.commandType, 'Function');
   assert.equal(result.modulePath, path.join(path.dirname(PS), 'Modules'));
+  assert.equal(result.canonicalRoot, root);
 }));
 
 test('a listening port and saved account never establish QQ login', { skip: process.platform !== 'win32' }, () => fixture(async (root) => {
