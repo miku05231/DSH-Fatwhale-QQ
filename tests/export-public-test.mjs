@@ -169,6 +169,8 @@ async function main() {
     'docs/releases/v3.1.0.md',
     'docs/verification-v3.1.1.md',
     'docs/releases/v3.1.1.md',
+    'docs/verification-v3.1.2.md',
+    'docs/releases/v3.1.2.md',
     'scripts/install-update.ps1',
     '.github/workflows/release.yml',
     'deepseek-waitou.png',
