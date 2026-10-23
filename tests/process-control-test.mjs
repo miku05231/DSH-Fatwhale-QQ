@@ -21,8 +21,17 @@ async function powershell(code, root, executable = PS, { executionTimeoutMs = 15
     let phase = 'startup';
     let timedOut = false;
     let timer;
+    const command = `[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::Error.WriteLine('${READY}')
+try {
+${code}
+} finally {
+  foreach ($fixtureError in $Error) {
+    [Console]::Error.WriteLine(('fixture error: ' + $fixtureError.ToString() + ' [' + $fixtureError.FullyQualifiedErrorId + ']'))
+  }
+}`;
     const child = spawn(executable, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand',
-      Buffer.from(`[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n[Console]::Error.WriteLine('${READY}')\n${code}`, 'utf16le').toString('base64')],
+      Buffer.from(command, 'utf16le').toString('base64')],
     { windowsHide: true, env: isolatedEnv(root), stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
@@ -46,6 +55,7 @@ async function powershell(code, root, executable = PS, { executionTimeoutMs = 15
       clearTimeout(timer);
       const diagnostic = stderr.replaceAll(READY, '').trim();
       if (process.env.CI) console.log(`PowerShell ${path.basename(executable)}: startup=${readyAt === undefined ? 'not ready' : `${readyAt - startedAt}ms`}, total=${Date.now() - startedAt}ms`);
+      if (process.env.CI && diagnostic) console.log(`PowerShell fixture diagnostics: ${diagnostic}`);
       if (timedOut) reject(new Error(`PowerShell ${phase} timed out after ${phase === 'startup' ? 60_000 : executionTimeoutMs}ms (total=${Date.now() - startedAt}ms, signal=${signal ?? 'none'}): ${diagnostic}`));
       else if (code !== 0) reject(new Error(`PowerShell exited ${code} during ${phase} (signal=${signal ?? 'none'}): ${diagnostic}`));
       else {
