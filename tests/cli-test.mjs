@@ -234,7 +234,8 @@ try {
   const stop1 = await runCli(tmpRoot, ['stop'], 60_000);
   check(stop1.code === 0, 'stop 退出码 0', String(stop1.code));
   check(stop1.out.includes('已停止'), 'stop 报告已停止');
-  await sleep(1200);
+  const stopDeadline = Date.now() + 10_000;
+  while ((alive(bridgePid) || alive(consolePid)) && Date.now() < stopDeadline) await sleep(100);
   check(!alive(bridgePid), '桥接进程已退出');
   check(!alive(consolePid), '控制台进程已退出');
   check(!existsSync(cliJsonPath), 'stop 后清掉了 state/cli.json');
