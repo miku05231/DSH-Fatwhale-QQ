@@ -113,6 +113,8 @@ const REQUIRED = [
   'docs/releases/v3.1.1.md',
   'docs/verification-v3.1.2.md',
   'docs/releases/v3.1.2.md',
+  'docs/verification-v3.1.3.md',
+  'docs/releases/v3.1.3.md',
   'docs/screenshots/console-jev-settings.png',
   'docs/screenshots/console-reply-tts.png',
   'docs/screenshots/console-bilibili-automation.png',

@@ -1,10 +1,8 @@
 /**
  * group-members-test.mjs —— 群里「别人」喊它，到底能不能得到回应。
  *
- * 起因（2026-10-20 13:36 现场）：群友 328615614（镜花水月）发了
- * 「大肥鱼我不想上班，好累啊」，桥接一条都没回。查 status.json 的 lastDrop
- * 与代码路径，根因是 security.allowGroupMembers=false + 她不在 allowFrom，
- * 于是唤醒词已经命中了，却在「谁能指挥我」这一关卡被丢掉。
+ * 所有账号和消息均为合成测试数据。检查 allowGroupMembers 与 allowFrom，
+ * 并确认私聊黑名单策略不能绕过群成员白名单。
  *
  * 本测试把两类配置各跑一个真桥接（假 NapCat + 假 dsh，不联网）：
  *   A) allowGroupMembers=false：群友 @ 我 / 喊我都回不了，lastDrop 说明原因
@@ -34,7 +32,7 @@ const PROJECT_ROOT = path.resolve(HERE, '..');
 
 const SELF_ID = 10000;
 const OWNER = 1000000002;
-const MEMBER = 328615614; // 镜花水月
+const MEMBER = 1000000003;
 const GROUP = 200000001;
 const OTHER_GROUP = 123456789;
 const WAKE = '大肥鱼';
@@ -77,7 +75,7 @@ process.stdout.write(JSON.stringify({ type: 'final', text: '收到' }) + '\\n');
 `;
 
 /** 起一个真桥接（假 NapCat），返回操作句柄 */
-async function startBridge({ allowGroupMembers, wakeWordMatch }) {
+async function startBridge({ allowGroupMembers, wakeWordMatch, privatePolicy = 'allowlist' }) {
   const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'qq-bridge-members-'));
   const stateDir = path.join(tmpRoot, 'state');
   const logDir = path.join(tmpRoot, 'logs');
@@ -111,6 +109,7 @@ async function startBridge({ allowGroupMembers, wakeWordMatch }) {
         adminUserIds: [OWNER, MEMBER],
         allowGroups: true,
         allowGroupMembers,
+        privatePolicy,
         allowGroupIds: [GROUP],
         rateLimitPerMinute: 0,
         maxChars: 4000,
@@ -206,6 +205,18 @@ async function main() {
   } finally {
     await bridge.stop();
   }
+
+  console.log('\n[私聊 blacklist 不改变群成员准入]');
+  bridge = await startBridge({ allowGroupMembers: false, wakeWordMatch: 'prefix', privatePolicy: 'blacklist' });
+  try {
+    const replies = await bridge.sendGroup({ userId: MEMBER, text: '在吗', atSelf: true, messageId: 203 });
+    if (replies.length === 0 && String(bridge.readStatus()?.lastDrop ?? '').includes('allowGroupMembers')) {
+      ok('私聊允许陌生人时，非白名单群成员仍被拒绝');
+    } else bad('私聊 blacklist 绕过了群成员白名单');
+    const ownerReplies = await bridge.sendGroup({ userId: OWNER, text: '在吗', atSelf: true, messageId: 204 });
+    if (ownerReplies.length > 0) ok('私聊 blacklist 下，白名单群成员照常得到回复');
+    else bad('私聊 blacklist 误拒绝白名单群成员');
+  } finally { await bridge.stop(); }
 
   console.log('\n[2/2 allowGroupMembers=true + contains：群友喊它就有回应]');
   bridge = await startBridge({ allowGroupMembers: true, wakeWordMatch: 'contains' });

@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { createLogger } from './logger.js';
-import { loadConfig, resolvePath } from './config.js';
+import { envConfigFile, loadConfig, resolvePath } from './config.js';
 import { isAllowed, isAdministrator, isGroupWatched, isUserBlocked, isGroupBlocked, isAtSelf, RateLimiter, sanitizeText } from './security.js';
 import { computerSessionKey, qqReplyParams, readComputerAccessConfig } from './computer-access.js';
 import { SerialQueue } from './queue.js';
@@ -113,20 +113,14 @@ function parseArgs(argv) {
   return out;
 }
 
-/**
- * loadConfig 只认 <projectRoot>/config.json。为了支持 --config 指向别处
- * （测试、多实例），这里把目标目录解析出来：如果 --config 给的是某个目录下的
- * config.json，就以该目录作为 projectRoot 去加载。
- */
+/** 文件名可自定义；目录参数沿用其中的 config.json。 */
 function resolveConfigRoot(args) {
   // --config 优先，其次环境变量 QQ_CONFIG（容器里配置单独挂一个目录）
-  const wanted = args.config || (typeof process.env.QQ_CONFIG === 'string' ? process.env.QQ_CONFIG.trim() : '');
-  if (!wanted) return { root: PROJECT_ROOT, explicit: false };
-  const abs = path.isAbsolute(wanted) ? wanted : path.resolve(PROJECT_ROOT, wanted);
-  if (path.basename(abs).toLowerCase() === 'config.json') {
-    return { root: path.dirname(abs), explicit: true };
-  }
-  return { root: abs, explicit: true };
+  const wanted = args.config ? path.resolve(PROJECT_ROOT, args.config) : envConfigFile();
+  if (!wanted) return { root: PROJECT_ROOT, explicit: false, configFile: path.join(PROJECT_ROOT, 'config.json') };
+  const configFile = fs.existsSync(wanted) && fs.statSync(wanted).isDirectory()
+    ? path.join(wanted, 'config.json') : wanted;
+  return { root: path.dirname(configFile), explicit: true, configFile };
 }
 
 // ---------------------------------------------------------------- 主流程
@@ -136,10 +130,10 @@ async function main() {
 
   // 先用临时 logger 把配置读出来，拿到真正的 logDir 后重建。
   const bootLog = createLogger('bridge', { logDir: path.join(PROJECT_ROOT, 'logs'), echo: true });
-  const { root: configRoot, explicit: explicitConfig } = resolveConfigRoot(args);
+  const { root: configRoot, explicit: explicitConfig, configFile } = resolveConfigRoot(args);
   let loaded;
   try {
-    loaded = loadConfig(configRoot, { createIfMissing: !explicitConfig });
+    loaded = loadConfig(configRoot, { createIfMissing: !explicitConfig, configFile });
   } catch (err) {
     bootLog.error('配置加载失败：', err?.message ?? err);
     process.exitCode = 1;
@@ -685,7 +679,7 @@ async function main() {
     if (isGroup) {
       // allowGroupMembers=false 时只有 allowFrom 里的人能指挥它；
       // 设成 true 就是允许群成员参与免唤醒意图判断；群号白名单仍是第一道门。
-      if (!config?.security?.allowGroupMembers && !isAllowed(userId, config)) {
+      if (!config?.security?.allowGroupMembers && !isAllowed(userId, config, { isGroup: true })) {
         noteDrop(`群 ${msg.groupId} 里 ${userId} 不在 allowFrom，且 allowGroupMembers=false`);
         log.debug(`群 ${msg.groupId} 里用户 ${userId} 不在白名单，忽略`);
         return;

@@ -31,6 +31,14 @@ const skipNet = argv.includes('--skip-net');
  */
 const SUITE = [
   {
+    name: '启动配置路径', file: 'tests/config-entry-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
+    note: '自定义文件名、目录参数、命令行优先级与环境变量相对路径',
+  },
+  {
+    name: '安全准入与限流', file: 'tests/security-rate-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
+    note: '私聊策略不放宽群成员准入、过期用户清理与活跃用户额度保留',
+  },
+  {
     name: 'NapCat 登录检测与生命周期', file: 'tests/napcat-health-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
     note: '当前 WebUI 鉴权、显式在线证据、OneBot 降级、凭据刷新与脱敏日志',
   },

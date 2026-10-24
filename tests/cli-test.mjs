@@ -118,7 +118,9 @@ async function cleanup() {
   for (const pid of startedPids) {
     if (alive(pid)) {
       try {
-        spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+        if (process.platform === 'win32') {
+          spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+        } else process.kill(pid, 'SIGTERM');
       } catch {
         /* 忽略 */
       }
@@ -147,6 +149,22 @@ try {
   const bogus = await runCli(tmpRoot, ['bogus'], 20_000);
   check(bogus.code === 1, '未知命令退出码 1', String(bogus.code));
   check(bogus.err.includes('不认识的命令'), '未知命令有中文提示');
+
+  console.log('\n[旧 PID 不属于本安装的服务]');
+  const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    windowsHide: true, stdio: 'ignore',
+  });
+  await new Promise((resolve, reject) => { unrelated.once('spawn', resolve); unrelated.once('error', reject); });
+  startedPids.push(unrelated.pid);
+  const staleCli = { bridge: { pid: unrelated.pid }, console: { pid: unrelated.pid } };
+  const staleStatus = { pid: unrelated.pid, connected: true };
+  await mkdir(path.join(tmpRoot, 'state'), { recursive: true });
+  await writeFile(path.join(tmpRoot, 'state', 'cli.json'), JSON.stringify(staleCli));
+  await writeFile(path.join(tmpRoot, 'state', 'status.json'), JSON.stringify(staleStatus));
+  const staleStop = await runCli(tmpRoot, ['stop'], 30_000);
+  check(staleStop.code === 0 && alive(unrelated.pid), 'stop 保留被旧 PID 文件引用的无关进程');
+  await writeFile(path.join(tmpRoot, 'state', 'cli.json'), JSON.stringify(staleCli));
+  await writeFile(path.join(tmpRoot, 'state', 'status.json'), JSON.stringify(staleStatus));
 
   console.log('\n[2] start（控制台 + 桥接）');
   const start1 = await runCli(tmpRoot, ['start', '--port', String(webPort)], 120_000);
@@ -178,6 +196,12 @@ try {
   const status = JSON.parse(await readFile(statusPath, 'utf8'));
   check(status.connected === false, '没 NapCat 时状态是 connected:false');
   check(Number(status.pid) === bridgePid, 'status.json 的 pid 与 cli.json 一致');
+  check(bridgePid !== unrelated.pid && consolePid !== unrelated.pid && alive(unrelated.pid),
+    'start 忽略旧 PID，为桥接和控制台启动真实服务');
+  const unrelatedClosed = new Promise((resolve) => unrelated.once('close', resolve));
+  unrelated.kill();
+  await unrelatedClosed;
+  startedPids = startedPids.filter((pid) => pid !== unrelated.pid);
 
   console.log('\n[3] status / logs');
   const st = await runCli(tmpRoot, ['status'], 30_000);
@@ -235,6 +259,9 @@ try {
 } catch (err) {
   bad('测试过程抛异常', err?.stack || String(err));
 } finally {
+  if (path.dirname(path.resolve(tmpRoot)) !== path.resolve(os.tmpdir()) || !path.basename(tmpRoot).startsWith('qq-cli-')) {
+    throw new Error('Refusing to clean an unexpected fixture path');
+  }
   await cleanup();
 }
 

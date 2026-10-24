@@ -45,6 +45,7 @@ const INCLUDE = [
   'docs/verification-v3.1.0.md',
   'docs/verification-v3.1.1.md',
   'docs/verification-v3.1.2.md',
+  'docs/verification-v3.1.3.md',
   'docs/releases',
   '.github',
   'README.md',
@@ -136,7 +137,7 @@ const PUBLIC_README = `> 非官方项目。QQ 侧通过第三方协议端 [NapCa
 - DSH（DeepSeek Harness）已安装并可用 \`dsh\` 命令
 - NapCat（同一个发布包里的无头版本即可，无需另装 QQ 客户端）
 
-Docker 部署见 [部署说明](docs/Docker部署.md)；[历史容器验证](docs/Docker验证报告.md) 不代表 v3.1.2 已完成真实容器测试。
+Docker 部署见 [部署说明](docs/Docker部署.md)；[历史容器验证](docs/Docker验证报告.md) 不代表 v3.1.3 已完成真实容器测试。
 
 ## 快速开始
 
@@ -174,6 +175,12 @@ node tests\\plugins-test.mjs # 单跑插件宿主
 \`\`\`
 
 全量套件使用临时配置与 DSH_HOME、假 NapCat 和本机模型端点，不需要真实 QQ 账号或在线模型密钥。真实 NapCat、Docker 和 Electron 桌面验证按各测试的要求单独执行。
+
+## v3.1.3 安全与运行修复
+
+命令行启停核对本安装的入口脚本；修复自定义配置文件名、命令行与环境变量优先级，以及相对环境路径。私聊黑名单模式不再绕过群成员白名单；过期限流记录定期清理，活跃额度保留。NapCat 健康工作线程不继承测试入口参数。
+
+本版修复使用模拟 NapCat、隔离配置与测试进程验证。详见 [v3.1.3 验证说明](docs/verification-v3.1.3.md) 和 [发行说明](docs/releases/v3.1.3.md)。真实 QQ 投递、长期登录、真实平台发布、Docker 与 macOS 未新增验收。
 
 ## v3.1.2 修复与验证范围
 

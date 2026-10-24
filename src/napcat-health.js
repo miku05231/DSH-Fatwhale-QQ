@@ -120,7 +120,7 @@ async function checkOnebot(settings, signal, deadline) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./napcat-health-onebot.js', import.meta.url), {
       workerData: { url: settings.onebotUrl, accessToken: settings.accessToken, deadline },
-      execArgv: process.execArgv.filter((arg) => !arg.startsWith('--input-type')),
+      execArgv: [],
     });
     let finished = false;
     const finish = async (error, health) => {

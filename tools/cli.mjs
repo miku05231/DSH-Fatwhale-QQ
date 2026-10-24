@@ -98,32 +98,57 @@ function spawnBackground(script, logName, extraEnv = {}) {
   return child;
 }
 
-function pidAlive(pid) {
-  return isAlive(pid);
+function pidAlive(pid, script) {
+  if (!isAlive(pid)) return false;
+  const expected = path.join(ROOT, script);
+  try {
+    if (process.platform === 'linux') {
+      const argv = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
+      return /^node(?:\.exe)?$/.test(path.basename(argv[0])) && argv[1] === expected;
+    }
+    let commandLine;
+    if (IS_WIN) {
+      const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      const probe = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command',
+        `[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; $p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -OperationTimeoutSec 3 -ErrorAction Stop; if ($p.Name -eq 'node.exe') { [Console]::Write([string]$p.CommandLine) }`],
+      { encoding: 'utf8', timeout: 5000, windowsHide: true });
+      if (probe.status !== 0) return false;
+      commandLine = probe.stdout.replace(/\//g, '\\');
+    } else {
+      const probe = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: 5000 });
+      if (probe.status !== 0) return false;
+      commandLine = probe.stdout;
+    }
+    const escaped = expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`^\\s*(?:"[^"]+"|\\S+)\\s+(?:"${escaped}"|${escaped})(?:\\s|$)`, IS_WIN ? 'i' : '').test(commandLine);
+  } catch {
+    return false;
+  }
 }
 
 async function resolveState() {
   const cli = await readCli();
   const status = await readJson(STATUS_FILE, null);
   const portText = (await fsp.readFile(PORT_FILE, 'utf8').catch(() => '')).trim();
-  const bridgePid = Number(status?.pid) || cli?.bridge?.pid || 0;
-  const consolePid = cli?.console?.pid || 0;
+  const bridgePid = [Number(status?.pid), cli?.bridge?.pid]
+    .find((pid) => pidAlive(pid, path.join('src', 'index.js'))) || 0;
+  const consolePid = pidAlive(cli?.console?.pid, path.join('src', 'webui', 'server.mjs')) ? cli.console.pid : 0;
   return {
     cli,
     status,
     port: Number(portText) || Number(cli?.console?.port) || 0,
     bridgePid,
     consolePid,
-    bridgeAlive: pidAlive(bridgePid),
-    consoleAlive: pidAlive(consolePid),
+    bridgeAlive: bridgePid > 0,
+    consoleAlive: consolePid > 0,
   };
 }
 
-function killPid(pid) {
-  if (!pidAlive(pid)) return false;
+function killPid(pid, script) {
+  if (!pidAlive(pid, script)) return false;
   try {
     if (IS_WIN) {
-      spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+      return spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true }).status === 0;
     } else {
       process.kill(pid, 'SIGTERM');
     }
@@ -167,7 +192,7 @@ async function cmdStart(args) {
   const connected = await waitFor(
     async () => {
       const status = await readJson(STATUS_FILE, null);
-      return status?.connected === true;
+      return status?.pid === child.pid && status?.connected === true;
     },
     20_000,
     500,
@@ -210,10 +235,11 @@ async function printAddresses() {
 async function cmdStop() {
   const state = await resolveState();
   const killed = [];
-  if (state.bridgePid && killPid(state.bridgePid)) killed.push(`桥接 ${state.bridgePid}`);
-  if (state.consolePid && killPid(state.consolePid)) killed.push(`控制台 ${state.consolePid}`);
+  if (state.bridgePid && killPid(state.bridgePid, path.join('src', 'index.js'))) killed.push(`桥接 ${state.bridgePid}`);
+  if (state.consolePid && killPid(state.consolePid, path.join('src', 'webui', 'server.mjs'))) killed.push(`控制台 ${state.consolePid}`);
   // 兜底：CLI 文件里的 pid 与 status.json 不一致时也清掉
-  if (state.cli?.bridge?.pid && state.cli.bridge.pid !== state.bridgePid && killPid(state.cli.bridge.pid)) {
+  if (state.cli?.bridge?.pid && state.cli.bridge.pid !== state.bridgePid &&
+      killPid(state.cli.bridge.pid, path.join('src', 'index.js'))) {
     killed.push(`桥接 ${state.cli.bridge.pid}`);
   }
   await writeCli({ console: null, bridge: null });

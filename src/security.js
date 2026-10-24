@@ -173,14 +173,15 @@ export function isAtSelf(msg, cfg) {
  *
  * @param {number|string} userId QQ 号
  * @param {object} cfg 整个 config（也接受 config.security）
+ * @param {{isGroup?: boolean}} [options] 群成员准入始终检查白名单，不应用私聊策略
  * @returns {boolean}
  */
-export function isAllowed(userId, cfg) {
+export function isAllowed(userId, cfg, { isGroup = false } = {}) {
   if (userId === undefined || userId === null) return false;
   const id = String(userId).trim();
   if (id === '') return false;
   if (isUserBlocked(id, cfg)) return false;
-  if (privatePolicyOf(cfg) === 'blacklist') return true;
+  if (!isGroup && privatePolicyOf(cfg) === 'blacklist') return true;
   const list = allowListOf(cfg);
   if (list.length === 0) return false; // 安全默认：空名单 = 拒绝一切
   return inList(list, id);
@@ -188,7 +189,7 @@ export function isAllowed(userId, cfg) {
 
 /**
  * 群消息是否准入：allowGroups=true 且 @ 了机器人。
- * 只检查“群开关 + @”，白名单请调用方另外用 isAllowed(msg.userId, cfg) 判断。
+ * 只检查“群开关 + @”，成员白名单请调用 isAllowed(msg.userId, cfg, { isGroup: true })。
  * @param {object} msg 归一化消息
  * @param {object} cfg 整个 config
  * @returns {boolean}
@@ -224,6 +225,7 @@ export class RateLimiter {
     const value = Number(perMinute);
     this.perMinute = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
     this.windowMs = 60_000;
+    this.nextCleanupAt = 0;
     /** @type {Map<string, number[]>} key → 窗口内的请求时间戳 */
     this.hits = new Map();
   }
@@ -236,6 +238,13 @@ export class RateLimiter {
   take(key) {
     if (this.perMinute <= 0) return true;
     const now = Date.now();
+    // 每个窗口清理一次不再发言的用户，保留活跃用户的限流额度。
+    if (now >= this.nextCleanupAt) {
+      for (const [k, stamps] of this.hits) {
+        if (!stamps.length || now - stamps.at(-1) >= this.windowMs) this.hits.delete(k);
+      }
+      this.nextCleanupAt = now + this.windowMs;
+    }
     const mapKey = String(key ?? '');
     let stamps = this.hits.get(mapKey);
     if (!stamps) {
@@ -248,12 +257,6 @@ export class RateLimiter {
     if (expired > 0) stamps.splice(0, expired);
     if (stamps.length >= this.perMinute) return false;
     stamps.push(now);
-    // 键数量兜底清理，避免长期运行时 Map 无限增长
-    if (this.hits.size > 5000) {
-      for (const [k, v] of this.hits) {
-        if (v.length === 0) this.hits.delete(k);
-      }
-    }
     return true;
   }
 }
