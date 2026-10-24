@@ -25,6 +25,7 @@ import process from 'node:process';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 
+import { killProcessTree } from '../src/dsh.js';
 import { createFakeNapCat } from './ws-harness.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -60,14 +61,6 @@ async function waitFor(predicate, { timeout = 20000, interval = 120, label = '�
     await sleep(interval);
   }
   throw new Error(`等待超时（${timeout}ms）：${label}`);
-}
-
-function killTree(pid) {
-  return new Promise((resolve) => {
-    const p = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
-    p.on('exit', () => resolve());
-    p.on('error', () => resolve());
-  });
 }
 
 const FAKE_DSH = `process.stdout.write(JSON.stringify({ type: 'session', sessionId: 'session-member' }) + '\\n');
@@ -138,10 +131,7 @@ async function startBridge({ allowGroupMembers, wakeWordMatch, privatePolicy = '
   const childOut = [];
   child.stdout.on('data', (c) => childOut.push(c.toString()));
   child.stderr.on('data', (c) => childOut.push(c.toString()));
-  let exitCode = null;
-  child.on('exit', (code) => {
-    exitCode = code;
-  });
+  const childClosed = new Promise((resolve) => child.once('close', resolve));
 
   const statusPath = path.join(stateDir, 'status.json');
   const readStatus = () => {
@@ -173,7 +163,8 @@ async function startBridge({ allowGroupMembers, wakeWordMatch, privatePolicy = '
         );
     },
     async stop() {
-      if (exitCode === null) await killTree(child.pid);
+      killProcessTree(child);
+      await childClosed;
       await napcat.close();
       await new Promise((resolve) => classifier.close(resolve));
       const tail = childOut.join('');
