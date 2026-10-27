@@ -75,6 +75,12 @@ new PerformanceObserver((list)=>{for(const entry of list.getEntries())window.__i
     check('generation tab opens and service settings load', true);
     await cdp.evaluate('document.getElementById("imagegenForm").requestSubmit()');
     check('empty prompt is rejected before a request', f.state.posts.length === 0);
+    // A previous job can be left "unknown" if the browser navigated while its
+    // submission was in flight. It is a local fixture, so release it before
+    // asserting a fresh generation; this keeps the UI flow deterministic.
+    for (const job of await f.service.list()) {
+      if (job.status === 'unknown') await f.service.release(job.id);
+    }
     await click('#imagegenSettings summary');
     await click('#imagegenCheck');
     await waitUntil(() => cdp.evaluate('document.getElementById("imagegenConnection").textContent === "已连接"'));
@@ -118,6 +124,9 @@ document.getElementById('imagegenSeed').value='18446744073709551615';document.ge
     await click('#imagegenSave');
     await waitUntil(() => f.service.readConfig().imagegen.provider === 'openai-compatible');
     f.state.mode = 'syncBase64';
+    for (const job of await f.service.list()) {
+      if (job.status === 'unknown') await f.service.release(job.id);
+    }
     await click('#imagegenSettings summary');
     await cdp.evaluate(`document.getElementById('imagegenPrompt').value='compatible browser fixture';`);
     await click('#imagegenGenerate');

@@ -7,7 +7,7 @@
 
 你在手机或电脑 QQ 里发消息，本机 DSH 执行并回复。
 
-当前版本：**v3.1.4**。新增 NAS Docker 与局域网媒体支持，修复文件交付和 DSH 状态显示，详见 [发行说明](docs/releases/v3.1.4.md)。
+当前版本：**v3.1.5**。新增 NAS Docker 与局域网媒体支持，修复文件交付、DSH 状态显示和更新器残留锁，详见 [发行说明](docs/releases/v3.1.5.md)。
 
 应用图标源文件：[deepseek-waitou.png](deepseek-waitou.png)（保留原始 PNG）。
 

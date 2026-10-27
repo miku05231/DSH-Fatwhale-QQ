@@ -345,6 +345,49 @@ export function createUpdateManager({
     }
   }
 
+  /**
+   * A previous release installer can exit without clearing its lock (for
+   * example when the app was closed or the process was killed). If the lock
+   * belongs to this installation and no update job is still running, the job
+   * directory and lock are stale. Clear only that exact pair:
+   *   - a result file must not report an in-progress phase;
+   *   - the lock must name the current project;
+   *   - the job must not be owned by a live process.
+   */
+  async function recoverStaleLock() {
+    try {
+      const lock = await readSmallJson(lockFile);
+      if (lock.schemaVersion !== 1 || !/^[A-Za-z0-9][A-Za-z0-9_-]{7,79}$/.test(lock.jobId ?? '')
+          || typeof lock.projectRoot !== 'string'
+          || await pathIdentity(lock.projectRoot) !== await pathIdentity(root)) return;
+      const jobDir = path.join(updatesRoot, lock.jobId);
+      let result = null;
+      try { result = await readSmallJson(path.join(jobDir, 'result.json')); } catch { /* 没有结果就是上次未完成 */ }
+      if (result && ['downloading', 'installing', 'verifying', 'applying'].includes(result.phase)) return;
+      try {
+        const pid = Number(lock.consolePid);
+        // Older lock files have no owner PID. Keep them so a late completion
+        // result can still be consumed instead of deleting it immediately.
+        if (!Number.isInteger(pid) || pid <= 0) return;
+        try {
+          process.kill(pid, 0);
+          return; // 同 PID 的更新进程仍在线，保留锁。
+        } catch (error) {
+          if (error.code !== 'ESRCH') return; // 无法确认就保守保留。
+        }
+        await assertUnlinkedPath(lockFile);
+        await rm(lockFile, { force: true });
+        await rm(jobDir, { recursive: true, force: true }).catch(() => {});
+        lockPresent = false;
+        pendingRestartJob = null;
+      } catch {
+        /* 清理失败时保持锁，后续状态继续显示需要人工处理。 */
+      }
+    } catch {
+      /* 无锁或锁内容不可读，交给后续安装保护处理。 */
+    }
+  }
+
   async function releaseLock(jobId) {
     try {
       await assertUnlinkedPath(lockFile);
@@ -381,6 +424,7 @@ export function createUpdateManager({
         }
         eligibility = await inspectEnvironment();
         await refreshLock();
+        if (lockPresent) await recoverStaleLock();
         if (lockPresent) {
           try {
             const lock = await readSmallJson(lockFile);

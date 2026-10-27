@@ -826,5 +826,44 @@ await test('late results cannot replace an active check or a newer available rel
   });
 });
 
+await test('a stale installer lock from a dead process is recovered, while a live or in-progress lock is retained', async () => {
+  await fixture({}, async ({ root, factory }) => {
+    const updates = path.join(root, 'state', 'updates');
+    await mkdir(updates, { recursive: true });
+    const jobId = 'stale-lock-1234';
+    await writeFile(path.join(updates, 'install.lock'), JSON.stringify({
+      schemaVersion: 1, jobId, version: '0.2.0', projectRoot: root, consolePid: 999999999,
+    }));
+    await writeFile(path.join(updates, 'result.json'), JSON.stringify({
+      schemaVersion: 1, jobId, version: '0.2.0', phase: 'error', error: 'previous attempt failed',
+    }));
+    const stale = factory();
+    const staleStatus = await stale.status();
+    equal(staleStatus.canInstall, false);
+    equal(await readdir(updates).then((names) => names.includes('install.lock')), false);
+
+    const liveJob = 'live-lock-1234';
+    await writeFile(path.join(updates, 'install.lock'), JSON.stringify({
+      schemaVersion: 1, jobId: liveJob, version: '0.2.0', projectRoot: root, consolePid: process.pid,
+    }));
+    const live = factory();
+    await live.status();
+    equal(await readdir(updates).then((names) => names.includes('install.lock')), true);
+    await rm(path.join(updates, 'install.lock'), { force: true });
+
+    const activeJob = 'active-lock-1234';
+    await writeFile(path.join(updates, 'install.lock'), JSON.stringify({
+      schemaVersion: 1, jobId: activeJob, version: '0.2.0', projectRoot: root, consolePid: 999999999,
+    }));
+    await mkdir(path.join(updates, activeJob), { recursive: true });
+    await writeFile(path.join(updates, activeJob, 'result.json'), JSON.stringify({
+      schemaVersion: 1, jobId: activeJob, version: '0.2.0', phase: 'installing',
+    }));
+    const active = factory();
+    await active.status();
+    equal(await readdir(updates).then((names) => names.includes('install.lock')), true);
+  });
+});
+
 console.log(`\n通过 ${assertions} 项断言，失败 ${failures} 项。`);
 if (failures) process.exitCode = 1;

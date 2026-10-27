@@ -32,7 +32,7 @@ export async function createImagegenFixture() {
         res.writeHead(200, { 'Content-Type': wav ? 'audio/wav' : 'audio/mpeg', 'Content-Length': audio.length });
         return res.end(audio);
       }
-      if (req.method === 'POST' && req.url.endsWith('/v1/images/generations')) {
+    if (req.method === 'POST' && req.url.endsWith('/v1/images/generations')) {
         let body = '';
         for await (const chunk of req) body += chunk;
         state.posts.push({ body, headers: req.headers });
