@@ -189,7 +189,7 @@ async function fixtureDiagnostics(files, directory, bootstrapResult) {
 }
 
 async function main() {
-  if (process.platform !== 'win32') {
+  if (process.platform !== 'win32' || !(await fs.stat(CSC).then((s) => s.isFile()).catch(() => false))) {
     console.log('SKIP exe-host-test requires Windows and .NET Framework csc.exe.');
     return;
   }
