@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { DEFAULT_SESSION_WINDOW_MINUTES, isValidSessionWindowMinutes } from './sessions.js';
+import { IMAGE_PROVIDERS, validMediaBaseUrl, validMediaKey } from './media-api.js';
 
 /** 默认配置（与 SPEC §3、config.example.json 完全一致） */
 export const DEFAULTS = deepFreeze({
@@ -111,6 +112,23 @@ export const DEFAULTS = deepFreeze({
   },
   logDir: 'logs',
   stateDir: 'state',
+  // 跨进程文件可见性：桥接容器里的绝对路径 → NapCat 里的绝对路径。
+  // 只在需要把宿主文件交给另一个容器/进程读取时使用；默认空表示不启用映射。
+  files: {
+    mappings: [],
+  },
+  imagegen: {
+    provider: 'comfyui',
+    model: '',
+    apiKey: '',
+    enabled: false,
+    baseUrl: '',
+    generationPath: '/v1/images/generations',
+    timeoutMs: 240000,
+    requestTimeoutMs: 15000,
+    pollIntervalMs: 1500,
+    maxBytes: 32 * 1024 * 1024,
+  },
   // 表情包库（src/stickers.js）：只自动采集有 QQ 表情元数据的图片、打标签、建索引。
   // root 可以指到任意位置（控制台「表情」页能改，也能一键迁移）；相对路径按项目根解析。
   stickers: {
@@ -263,7 +281,7 @@ const POSITIVE_INTEGERS = [
   ['behavior.maxReplyChunk', '回复分片长度'],
 ];
 
-function validateConfig(config) {
+export function validateConfig(config) {
   if (!isValidSessionWindowMinutes(config?.behavior?.sessionWindowMinutes)) {
     invalid('behavior.sessionWindowMinutes', '必须是非负整数分钟（0 表示持续复用）',
       config?.behavior?.sessionWindowMinutes);
@@ -386,6 +404,52 @@ function validateConfig(config) {
   }
   if (getField(config, 'stickers.minBytes') >= getField(config, 'stickers.maxBytes')) {
     invalid('stickers.minBytes', '不能大于等于 stickers.maxBytes', getField(config, 'stickers.minBytes'));
+  }
+
+  // 文件可见性映射：必须是已存在的绝对目录，防止把相对路径拼到错误位置。
+  const mappings = getField(config, 'files.mappings');
+  if (!Array.isArray(mappings)) {
+    invalid('files.mappings', '必须是数组（元素为 {container, napcat} 绝对路径）', mappings);
+  }
+  mappings.forEach((entry, index) => {
+    const field = `files.mappings[${index}]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      invalid(field, '必须是包含 container 与 napcat 的对象', entry);
+    }
+    for (const key of ['container', 'napcat']) {
+      const value = entry[key];
+      if (typeof value !== 'string' || !isAbsolute(value.trim())) {
+        invalid(`${field}.${key}`, '必须是绝对路径', value);
+      }
+    }
+  });
+
+  if (typeof config.imagegen?.enabled !== 'boolean') invalid('imagegen.enabled', '必须是 true 或 false', config.imagegen?.enabled);
+  const imageProvider = config.imagegen.provider;
+  if (!Object.hasOwn(IMAGE_PROVIDERS, imageProvider)) invalid('imagegen.provider', '请选择支持的生图平台', imageProvider);
+  if (!validMediaKey(config.imagegen.apiKey)) invalid('imagegen.apiKey', '必须是有效密钥字符串，留空表示不鉴权', '（已隐藏）');
+  if (typeof config.imagegen.model !== 'string' || config.imagegen.model.length > 200 || /[\r\n\0]/.test(config.imagegen.model)) {
+    invalid('imagegen.model', '必须是最多 200 字的模型名称', '（已隐藏）');
+  }
+  if (config.imagegen.enabled && imageProvider !== 'comfyui' && !config.imagegen.model.trim()) {
+    invalid('imagegen.model', '当前平台需要填写模型名称', '');
+  }
+  const imageUrl = config.imagegen?.baseUrl;
+  if (typeof imageUrl !== 'string') invalid('imagegen.baseUrl', '必须是字符串', imageUrl);
+  if (imageUrl) {
+    if (!validMediaBaseUrl(imageUrl) || (imageProvider === 'comfyui' && new URL(imageUrl).pathname !== '/')) {
+      invalid('imagegen.baseUrl', '必须是无账号和参数的 http(s) 地址；ComfyUI 异步接口使用根地址', '（已隐藏）');
+    }
+  } else if (config.imagegen.enabled) invalid('imagegen.baseUrl', '启用生图时必须填写服务地址', imageUrl);
+  if (config.imagegen.generationPath !== '/v1/images/generations') {
+    invalid('imagegen.generationPath', '当前支持 /v1/images/generations', config.imagegen.generationPath);
+  }
+  for (const [key, min, max] of [
+    ['timeoutMs', 1000, 1800000], ['requestTimeoutMs', 100, 120000],
+    ['pollIntervalMs', 50, 30000], ['maxBytes', 1024, 64 * 1024 * 1024],
+  ]) {
+    const value = config.imagegen[key];
+    if (!Number.isInteger(value) || value < min || value > max) invalid(`imagegen.${key}`, `必须是 ${min}–${max} 之间的整数`, value);
   }
 
   // allowFrom：QQ 号数组（数字或纯数字字符串都接受）；允许空数组（= 拒绝一切）

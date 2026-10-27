@@ -114,6 +114,11 @@
 
     <!-- --------------------------- 表情包 --------------------------- -->
     <section class="page" id="page-stickers" data-page="stickers" aria-label="表情包">
+      <div class="segmented" role="tablist" aria-label="图片与表情">
+        <button class="segmented__item is-active" id="stickerLibraryTab" role="tab" aria-selected="true" aria-controls="stickerLibraryView" type="button">表情库</button>
+        <button class="segmented__item" id="imagegenTab" role="tab" aria-selected="false" aria-controls="imagegenView" type="button">生成</button>
+      </div>
+      <div id="stickerLibraryView" role="tabpanel" aria-labelledby="stickerLibraryTab">
       <section class="card card--pad">
         <div class="row-between">
           <div class="card__head card__head--flush">
@@ -179,6 +184,58 @@
           <button class="btn btn--text ripple" type="button" id="stickerMigrate">迁移到新目录</button>
           <button class="btn btn--filled ripple" type="button" id="stickerSave">保存设置</button>
         </div>
+      </section>
+      </div>
+      <section id="imagegenView" class="imagegen" role="tabpanel" aria-labelledby="imagegenTab" hidden>
+        <div class="row-between">
+          <h2 class="card__title">生成图片</h2>
+          <span class="chip" id="imagegenConnection">未检测</span>
+        </div>
+        <details class="imagegen-settings" id="imagegenSettings">
+          <summary>生图服务</summary>
+          <label class="switch-row"><span>启用生图</span><input class="switch" type="checkbox" id="imagegenEnabled" /></label>
+          <label class="field-label" for="imagegenProvider">生图平台</label>
+          <select class="text-field" id="imagegenProvider"></select>
+          <label class="field-label" for="imagegenBaseUrl">服务地址</label>
+          <input class="text-field" id="imagegenBaseUrl" type="url" placeholder="http://主机地址:端口" spellcheck="false" />
+          <div id="imagegenModelField">
+            <label class="field-label" for="imagegenModel">生图模型</label>
+            <input class="text-field" id="imagegenModel" maxlength="200" spellcheck="false" />
+          </div>
+          <label class="field-label" for="imagegenApiKey">API 密钥（可选）</label>
+          <input class="text-field" id="imagegenApiKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="留空表示不鉴权" />
+          <label class="switch-row"><span>不使用密钥</span><input class="switch" type="checkbox" id="imagegenNoKey" /></label>
+          <div class="row-end">
+            <button class="btn btn--text" id="imagegenCheck" type="button">检测连接</button>
+            <button class="btn btn--tonal" id="imagegenSave" type="button">保存</button>
+          </div>
+        </details>
+        <form class="imagegen-form" id="imagegenForm">
+          <label class="field-label" for="imagegenPrompt">画面描述</label>
+          <textarea class="text-field imagegen-prompt" id="imagegenPrompt" required maxlength="16000" rows="4" placeholder="一只抱着咖啡杯的白色小猫，困倦的表情，简洁线条，纯白背景"></textarea>
+          <div class="imagegen-fields">
+            <label class="field-label">用途<select class="text-field" id="imagegenMode"><option value="image">普通图片</option><option value="sticker">表情包</option></select></label>
+            <label class="field-label">画幅<select class="text-field" id="imagegenPreset"><option value="square">方图 1024 × 1024</option><option value="landscape">横图 1344 × 768</option><option value="portrait">竖图 768 × 1344</option></select></label>
+          </div>
+          <details class="imagegen-advanced">
+            <summary>更多选项</summary>
+            <label class="field-label" for="imagegenNegative">不希望出现的内容</label>
+            <input class="text-field" id="imagegenNegative" maxlength="16000" />
+            <div class="imagegen-fields">
+              <label class="field-label" id="imagegenSeedField">种子<input class="text-field" id="imagegenSeed" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="20" placeholder="随机" /></label>
+              <label class="field-label" id="imagegenStepsField">步数<input class="text-field" id="imagegenSteps" type="number" min="1" max="100" step="1" placeholder="服务默认值" /></label>
+              <label class="field-label" id="imagegenCfgField">CFG<input class="text-field" id="imagegenCfg" type="number" min="0" max="15" step="0.1" placeholder="服务默认值" /></label>
+            </div>
+            <label class="field-label" for="imagegenTags">表情标签</label>
+            <input class="text-field" id="imagegenTags" maxlength="300" placeholder="猫, 困倦, 咖啡" />
+          </details>
+          <div class="row-between imagegen-submit">
+            <p class="card__hint" id="imagegenHint" role="status" aria-live="polite"></p>
+            <button class="btn btn--filled" id="imagegenGenerate" type="submit"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM8.5 12.5l2.5 3 3.5-4.5L19 17H5z"/></svg>生成</button>
+          </div>
+        </form>
+        <div class="row-between imagegen-history-head"><h3 class="card__title">最近任务</h3><button class="icon-btn" id="imagegenRefresh" type="button" title="刷新任务" aria-label="刷新任务"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z"/></svg></button></div>
+        <div id="imagegenJobs" class="imagegen-jobs" aria-live="polite"><p class="empty">还没有生成任务</p></div>
       </section>
     </section>
 

@@ -52,6 +52,7 @@ const INCLUDE_FILES = [
 
 /** 这些目录/文件永远不进包 */
 const EXCLUDE = [
+  /(^|[\\/])\.imagegen-runtime([\\/]|$)/,
   /^AGENTS\.md$/i,
   /(^|[\\/])state([\\/]|$)/,
   /(^|[\\/])logs([\\/]|$)/,
@@ -68,6 +69,9 @@ const EXCLUDE = [
   /^tools[\\/]sticker\.mjs$/,
   // 本机专用的模型路由补丁（含私有中转地址）
   /\.local\.ya?ml$/,
+  // Deployment and live-debug reports can contain private LAN topology.
+  /(^|[\\/])docs[\\/]NAS部署\.md$/,
+  /(^|[\\/])docs[\\/](?:lan-media-endpoints|live-qq-media|tts-translation-diagnosis|verification-dsh-media)-[^\\/]*\.md$/,
   /\.tmp$/,
 ];
 

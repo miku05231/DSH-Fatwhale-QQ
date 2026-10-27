@@ -26,6 +26,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { applyStickerSendPolicy } from '../src/sticker-send-policy.js';
+import { isRemoteFileReference, prepareFileForNapcat } from '../src/file-bridge.js';
 
 // ------------------------------------------------------------------ 常量
 
@@ -148,6 +149,41 @@ function normalizeLocalMedia(raw, { mustExist = false, kind = '文件' } = {}) {
     return text;
   }
   return pathToFileURL(absolute).href;
+}
+
+/**
+ * 文件上传必须先过 file-bridge：桥接读到的 NAS 文件对 NapCat 不可见，
+ * 复制到共享 outbox 后再把 NapCat 视角的路径交给 OneBot。
+ */
+async function napcatUploadPath(raw) {
+  const value = String(raw ?? '').trim();
+  if (isRemoteFileReference(value)) return value;
+  if (/^file:\/\//i.test(value)) {
+    throw new CliError('上传文件请传本机绝对路径，而不是 file:// URL；file:// 只适用于图片引用。');
+  }
+  const config = loadProjectConfig();
+  const result = await prepareFileForNapcat(value, {
+    config,
+    configRoot: dirname(selectedConfigPath),
+    stateDir: config?.stateDir ?? 'state',
+    workspaceDir: config?.dsh?.cwd ?? 'qq-workspace',
+    memoryDir: config?.memory?.root ?? 'memory',
+    stickerDir: config?.stickers?.root ?? 'state/stickers',
+  });
+  if (!result.ok) throw new CliError(result.error);
+  note(result.copied
+    ? `文件已复制到 NapCat 共享目录：${result.file}`
+    : `文件已在 NapCat 共享目录：${result.file}`);
+  return result.file;
+}
+
+/** 读取项目配置；失败时返回空对象，让 file-bridge 只允许默认目录。 */
+function loadProjectConfig() {
+  try {
+    return JSON.parse(readFileSync(selectedConfigPath, 'utf8').replace(/^\uFEFF/, ''));
+  } catch {
+    return {};
+  }
 }
 
 /** 时间戳（秒）转本地时间字符串。 */
@@ -378,11 +414,14 @@ function eventDataToText(data) {
 async function callAction(action, params) {
   const policy = await applyStickerSendPolicy(action, params, {
     configPath: explicitConfig || existsSync(selectedConfigPath) ? selectedConfigPath : undefined,
-    config: {},
+    config: action === 'upload_group_file' || action === 'upload_private_file'
+      ? uploadedPolicyConfig() : {},
     configRoot: dirname(selectedConfigPath),
   });
   if (policy.skipped) return policy.result;
-  params = policy.params;
+  params = (action === 'upload_group_file' || action === 'upload_private_file') && policy.params?.file
+    ? { ...policy.params, file: await napcatUploadPath(policy.params.file) }
+    : policy.params;
   const WebSocketImpl = globalThis.WebSocket;
   if (typeof WebSocketImpl !== 'function') {
     throw new CliError('当前 Node 没有内置 WebSocket（需要 Node ≥ 22），请升级 Node 后重试');
@@ -502,6 +541,23 @@ async function callAction(action, params) {
       );
     });
   });
+}
+
+/** 上传路径策略需要 files.allowedRoots，但不能把密钥/凭据带进日志或响应。 */
+function uploadedPolicyConfig() {
+  const config = loadProjectConfig();
+  const mappings = Array.isArray(config?.files?.mappings) ? config.files.mappings : [];
+  const allowedRoots = Array.isArray(config?.files?.allowedRoots) ? config.files.allowedRoots : [];
+  return {
+    files: {
+      mappings: mappings.filter((item) => item && typeof item === 'object'),
+      allowedRoots: allowedRoots.filter((item) => typeof item === 'string'),
+    },
+    stickers: {
+      root: config?.stickers?.root,
+      sendProbability: config?.stickers?.sendProbability,
+    },
+  };
 }
 
 // ------------------------------------------------------------------ action 目录

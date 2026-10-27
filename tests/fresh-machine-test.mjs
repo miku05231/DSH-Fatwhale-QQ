@@ -229,7 +229,7 @@ async function consoleTests(tmpRoot) {
     // 响应里不能出现作者机器上的绝对路径
     const payloads = { overview: overview.body, personas: afterCreate.body, stickers: stickers.body, settings: settings.body, paths: paths.body };
     const leaky = Object.entries(payloads)
-      .filter(([, payload]) => JSON.stringify(payload ?? {}).includes('C:\\\\D\\\\DSH') || JSON.stringify(payload ?? {}).includes('C:\\D\\DSH'))
+      .filter(([, payload]) => JSON.stringify(payload ?? {}).includes('C:\\\\D\\\\DSH') || JSON.stringify(payload ?? {}).includes('C:\\DSH'))
       .map(([name]) => name);
     eq(leaky, [], '接口返回里没有作者机器的绝对路径');
   } finally {
@@ -291,15 +291,15 @@ async function bridgeTests(tmpRoot) {
 
 async function hygieneTests(tmpRoot) {
   section('3/3 干净工程里不该有的东西');
-  const leaks = await grepTree(path.join(tmpRoot, 'src'), 'C:\\D\\DSH');
+  const leaks = await grepTree(path.join(tmpRoot, 'src'), 'C:\\DSH');
   eq(leaks, [], 'src 里没有作者机器的绝对路径');
-  const toolLeaks = await grepTree(path.join(tmpRoot, 'tools'), 'C:\\D\\DSH');
+  const toolLeaks = await grepTree(path.join(tmpRoot, 'tools'), 'C:\\DSH');
   eq(toolLeaks, [], 'tools 里没有作者机器的绝对路径');
-  const launcherLeaks = await grepTree(path.join(tmpRoot, 'launcher'), 'C:\\D\\DSH');
+  const launcherLeaks = await grepTree(path.join(tmpRoot, 'launcher'), 'C:\\DSH');
   eq(launcherLeaks, [], 'launcher 里没有作者机器的绝对路径');
 
   const configText = await readFile(path.join(tmpRoot, 'config.json'), 'utf8');
-  truthy(!configText.includes('C:\\D\\DSH'), 'config.json 里没有作者路径');
+  truthy(!configText.includes('C:\\DSH'), 'config.json 里没有作者路径');
   truthy(!/accessToken":\s*"[^"]+/.test(configText), '干净配置里没有 accessToken');
 
   const stateFiles = await readdir(path.join(tmpRoot, 'state')).catch(() => []);

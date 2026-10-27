@@ -5,86 +5,48 @@
   },
   "dsh": {
     "command": "dsh",
-    "mode": "auto",
     "profile": "headless",
-    "desktopProfile": "desktop",
-    "desktopBootTimeoutMs": 120000,
-    "desktopIdleMs": 900000,
-    "fallbackToHeadless": true,
-    "companion": true,
-    "companionDiscovery": "",
-    "patchPath": "patches/headless-model.yml",
-    "cwd": ".",
+    "patchPath": "patches/example-headless-model.yml",
+    "cwd": "qq-workspace",
     "timeoutMs": 300000,
     "permissionMode": "danger-full-access"
   },
+  "persona": {
+    "enabled": true,
+    "path": "qq-workspace/AGENTS.md",
+    "maxChars": 8000,
+    "dir": "state/personas",
+    "active": ""
+  },
   "security": {
-    "adminUserIds": [],
     "allowFrom": [
-      "1000000002"
+      1000000002
     ],
-    "denyFrom": [],
-    "privatePolicy": "allowlist",
     "allowGroups": true,
     "allowGroupMembers": true,
     "allowGroupIds": [
-      "200000001"
+      200000001
     ],
-    "denyGroupIds": [],
     "rateLimitPerMinute": 10,
     "maxChars": 4000
+  },
+  "behavior": {
+    "queuedNotice": "收到，马上回复。",
+    "maxReplyChunk": 1200,
+    "showErrors": true,
+    "wakeWord": "",
+    "wakeWordMatch": "contains",
+    "groupContextCount": 40
   },
   "groupMemory": {
     "limit": 300
   },
-  "behavior": {
-    "queuedNotice": "收到，正在处理…",
-    "maxReplyChunk": 1200,
-    "showErrors": true,
-    "sessionWindowMinutes": 180,
-    "wakeWord": "小助手",
-    "wakeWordMatch": "contains",
-    "groupContextCount": 40
-  },
-  "jev": {
-    "baseUrl": "",
-    "token": "",
-    "model": "",
-    "timeoutMs": 8000,
-    "contextMessages": 12
-  },
-  "automation": {
-    "bilibili": {
-      "enabled": false,
-      "cron": "0 9 * * *",
-      "keywords": [],
-      "upUsers": [],
-      "targets": [],
-      "mentionUid": "",
-      "commentEnabled": false,
-      "commentApproved": false
-    }
-  },
-  "plugins": {
-    "enabled": true,
-    "dir": "src/plugins",
-    "reply-tts": {
-      "provider": "edge",
-      "voice": "zh-CN-XiaoxiaoNeural",
-      "python": "python",
-      "maxChars": 600,
-      "timeoutMs": 60000
-    }
-  },
-  "logDir": "logs",
-  "stateDir": "state",
   "memory": {
     "enabled": true,
     "root": "记忆库",
-    "inject": true,
     "capture": true,
-    "maxInjectChars": 1200,
     "reflectEvery": 20,
+    "maxInjectChars": 1200,
     "reflectDaily": true,
     "reflectTime": "04:00",
     "reflectForce": true,
@@ -97,17 +59,15 @@
     "root": "state/stickers",
     "autoCollect": true,
     "autoTag": true,
-    "sendProbability": 1,
     "maxBytes": 5242880,
     "minBytes": 200,
     "maxPerMessage": 3,
     "perMinute": 20
   },
-  "persona": {
+  "plugins": {
     "enabled": true,
-    "path": "qq-workspace\\AGENTS.md",
-    "maxChars": 8000,
-    "dir": "state\\personas",
-    "active": ""
-  }
+    "dir": "src/plugins"
+  },
+  "logDir": "logs",
+  "stateDir": "state"
 }

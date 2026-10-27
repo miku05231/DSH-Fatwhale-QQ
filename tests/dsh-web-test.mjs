@@ -11,11 +11,11 @@ import { resolveDshInstallRoot } from '../src/dsh-desktop.js';
 import { probeCompanion, runCompanionDsh, fetchCompanionModelCatalog } from '../src/dsh-companion.js';
 import { SessionStore } from '../src/sessions.js';
 import { BrowserCdp, expandSessionGroups, sessionRows, openSessionRow } from './helpers/browser-cdp.mjs';
-import { createConsoleFixture, isolatedEnv as bridgeEnv } from './helpers/isolated-fixtures.mjs';
+import { DSH_TEST_VERSION, createConsoleFixture, isolatedEnv as bridgeEnv } from './helpers/isolated-fixtures.mjs';
 import { createFakeNapCat } from './ws-harness.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const EXPECTED_VERSION = '0.2.0-rc.2';
+const EXPECTED_VERSION = DSH_TEST_VERSION;
 const command = process.env.QQ_TEST_DSH_COMMAND || 'dsh';
 let dshRoot;
 try {

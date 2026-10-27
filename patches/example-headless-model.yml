@@ -1,0 +1,27 @@
+# patches/example-headless-model.yml
+#
+# headless profile 默认指向官方端点。如果你的账号余额不足（会报
+# "QUOTA: Insufficient Balance"），就在这里覆写成任何 OpenAI 兼容的端点，
+# 然后在 config.json 的 dsh.patchPath 指向本文件。
+#
+# 密钥不要写在这里：在 DSH 凭据库（~/.dsh/.credentials.yaml 的 refs 段）
+# 里存一个同名变量，apiKeyEnv 按名字去取。
+- id: llm-pi-ai
+  config:
+    providers:
+      my-openai-compatible:
+        apiKeyEnv: MY_LLM_API_KEY
+        api: openai-completions
+        baseURL: https://api.example.com/v1
+        models:
+          - id: some-fast-model
+            contextWindow: 200000
+            reasoningEfforts:
+              off: null
+              high: high
+              max: max
+- id: agent-default-model
+  config:
+    provider: my-openai-compatible
+    model: some-fast-model
+    reasoningEffort: max

@@ -28,9 +28,21 @@ function fakeProcess(implementation) {
     return child;
   };
 }
+function recordingEdgeProvider(calls) {
+  return createEdgeTtsProvider({ spawnImpl: fakeProcess(async (child, command, args) => {
+    calls.push({
+      command, args: [...args],
+      voice: args[args.indexOf('--voice') + 1],
+      stdin: child.stdin.read().toString(),
+    });
+    await fs.writeFile(args.at(-1), audio);
+    child.emit('close', 0);
+  }) });
+}
 
 try {
   assert.equal(meta.defaultEnabled, false);
+  assert.equal(meta.configSchema.find(({ key }) => key === 'speechLanguage')?.default, 'auto');
   await check('disabled', async () => {
     const result = await sendReplyVoice('retained text', {
       provider: { synthesize() { throw new Error('must not run'); } }, tempDir: root,
@@ -135,6 +147,18 @@ try {
     await assert.rejects(synthesizeSpeech('hello', { config: { provider: 'unknown' }, tempDir: root }), /tts_provider_unsupported/);
   });
 
+  await check('API temporary files follow the selected response format', async () => {
+    for (const [responseFormat, extension] of [[undefined, '.mp3'], ['wav', '.wav']]) {
+      await synthesizeSpeech('format fixture', {
+        config: { provider: 'openai-compatible', responseFormat }, tempDir: root,
+        provider: { async synthesize(text, { outputFile }) {
+          assert.equal(path.extname(outputFile), extension);
+          await fs.writeFile(outputFile, audio);
+        } },
+      });
+    }
+  });
+
   await check('edge CLI uses stdin and awaits close', async () => {
     let stdin = '';
     let closed = false;
@@ -148,6 +172,7 @@ try {
       assert.equal(options.env.PYTHONIOENCODING, 'utf-8');
       stdin = child.stdin.read().toString();
       const outputFile = args.at(-1);
+      assert.equal(path.extname(outputFile), '.mp3', 'Edge output remains MP3 regardless of API format');
       await fs.writeFile(outputFile, audio);
       child.emit('exit', 0);
       await new Promise(resolve => setTimeout(resolve, 20));
@@ -155,9 +180,85 @@ try {
       closed = true;
       child.emit('close', 0);
     }) });
-    assert.deepEqual(await synthesizeSpeech('private spoken text 中文语音', { tempDir: root, provider }), audio);
+    assert.deepEqual(await synthesizeSpeech('private spoken text 中文语音', { tempDir: root, provider, config: { responseFormat: 'wav' } }), audio);
     assert.equal(stdin, 'private spoken text 中文语音');
     assert.equal(closed, true);
+  });
+
+  await check('edge speech language selects voice without rewriting text', async () => {
+    const calls = [];
+    const provider = recordingEdgeProvider(calls);
+    const chinese = '今天天气不错，我们出去走走吧。';
+    const japanese = '今日はいい天気ですね。';
+
+    // auto keeps the custom voice and the original text.
+    await synthesizeSpeech(chinese, {
+      config: { speechLanguage: 'auto', voice: 'zh-CN-YunxiNeural' }, tempDir: root, provider,
+    });
+    assert.equal(calls[0].voice, 'zh-CN-YunxiNeural');
+    assert.equal(calls[0].stdin, chinese);
+
+    // ja with a Chinese default voice resolves to a Japanese Edge voice.
+    await synthesizeSpeech(chinese, {
+      config: { speechLanguage: 'ja', voice: 'zh-CN-XiaoxiaoNeural' }, tempDir: root, provider,
+    });
+    assert.equal(calls[1].voice, 'ja-JP-NanamiNeural');
+    assert.equal(calls[1].stdin, chinese, 'language selection must not translate the text');
+
+    // ja keeps an already Japanese custom voice.
+    await synthesizeSpeech(japanese, {
+      config: { speechLanguage: 'ja', voice: 'ja-JP-KeitaNeural' }, tempDir: root, provider,
+    });
+    assert.equal(calls[2].voice, 'ja-JP-KeitaNeural');
+    assert.equal(calls[2].stdin, japanese);
+
+    // Switching back to auto keeps the voice currently configured.
+    await synthesizeSpeech(japanese, {
+      config: { speechLanguage: 'auto', voice: 'ja-JP-NanamiNeural' }, tempDir: root, provider,
+    });
+    assert.equal(calls[3].voice, 'ja-JP-NanamiNeural');
+    assert.equal(calls[3].stdin, japanese);
+    assert.equal(calls.length, 4);
+  });
+
+  await check('selected language with translation disabled keeps text and translator untouched', async () => {
+    const calls = [];
+    const provider = recordingEdgeProvider(calls);
+    const translated = [];
+    const translator = (text) => { translated.push(text); return Promise.resolve('must not be used'); };
+    const chinese = '这句中文保持原样。';
+    const japanese = 'この日本語はそのまま。';
+
+    await synthesizeSpeech(chinese, {
+      config: { speechLanguage: 'ja', translationEnabled: false, voice: 'zh-CN-XiaoxiaoNeural' },
+      tempDir: root, provider, translator,
+    });
+    assert.equal(calls[0].voice, 'ja-JP-NanamiNeural');
+    assert.equal(calls[0].stdin, chinese);
+
+    await synthesizeSpeech(japanese, {
+      config: { speechLanguage: 'auto', translationEnabled: false, voice: 'ja-JP-KeitaNeural' },
+      tempDir: root, provider, translator,
+    });
+    assert.equal(calls[1].voice, 'ja-JP-KeitaNeural');
+    assert.equal(calls[1].stdin, japanese);
+    assert.deepEqual(translated, [], 'translation disabled must never call the translator');
+  });
+
+  await check('invalid speech language is rejected before Edge starts', async () => {
+    let spawns = 0;
+    const provider = createEdgeTtsProvider({ spawnImpl: fakeProcess(async (child, command, args) => {
+      spawns++;
+      await fs.writeFile(args.at(-1), audio);
+      child.emit('close', 0);
+    }) });
+    const result = await sendReplyVoice('保留的文本', {
+      enabled: true, tempDir: root, provider,
+      config: { provider: 'edge', speechLanguage: 'klingon', voice: 'zh-CN-XiaoxiaoNeural' },
+      sendRecord() { throw new Error('must not send'); },
+    });
+    assert.deepEqual(result, { sent: false, error: 'tts_configuration_invalid' });
+    assert.equal(spawns, 0, 'the Edge CLI must not start for an invalid speech language');
   });
 
   await check('timeout stops child before cleanup', async () => {

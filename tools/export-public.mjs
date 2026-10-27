@@ -47,8 +47,13 @@ const INCLUDE = [
   'docs/verification-v3.1.2.md',
   'docs/verification-v3.1.3.md',
   'docs/releases',
+  'docs/image-generation.md',
+  'docs/media-providers.md',
   '.github',
   'README.md',
+  'SPEC.md',
+  'SPEC-2.md',
+  'SPEC-launcher.md',
   'package.json',
   'deepseek-waitou.png',
   'scripts',
@@ -58,11 +63,15 @@ const INCLUDE = [
   '.dockerignore',
   '.env.example',
   'qq-bridge.cmd',
+  '一键启动.cmd',
+  'install-napcat.cmd',
+  'start-tray.cmd',
+  'setup.cmd',
   'start.sh',
 ];
 
 /** 这些即使在白名单里也不复制 */
-const EXCLUDE = [/^AGENTS\.md$/i, /^tools[\\/]sticker\.mjs$/, /state[\\/]/, /logs[\\/]/, /napcat[\\/]/, /node_modules[\\/]/, /\.tmp$/, /config\.json$/, /\.credentials/];
+const EXCLUDE = [/(^|[\\/])\.imagegen-runtime([\\/]|$)/, /^AGENTS\.md$/i, /^tools[\\/]sticker\.mjs$/, /state[\\/]/, /logs[\\/]/, /napcat[\\/]/, /node_modules[\\/]/, /\.tmp$/, /config\.json$/, /\.credentials/];
 
 /** 文本文件后缀：参与脱敏 */
 const TEXT_EXT = new Set(['.js', '.mjs', '.cjs', '.ps1', '.cmd', '.sh', '.bat', '.css', '.html', '.md', '.json', '.yml', '.yaml', '.txt', '.example']);
@@ -85,7 +94,7 @@ const BASE_REPLACEMENTS = [
 
 /**
  * 同一个文件在不同机器上的路径写法不一样：文档里写反斜杠的单层路径，JS 字符串里写双层反斜杠。
- * 以及被小写化的 `c:\d\dsh`。三种都要换，否则自检会漏。
+ * 以及被小写化的 `C:\DSH`。三种都要换，否则自检会漏。
  */
 function expandReplacements(pairs) {
   const out = [];
@@ -165,10 +174,11 @@ node src\\webui\\server.mjs   # 然后访问 http://127.0.0.1:5830
 
 ## 测试
 
-在未创建 \`config.json\` 的干净源码目录运行。真实内核固定为 DSH \`0.2.0-rc.2\`，浏览器检查使用 Edge。
+在未创建 \`config.json\` 的干净源码目录运行。真实内核默认 DSH \`0.2.0-rc.2\`，可显式选择新版，浏览器检查使用 Edge。
 
 \`\`\`powershell
 $env:QQ_TEST_DSH_COMMAND = 'dsh' # 已安装 0.2.0-rc.2 的命令，也可填写 lib\\bin.js 的绝对路径
+$env:QQ_TEST_DSH_VERSION = '0.2.0-rc.2' # 必须与上述入口匹配；新版已验证 0.2.1-rc.3
 $env:QQ_TEST_BROWSER_EXE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 node tests\\run-all.mjs
 node tests\\plugins-test.mjs # 单跑插件宿主

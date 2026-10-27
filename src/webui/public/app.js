@@ -5,6 +5,7 @@
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+let imagegenUi;
 
 const STATE = {
   page: 'overview',
@@ -280,7 +281,7 @@ function currentPage() {
 async function refreshPage(name = currentPage()) {
   if (name === 'overview') return loadOverview();
   if (name === 'memory') return loadMemory();
-  if (name === 'stickers') return loadStickers();
+  if (name === 'stickers') { await loadStickers(); return imagegenUi?.load(); }
   if (name === 'persona') return loadPersonas();
   if (name === 'sessions') return loadSessions();
   if (name === 'model') return loadModel();
@@ -385,13 +386,17 @@ function renderServiceCards(overview) {
       key: 'dsh',
       name: 'DSH',
       running: dsh.running,
-      badge: dsh.running ? '运行中' : '未运行',
+      badge: dsh.running ? (dsh.kind === 'on-demand' ? '按需运行' : '运行中') : '未运行',
       tone: dsh.running ? 'ok' : 'bad',
-      meta: `${escapeHtml(dsh.processName)}<br>控制台启动于 ${humanUptime(overview.uptimeSeconds)}前`,
-      actions: [
-        dsh.running ? { label: '停止', action: 'stop' } : { label: '启动', action: 'start', kind: 'primary' },
-        { label: '重启', action: 'restart' },
-      ],
+      meta: `${escapeHtml(dsh.processName || 'DeepSeek Harness')}` +
+        `${dsh.version ? ` · v${escapeHtml(dsh.version)}` : ''}<br>` +
+        `${escapeHtml(dsh.detail || `控制台启动于 ${humanUptime(overview.uptimeSeconds)}前`)}`,
+      actions: dsh.controlsAvailable === false
+        ? []
+        : [
+            dsh.running ? { label: '停止', action: 'stop' } : { label: '启动', action: 'start', kind: 'primary' },
+            { label: '重启', action: 'restart' },
+          ],
     }),
   );
 }
@@ -1567,6 +1572,7 @@ function pluginFieldHtml(plugin, field) {
   const value = plugin.config?.[field.key];
   const key = escapeHtml(field.key);
   const label = escapeHtml(field.label || field.key);
+  const id = `plugin-${escapeHtml(plugin.name)}-${key}`;
 
   if (field.type === 'bool') {
     return `<label class="switch-row">
@@ -1583,10 +1589,10 @@ function pluginFieldHtml(plugin, field) {
         return `<option value="${escapeHtml(v)}"${sel}>${escapeHtml(l)}</option>`;
       })
       .join('');
-    return `<label class="field-label">${label}</label><select class="select-field" data-plugin-field="${key}">${options}</select>`;
+    return `<label class="field-label" for="${id}">${label}</label><select class="select-field" id="${id}" data-plugin-field="${key}">${options}</select>`;
   }
   if (field.type === 'text') {
-    return `<label class="field-label">${label}</label><textarea class="text-field text-field--area" data-plugin-field="${key}">${escapeHtml(value ?? '')}</textarea>`;
+    return `<label class="field-label" for="${id}">${label}</label><textarea class="text-field text-field--area" id="${id}" data-plugin-field="${key}">${escapeHtml(value ?? '')}</textarea>`;
   }
   if (field.type === 'int') {
     return `<label class="switch-row">
@@ -1594,7 +1600,47 @@ function pluginFieldHtml(plugin, field) {
         <input class="text-field text-field--num" type="number" data-plugin-field="${key}" value="${escapeHtml(value ?? 0)}" />
       </label>`;
   }
-  return `<label class="field-label">${label}</label><input class="text-field" type="text" data-plugin-field="${key}" value="${escapeHtml(value ?? '')}" />`;
+  if (field.type === 'secret') {
+    const saved = plugin.secretFields?.[field.key];
+    return `<label class="field-label" for="${id}">${label}</label><input class="text-field" id="${id}" type="password" autocomplete="new-password" data-plugin-field="${key}" placeholder="${saved ? '已保存；留空保留原密钥' : '留空表示不鉴权'}" />
+      <label class="switch-row"><span>不使用密钥</span><input class="switch" type="checkbox" data-plugin-no-key="${key}" ${saved ? '' : 'checked'} /></label>`;
+  }
+  return `<label class="field-label" for="${id}">${label}</label><input class="text-field" id="${id}" type="text" data-plugin-field="${key}" value="${escapeHtml(value ?? '')}" />`;
+}
+
+function updatePluginFields(card, plugin, changedField) {
+  const provider = card.querySelector('[data-plugin-field="provider"]')?.value;
+  for (const field of plugin.configSchema || []) {
+    const row = card.querySelector(`[data-plugin-row="${field.key}"]`);
+    const input = card.querySelector(`[data-plugin-field="${field.key}"]`);
+    if (!row || !input) continue;
+    row.hidden = (Array.isArray(field.providers) && !field.providers.includes(provider)) ||
+      Object.entries(field.visibleWhen || {}).some(([key, expected]) => {
+        const control = card.querySelector(`[data-plugin-field="${key}"]`);
+        return (control?.type === 'checkbox' ? control.checked : control?.value) !== expected;
+      });
+    if (field.type === 'select') {
+      for (const option of input.options) {
+        const schema = (field.options || []).find((item) => item.value === option.value);
+        option.disabled = option.hidden = Array.isArray(schema?.providers) && !schema.providers.includes(provider);
+      }
+      if (input.selectedOptions[0]?.disabled) input.value = field.default;
+    }
+    const presetField = field.presetsBy || 'provider';
+    if (field.presets && (!field.presetsBy || !row.hidden) &&
+        (changedField === presetField || (field.presetsBy && changedField === 'provider') || !input.value)) {
+      const value = card.querySelector(`[data-plugin-field="${presetField}"]`)?.value;
+      if (Object.hasOwn(field.presets, value)) {
+        if (!field.preserveMatchingPrefix || !input.value.startsWith(`${value}-`)) input.value = field.presets[value];
+      }
+      else if (!field.presetsBy) input.value = '';
+    }
+    if (changedField === 'provider' && field.type === 'secret') {
+      input.value = '';
+      input.placeholder = '留空表示不鉴权';
+      card.querySelector(`[data-plugin-no-key="${field.key}"]`).checked = true;
+    }
+  }
 }
 
 function renderPlugins(data) {
@@ -1623,7 +1669,7 @@ function renderPlugins(data) {
 
   list.innerHTML = plugins
     .map((plugin) => {
-      const fields = (plugin.configSchema || []).map((field) => pluginFieldHtml(plugin, field)).join('');
+      const fields = (plugin.configSchema || []).map((field) => `<div data-plugin-row="${escapeHtml(field.key)}">${pluginFieldHtml(plugin, field)}</div>`).join('');
       return `<section class="card card--pad plugin-card" data-plugin="${escapeHtml(plugin.name)}">
         <div class="row-between">
           <div class="card__head card__head--flush">
@@ -1644,6 +1690,28 @@ function renderPlugins(data) {
 
   $$('#pluginsList .plugin-card').forEach((card) => {
     const name = card.dataset.plugin;
+    const plugin = plugins.find((p) => p.name === name);
+    updatePluginFields(card, plugin);
+    const drivers = new Set(['provider']);
+    for (const field of plugin.configSchema || []) {
+      if (field.presetsBy) drivers.add(field.presetsBy);
+      for (const key of Object.keys(field.visibleWhen || {})) drivers.add(key);
+    }
+    for (const key of drivers) card.querySelector(`[data-plugin-field="${key}"]`)?.addEventListener('change', () => updatePluginFields(card, plugin, key));
+    const clearSecrets = () => {
+      for (const field of plugin.configSchema || []) if (field.type === 'secret') {
+        const input = card.querySelector(`[data-plugin-field="${field.key}"]`);
+        input.value = ''; input.placeholder = '留空表示不鉴权';
+        card.querySelector(`[data-plugin-no-key="${field.key}"]`).checked = true;
+      }
+    };
+    card.querySelector('[data-plugin-field="baseUrl"]')?.addEventListener('input', clearSecrets);
+    for (const field of plugin.configSchema || []) if (field.type === 'secret') {
+      const input = card.querySelector(`[data-plugin-field="${field.key}"]`);
+      const noKey = card.querySelector(`[data-plugin-no-key="${field.key}"]`);
+      input.addEventListener('input', () => { noKey.checked = !input.value.trim(); });
+      noKey.addEventListener('change', () => { if (noKey.checked) { input.value = ''; input.placeholder = '留空表示不鉴权'; } });
+    }
     card.querySelector('[data-role="enabled"]')?.addEventListener('change', (event) => {
       setPluginEnabled(name, event.target.checked);
     });
@@ -1684,7 +1752,11 @@ async function savePluginConfig(card, name) {
   for (const field of plugin.configSchema || []) {
     const node = card.querySelector(`[data-plugin-field="${field.key}"]`);
     if (!node) continue;
-    if (field.type === 'bool') config[field.key] = node.checked;
+    if (card.querySelector(`[data-plugin-row="${field.key}"]`)?.hidden) continue;
+    if (field.type === 'secret') {
+      if (card.querySelector(`[data-plugin-no-key="${field.key}"]`)?.checked) config[field.key] = '';
+      else if (node.value.trim()) config[field.key] = node.value.trim();
+    } else if (field.type === 'bool') config[field.key] = node.checked;
     else if (field.type === 'int') config[field.key] = Number(node.value);
     else config[field.key] = node.value;
   }
@@ -2864,6 +2936,9 @@ function initEvents() {
 }
 
 function init() {
+  void import('./imagegen.js').then(({ initImagegen }) => {
+    imagegenUi = initImagegen({ api, notify: snackbar, confirm: confirmDialog });
+  }).catch((err) => snackbar(err.message));
   initEvents();
   initRipples();
   initPullToRefresh();

@@ -96,7 +96,7 @@ try {
   });
 
   await check('probability 0 removes only real stickers and keeps text, ordinary images, and documents', async () => {
-    await saveConfig(0);
+      await saveConfig(0, { allowedRoots: [outside] });
     const keep = [text('hello'), image(photo), image('https://example.invalid/photo.png'),
       { type: 'file', data: { file: document } }];
     const params = { group_id: 12345, message: [
@@ -293,13 +293,13 @@ try {
   });
 
   await check('QQ forwards and ordinary file uploads use the same policy without blocking desktop files', async () => {
-    await saveConfig(0);
+    await saveConfig(0, { allowedRoots: [outside] });
     const messages = [{ type: 'node', data: { name: 'fixture', content: [text('kept'), face] } }];
     assertCli(await runCli(['send_group_forward_msg', JSON.stringify({ group_id: 12345, messages })]));
     assert.deepEqual(fake.state.calls.at(-1).params.messages[0].data.content, [text('kept')]);
     for (const file of [document, photo]) {
       assertCli(await runCli(['upload_group_file', JSON.stringify({ group_id: 12345, file, name: path.basename(file) })]));
-      assert.equal(fake.state.calls.at(-1).params.file, file);
+      assert.match(fake.state.calls.at(-1).params.file, new RegExp(`/state/outbox/[^/]+-${path.basename(file)}$`));
     }
   });
 } finally {

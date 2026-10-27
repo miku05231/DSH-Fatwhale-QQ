@@ -9,11 +9,13 @@ export const canonicalItemKey = real.canonicalItemKey;
 const trace = (entry) => fs.appendFileSync(path.join(root, 'trace.jsonl'), `${JSON.stringify(entry)}\n`);
 
 export async function runChatOnlyDsh(prompt, options = {}) {
-  const kind = options.requesterId ? 'chat' : prompt.includes('{"relevant":false}') ? 'comment' : 'summary';
+  const kind = options.requesterId ? 'chat' : prompt.includes('[语音翻译]') ? 'translation'
+    : prompt.includes('{"relevant":false}') ? 'comment' : 'summary';
   trace({ event: 'model', kind, sessionId: options.sessionId, prompt });
   return {
     sessionId: kind === 'chat' ? 'fixture-private-session' : null,
-    finalText: kind === 'comment' ? '{"relevant":true,"text":"fixture polite comment"}'
+    finalText: kind === 'translation' ? 'こんにちは。翻訳した音声です。'
+      : kind === 'comment' ? '{"relevant":true,"text":"fixture polite comment"}'
       : kind === 'summary' ? 'fixture platform summary'
         : prompt.includes('VOICE_FAIL') ? 'fixture reply failure' : 'fixture reply speech',
   };

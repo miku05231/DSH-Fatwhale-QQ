@@ -1,22 +1,12 @@
-* text=auto
-
-# Windows PowerShell 5.1 读 LF 会乱码，脚本保持原样不做换行转换
+# .ps1 必须保持「UTF-8 带 BOM + CRLF」原样：PS 5.1 没有 BOM 会按 ANSI 读、
+# 直接乱码甚至语法错误。所以对 .ps1 关掉换行转换，让 git 按字节存。
 *.ps1 -text
-*.psm1 -text
-*.cmd -text
-*.bat -text
-
-# 容器和 Linux 脚本必须 LF
-*.sh text eol=lf
-Dockerfile text eol=lf
-docker-compose.yml text eol=lf
-docker/*.sh text eol=lf
-
-# 二进制资源
-*.png binary
-*.ico binary
-*.jpg binary
-*.gif binary
-*.webp binary
-*.zip binary
-*.exe binary
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.js text eol=lf
+*.mjs text eol=lf
+*.md text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.yml text eol=lf

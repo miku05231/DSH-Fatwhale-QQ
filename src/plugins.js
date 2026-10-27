@@ -36,7 +36,7 @@ import { pathToFileURL } from 'node:url';
 export const PLUGIN_HOOKS = ['onMessage', 'beforeReply', 'afterReply'];
 
 /** 配置项类型（控制台据此渲染表单） */
-export const SCHEMA_TYPES = ['string', 'text', 'bool', 'int', 'select'];
+export const SCHEMA_TYPES = ['string', 'text', 'bool', 'int', 'select', 'secret'];
 
 function asText(value) {
   return typeof value === 'string' ? value : value === undefined || value === null ? '' : String(value);
@@ -71,7 +71,7 @@ export function coerceValue(type, value, fallback) {
     const n = Number(value);
     return Number.isFinite(n) ? Math.trunc(n) : Number(fallback) || 0;
   }
-  if (type === 'string' || type === 'text' || type === 'select') return asText(value);
+  if (type === 'string' || type === 'text' || type === 'select' || type === 'secret') return asText(value);
   return value;
 }
 

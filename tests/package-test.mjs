@@ -344,7 +344,7 @@ async function main() {
     const ps1Bom = fs.readFileSync(path.join(outDir, 'launcher', 'Launcher.ps1'));
     check(ps1Bom[0] === 0xef && ps1Bom[1] === 0xbb && ps1Bom[2] === 0xbf, '.ps1 仍是 UTF-8 BOM（PS 5.1 才不会乱码）');
     const processControl = readText(path.join(outDir, 'launcher', 'lib', 'ProcessControl.ps1'));
-    check(!/C:\\D\\DSH/i.test(processControl), 'ProcessControl 里没有写死本机路径');
+    check(!/C:\\DSH/i.test(processControl), 'ProcessControl 里没有写死本机路径');
     check(processControl.includes('$PSScriptRoot'), 'ProcessControl 靠 $PSScriptRoot 定位项目根目录');
 
     section('7/7 默认会打 zip');

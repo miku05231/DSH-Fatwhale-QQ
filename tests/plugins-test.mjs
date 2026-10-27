@@ -114,7 +114,7 @@ async function main() {
   try {
     section('1 导出与常量');
     eq(PLUGIN_HOOKS, ['onMessage', 'beforeReply', 'afterReply'], '钩子清单');
-    eq(SCHEMA_TYPES, ['string', 'text', 'bool', 'int', 'select'], '配置类型清单');
+    eq(SCHEMA_TYPES, ['string', 'text', 'bool', 'int', 'select', 'secret'], '配置类型清单');
 
     section('2 加载与元数据校验');
     const names = [...host.registry.keys()].sort();

@@ -1793,6 +1793,43 @@ textarea {
   }
 }
 
+#stickerLibraryView {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+#stickerLibraryView[hidden], .imagegen[hidden] { display: none; }
+#imagegenView [hidden], [data-plugin-row][hidden] { display: none; }
+body:has(#page-stickers.is-active #imagegenView:not([hidden])) #fab { display: none; }
+.imagegen { padding: 12px 4px; min-width: 0; }
+.imagegen .btn, .imagegen .card__title { letter-spacing: 0; }
+.imagegen .text-field { border-radius: 8px; }
+.imagegen-settings, .imagegen-advanced { border-bottom: 1px solid var(--outline-variant); padding: 16px 0; }
+.imagegen summary { cursor: pointer; font-size: 14px; color: var(--on-surface-variant); }
+.imagegen .field-label { display: block; margin: 12px 0 6px; }
+.imagegen .field-label .text-field { margin-top: 6px; }
+.imagegen-form { margin-top: 20px; }
+.imagegen-prompt { resize: vertical; min-height: 112px; font: inherit; line-height: 1.6; }
+.imagegen-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.imagegen-fields > * { min-width: 0; }
+.imagegen-submit { gap: 12px; margin-top: 16px; align-items: flex-start; }
+.imagegen-submit .btn { flex-shrink: 0; }
+.imagegen-submit .card__hint { overflow-wrap: anywhere; }
+.imagegen-history-head { margin: 28px 0 8px; }
+.imagegen-job { display: flex; align-items: flex-start; gap: 16px; border-top: 1px solid var(--outline-variant); padding: 16px 0; }
+.imagegen-job-info { min-width: 0; flex: 1; }
+.imagegen-job-info strong { font-size: 14px; font-weight: 600; }
+.imagegen-job-prompt { font-size: 14px; margin: 8px 0; overflow-wrap: anywhere; white-space: pre-wrap; max-height: 112px; overflow: auto; }
+.imagegen-job .card__hint { overflow-wrap: anywhere; margin-bottom: 8px; }
+.imagegen-preview { width: 160px; height: 160px; flex: 0 0 160px; display: flex; align-items: center; justify-content: center; background: var(--surface-container-lowest); border: 1px solid var(--outline-variant); border-radius: 8px; overflow: hidden; }
+.imagegen-preview img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
+@media (max-width: 480px) {
+  .imagegen-job { flex-direction: column; }
+  .imagegen-preview { width: 100%; height: 240px; flex-basis: auto; }
+  .imagegen-fields { grid-template-columns: 1fr; gap: 0; }
+}
+
 /* 打印（备份人格时方便导出） */
 @media print {
   .top-app-bar,

@@ -533,7 +533,8 @@ export async function resolve(specifier, context, nextResolve) {
     const uploaded = napcat.state.calls.filter((call) => call.action === 'upload_group_file');
     check('The administrator invokes the actual QQ upload command for the current group',
       uploaded.length === 1 && uploaded[0].params.group_id === GROUP &&
-      uploaded[0].params.file === noticePath && uploaded[0].params.name === 'notice.txt');
+      /\/state\/outbox\/[^/]+-notice\.txt$/.test(uploaded[0].params.file) &&
+      uploaded[0].params.name === 'notice.txt');
     check('The administrator runner reads the temporary Desktop notice before uploading',
       currentAdminCalls().some((call) => call.phase === 'uploaded' &&
         call.contents === 'Temporary desktop notice: permission fixture only.'));

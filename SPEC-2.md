@@ -441,7 +441,7 @@ if (isGroup && !isOwner && config?.security?.allowGroupMembers !== true) {
 | --- | --- |
 | 白名单 | `src/`、`launcher/`、`tools/`、`tests/`、`docs/控制台架构.md`、`docs/测试清单.md`、`README.md` |
 | 黑名单 | `config.json`、`state/`、`logs/`、`napcat/`、`node_modules/`、`.credentials*` 目录/文件一律跳过 |
-| 脱敏 | 见下表；同一路径的三种写法（原生 `C:\DSH`、JS 字符串 `C:\\D\\DSH`、小写化）都要换 |
+| 脱敏 | 见下表；同一路径的三种写法（原生 `C:\DSH`、JS 字符串 `C:\\DSH`、小写化）都要换 |
 | 生成 | `README.md`、`LICENSE`(MIT)、`.gitignore`、`.gitattributes`、`config.example.json`、`patches/example-headless-model.yml` |
 | 自检 | 扫产物全部文本文件，命中 `1000000001`/`1000000002`/`200000001`/`Users\you`/`api.example.com`/`api.example.com`/`sk-xxxx`/WebUI token 即报错，退出码 1 |
 

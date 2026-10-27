@@ -23,16 +23,24 @@ flowchart LR
 
 控制台「插件」页的「回复语音」默认关闭。该插件通过 `afterReply` 注册文字发送之后的任务。只有文字所有分段发送成功才运行语音合成；语音合成或发送失败不影响已发送的文字。
 
-首个 provider 复用 `edge-tts` 官方 Python CLI。运行桥接的电脑需要为所选 Python 安装：
+平台可选 Edge TTS、OpenAI、硅基流动和自定义 OpenAI 兼容服务。Edge TTS 复用 `edge-tts` Python CLI，运行桥接的电脑需要为所选 Python 安装：
 
 ```powershell
 python -m pip install -r tools/requirements-voice.txt
 python -m edge_tts --help
 ```
 
-插件配置包含 Python 命令、音色、最大字符数和超时。默认音色为 `zh-CN-XiaoxiaoNeural`，默认最多 600 个字符、60 秒超时。合成文本通过 stdin 传入；临时文件在成功、失败或取消后清理。音频以 OneBot `record` 段的 `base64://` 数据发送，不依赖 NapCat 与桥接共享文件路径。它只做文字转语音，不包含语音识别或翻译。
+插件配置包含 Python 命令、音色、最大字符数和超时。默认音色为 `zh-CN-XiaoxiaoNeural`，默认最多 600 个字符、60 秒合成超时。Edge 合成文本通过 stdin 传入；临时文件在成功、失败或取消后清理。音频以 OneBot `record` 段的 `base64://` 数据发送，不依赖 NapCat 与桥接共享文件路径。不包含语音识别。
 
-Provider 合同为 `synthesize(text, {outputFile, voice, python, timeoutMs, signal})`。后续引擎可沿该接口扩展；普通聊天的可信语音插件不会开放管理员专用的任意用户插件或电脑工具。
+v1.4.0 新增独立的“语音语种”（`speechLanguage`），默认自动。指定 Edge 语种会选择相应音色，自定义兼容接口则发送 `language` 扩展字段，须服务支持；OpenAI、硅基流动只提供自动。语种设置不触发翻译，关闭翻译后直接朗读原文。翻译专用字段仅在开启翻译时显示，关闭后保留偏好。当前 Irodori 模型只支持日语，设置中文不会令其获得中文能力。
+
+v1.3.0 可开启“合成前翻译”，目标语言默认日语，可填写附加翻译要求，翻译默认另有 60 秒超时。文字全部发送成功后，使用当前 DSH 模型和模型补丁，在全新、无工具、无历史的会话中翻译，再把译文送入所选 TTS；QQ 文字保留原文。翻译异常、空结果、超时或取消时跳过语音，不回退为原文合成。这参考了 `miku05231/astrbot_plugin_translate_tts` 的处理顺序。翻译作为当前回复任务的一部分执行，不嵌套提交到同一串行队列。
+
+API 平台使用 `POST /v1/audio/speech`，填写服务根地址、语音模型、API 音色和可选密钥；不依赖本机 Python。自定义兼容平台的 API 音色可留空，此时请求省略 `voice` 并使用服务默认音色。音频格式可选 MP3 或 WAV，默认 MP3；Irodori-TTS 使用模型 `irodori-tts`、空音色和 WAV。密钥留空时不发送鉴权头，保存后不会回显，勾选“不使用密钥”可清除。配置保存后重启桥接生效。示例和平台默认值见 [多平台接入](media-providers.md)。
+
+Provider 合同为 `synthesize(text, {outputFile, speechLanguage, voice, python, baseUrl, model, apiVoice, responseFormat, apiKey, timeoutMs, signal})`。普通聊天的可信语音插件不会开放管理员专用的任意用户插件或电脑工具。
+
+2026-10-25 的 Irodori 局域网排查表明，HTTP 200、有效 WAV 和存在波形都不足以证明内容正确。补齐翻译后仍有异常，SSH 排查发现 LoRA 的 71 条训练文本全部是同一句占位句。停用该 LoRA 并使用原模型加真红参考后，日语直输、默认调用、真实翻译和 QQ 转码后的短句转写均与目标一致；人工试听和长文仍待验收。见 [诊断报告](tts-translation-diagnosis-20261025.md)。
 
 ## 自动化配置
 
@@ -94,6 +102,7 @@ node tests/jev-classifier-test.mjs
 node tests/jev-admission-test.mjs
 node tests/reply-tts-test.mjs
 node tests/reply-delivery-test.mjs
+node tests/tts-translation-test.mjs
 node tests/bilibili-test.mjs
 node tests/bili-cookies-test.mjs
 node tests/bilibili-login-test.mjs

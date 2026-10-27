@@ -439,6 +439,35 @@ test('overview UI cannot turn green from an open port or an ordinary QQ process'
   assert.equal(context.statusTone(overview).state, 'ok');
 });
 
+test('DSH card reflects an on-demand runtime instead of a Windows-only process name', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-napcat-dsh-runtime-'));
+  let fixture;
+  try {
+    fixture = await createConsoleFixture(root, {
+      napcatHealth: { async check() { return { state: 'online', loggedIn: true, reachable: true }; }, close() {} },
+    });
+    const dshRoot = path.join(root, 'node_modules', '@deepseek-ai', 'dsh');
+    const bin = path.join(dshRoot, 'lib', 'bin.js');
+    await fs.mkdir(path.dirname(bin), { recursive: true });
+    await fs.writeFile(path.join(dshRoot, 'package.json'),
+      JSON.stringify({ name: '@deepseek-ai/dsh', version: '9.9.9-test' }));
+    await fs.writeFile(bin, '// fixture\n');
+    fixture.config.dsh.command = bin;
+    const overview = await currentOverview(fixture.instance);
+    assert.equal(overview.dsh.running, true);
+    assert.equal(overview.dsh.kind, 'on-demand');
+    assert.equal(overview.dsh.version, '9.9.9-test');
+    assert.equal(
+      overview.dsh.controlsAvailable,
+      process.platform === 'win32' && await fs.stat(path.join(root, 'launcher', 'lib', 'ProcessControl.ps1'))
+        .then(() => true).catch(() => false),
+    );
+  } finally {
+    await fixture?.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('overview remains valid while shutdown and a refresh overlap', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-napcat-shutdown-'));
   let fixture;

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { resolveDshInstallRoot } from '../../src/dsh-desktop.js';
 
-export const DSH_TEST_VERSION = '0.2.0-rc.2';
+export const DSH_TEST_VERSION = process.env.QQ_TEST_DSH_VERSION || '0.2.0-rc.2';
 
 export function isolatedEnv(root, extra = {}) {
   const env = {};
@@ -52,14 +52,27 @@ export async function prepareIsolatedHome(root) {
 }
 
 export async function freePort() {
-  const socket = net.createServer();
-  await new Promise((resolve, reject) => {
+  // fetch() rejects some "bad ports" (e.g. 6669) and Windows may hand out
+  // ephemeral ports below 10000, so probe an explicit high port instead.
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const port = 20000 + Math.floor(Math.random() * 20000);
+    try {
+      await probePort(port);
+      return port;
+    } catch { /* 端口占用，重试 */ }
+  }
+  throw new Error('无法分配一个可用于 HTTP fetch 的测试端口');
+}
+
+function probePort(port) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createServer();
+    socket.unref();
     socket.once('error', reject);
-    socket.listen(0, '127.0.0.1', resolve);
+    socket.listen(port, '127.0.0.1', () => {
+      socket.close(() => resolve(port));
+    });
   });
-  const port = socket.address().port;
-  await new Promise((resolve) => socket.close(resolve));
-  return port;
 }
 
 export function modelLayer(baseURL, provider = 'test-local', model = 'test-chat') {

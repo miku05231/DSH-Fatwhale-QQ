@@ -25,14 +25,18 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createUpdateManager } from '../updates.mjs';
+import { createImagegenApi } from './imagegen-api.mjs';
 import { createPlatformScheduler } from '../platform-scheduler.js';
 import { createBilibiliQrLogin } from '../platforms/bilibili-login.js';
 import { createNapcatHealth, createNapcatHealthJournal, readNapcatSettings } from '../napcat-health.js';
 import { DEFAULT_SESSION_WINDOW_MINUTES, isValidSessionWindowMinutes } from '../sessions.js';
 import { openLocalPath, openExternalUrl } from '../open-path.js';
 import { describeModelState, writeModelState, validateModelSelection, MODEL_MODES, REASONING_EFFORTS } from '../model-follow.js';
+import { inspectDshRuntime } from '../dsh.js';
 import { fetchCompanionModelCatalog } from '../dsh-companion.js';
 import { PluginHost, PLUGIN_HOOKS, SCHEMA_TYPES, coerceValue } from '../plugins.js';
+import { validateTtsConfig } from '../plugins/reply-tts.js';
+import { validMediaKey } from '../media-api.js';
 import { resolvePersonaPath, resolveMemoryRoot, resolveWorkspace, expandPath } from '../persona.js';
 import {
   createPersona,
@@ -120,7 +124,7 @@ const SECURITY_HEADERS = {
   'Referrer-Policy': 'no-referrer',
   'X-Frame-Options': 'SAMEORIGIN',
   'Content-Security-Policy':
-    "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
+    "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; " +
     "script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'",
 };
 
@@ -668,6 +672,7 @@ export function createWebUiServer({
   // Only the bridge starts the scheduler; this instance edits configuration and queues work.
   const platforms = platformControl ?? createPlatformScheduler({ configPath, stateDir, log: safeLog });
   const automationToken = randomBytes(32).toString('hex');
+  const imagegen = createImagegenApi({ configPath, configRoot: root, config, readBody, ok, fail, log: safeLog });
   const qrLogin = platformQrLogin ?? createBilibiliQrLogin({
     saveCookies: (cookies, options) => platforms.importLoginCookies(cookies, options),
   });
@@ -828,7 +833,11 @@ export function createWebUiServer({
     const bridgeConnected = Boolean(bridgeAlive && statusFresh && status?.connected === true
       && (snapshot.bridgePid === undefined || snapshot.bridgePid === bridgePid));
     const napcatRunning = Boolean(snapshot.napcatRunning || health.reachable);
-    const dshRunning = names.has('deepseek harness.exe') || names.has('deepseek harness');
+    // DSH 有两种运行形态：Windows 桌面端常驻进程，或容器里的按需 headless 运行时。
+    // 后者本来就不会常驻，不能按进程名判断，否则永远显示“未运行”。
+    const dshRuntime = inspectDshRuntime(config?.dsh?.command || 'dsh', root);
+    const desktopDsh = names.has('deepseek harness.exe') || names.has('deepseek harness');
+    const dshRunning = desktopDsh || dshRuntime.ready;
 
     return {
       now: new Date().toISOString(),
@@ -860,7 +869,15 @@ export function createWebUiServer({
         lastDropAt: status?.lastDropAt ?? null,
         lastError: status?.lastError ? redactSecrets(status.lastError) : null,
       },
-      dsh: { running: dshRunning, processName: 'DeepSeek Harness.exe' },
+      dsh: {
+        running: dshRunning,
+        processName: dshRuntime.command,
+        kind: dshRuntime.mode,
+        ready: dshRuntime.ready,
+        version: dshRuntime.version || '',
+        detail: dshRuntime.detail || '',
+        controlsAvailable: process.platform === 'win32' && fs.existsSync(libPath),
+      },
       model: { label: text(status?.model) || null, mode: text(status?.modelMode) || 'follow' },
       memory: memStats,
       today: { messages: todayMessages },
@@ -1824,7 +1841,15 @@ export function createWebUiServer({
       dir: pluginDir,
       hooks: PLUGIN_HOOKS,
       schemaTypes: SCHEMA_TYPES,
-      plugins: host.list(),
+      plugins: host.list().map((plugin) => {
+        const values = { ...plugin.config };
+        const secretFields = {};
+        for (const field of plugin.configSchema) if (field.type === 'secret') {
+          secretFields[field.key] = Boolean(values[field.key]?.trim());
+          delete values[field.key];
+        }
+        return { ...plugin, config: values, secretFields };
+      }),
       failures: host.failures,
       stateFile: host.stateFile,
       requiresBridgeRestart: true,
@@ -1861,6 +1886,7 @@ export function createWebUiServer({
       for (const field of entry.meta.configSchema) {
         if (!Object.hasOwn(body.config, field.key)) continue;
         changed[field.key] = coerceValue(field.type, body.config[field.key], field.default);
+        if (field.type === 'secret' && !validMediaKey(changed[field.key])) return fail(res, 400, '密钥格式无效，请重新输入；留空表示不鉴权');
       }
       if (Object.keys(changed).length > 0) {
         let disk;
@@ -1871,14 +1897,29 @@ export function createWebUiServer({
           return fail(res, 500, `读取配置失败：${err?.message ?? err}`);
         }
         disk.plugins = disk.plugins && typeof disk.plugins === 'object' ? disk.plugins : {};
+        const previous = disk.plugins[name] ?? {};
+        if ((Object.hasOwn(changed, 'provider') && changed.provider !== (previous.provider ?? entry.meta.configSchema.find((f) => f.key === 'provider')?.default)) ||
+            (Object.hasOwn(changed, 'baseUrl') && changed.baseUrl.replace(/\/+$/, '') !== String(previous.baseUrl ?? '').replace(/\/+$/, ''))) {
+          for (const field of entry.meta.configSchema) if (field.type === 'secret' && !Object.hasOwn(changed, field.key)) changed[field.key] = '';
+        }
         disk.plugins[name] = { ...(disk.plugins[name] ?? {}), ...changed };
+        if (name === 'reply-tts') {
+          try {
+            const checked = validateTtsConfig(disk.plugins[name]);
+            if (checked.provider === 'edge' && checked.speechLanguage !== 'auto') {
+              disk.plugins[name].voice = changed.voice = checked.voice;
+            }
+          }
+          catch { return fail(res, 400, '请检查 TTS 平台、API 地址、模型、语种、音色、格式、翻译设置和密钥'); }
+        }
         config.plugins = disk.plugins;
         try {
           await writeAtomic(configPath, `${JSON.stringify(disk, null, 2)}\n`);
         } catch (err) {
           return fail(res, 500, `保存插件配置失败：${err?.message ?? err}`);
         }
-        applied.config = changed;
+        applied.config = { ...changed };
+        for (const field of entry.meta.configSchema) if (field.type === 'secret') delete applied.config[field.key];
       }
     }
 
@@ -2513,6 +2554,10 @@ export function createWebUiServer({
 
     const method = req.method === 'HEAD' ? 'GET' : req.method;
 
+    if (pathname === '/api/imagegen' || pathname.startsWith('/api/imagegen/')) {
+      return imagegen.route(req, res, pathname, method, url);
+    }
+
     if (pathname === '/api/updates' || pathname.startsWith('/api/updates/')) {
       return routeUpdates(req, res, pathname, method);
     }
@@ -2710,6 +2755,7 @@ export function createWebUiServer({
     healthProbe.close?.();
     await healthSampling?.catch(() => {});
     updates.stop();
+    await imagegen.stop();
     await qrLogin.stop();
     const s = server;
     server = null;

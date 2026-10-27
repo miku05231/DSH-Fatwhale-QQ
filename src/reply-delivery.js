@@ -7,7 +7,7 @@ function warn(log, code) {
 /** sendText must resolve true only after every text chunk succeeds. */
 export async function deliverTextAndVoice(text, {
   sendText, voiceEnabled = false, voiceConfig = {}, sendRecord, log, signal,
-  ttsProvider, ttsTempDir,
+  ttsProvider, ttsTranslator, ttsTempDir,
 } = {}) {
   const outgoing = String(text ?? '');
   const jobs = [];
@@ -16,7 +16,7 @@ export async function deliverTextAndVoice(text, {
     try {
       // This built-in hook has no access to the privileged user-plugin execution path.
       await afterReply({
-        text: outgoing, config: voiceConfig, sendRecord, log, signal, ttsProvider, ttsTempDir,
+        text: outgoing, config: voiceConfig, sendRecord, log, signal, ttsProvider, ttsTranslator, ttsTempDir,
         afterSend(job) { if (typeof job === 'function') jobs.push(job); },
       });
     } catch {

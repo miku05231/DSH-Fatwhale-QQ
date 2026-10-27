@@ -58,7 +58,7 @@ test('actual bridge integrates text, voice and platform scheduler with isolated 
       dsh: { command: process.execPath, mode: 'headless', companion: false, cwd: root, patchPath: path.join(root, 'base.yml'), timeoutMs: 5000 },
       security: { adminUserIds: [], allowFrom: [USER], privatePolicy: 'allowlist', rateLimitPerMinute: 0, maxChars: 4000 },
       behavior: { queuedNotice: '', maxReplyChunk: 1200, showErrors: true, groupContextCount: 0 },
-      plugins: { enabled: true, dir: path.join(root, 'src', 'plugins'), 'reply-tts': { maxChars: 200, timeoutMs: 1000 } },
+      plugins: { enabled: true, dir: path.join(root, 'src', 'plugins'), 'reply-tts': { maxChars: 200, timeoutMs: 1000, translationEnabled: true, targetLanguage: '日语' } },
       persona: { enabled: false }, memory: { enabled: false, capture: false, reflectDaily: false, reflectEvery: 0 },
       stickers: { enabled: false }, stateDir, logDir: path.join(root, 'logs'),
       automation: { bilibili: { enabled: false, cron: '* * * * *', keywords: ['fixture'], upUsers: ['770001'], targets: [String(PUSH_USER), `g:${GROUP}`], mentionUid: '880001', commentEnabled: false, commentApproved: false } },
@@ -92,10 +92,12 @@ test('actual bridge integrates text, voice and platform scheduler with isolated 
       assert.ok(textIndex >= 0 && voiceIndex > textIndex);
       assert.equal(napcat.state.calls[voiceIndex].params.user_id, USER);
       assert.match(records()[0].params.message[0].data.file, /^base64:\/\//);
+      assert.ok(trace().some((row) => row.event === 'model' && row.kind === 'translation' && row.sessionId === null && row.prompt.includes('fixture reply speech')));
+      assert.equal(trace().find((row) => row.event === 'tts:synthesized')?.text, 'こんにちは。翻訳した音声です。');
     });
     await t.test('disabled automation does not fetch, summarize or push during conversation', async () => {
       assert.equal(trace().some((row) => ['adapter', 'search', 'dynamics', 'publish'].includes(row.event)), false);
-      assert.equal(trace().some((row) => row.event === 'model' && row.kind !== 'chat'), false);
+      assert.equal(trace().some((row) => row.event === 'model' && ['summary', 'comment'].includes(row.kind)), false);
       assert.equal(pushes().length, 0);
     });
     await t.test('TTS failure preserves the text and cleans temporary audio', async () => {

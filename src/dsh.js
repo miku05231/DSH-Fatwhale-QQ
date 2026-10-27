@@ -173,6 +173,51 @@ export function resolveCommandPlan(command, cwd) {
   return { file: exe, fixedArgs: [] };
 }
 
+/**
+ * 只读判断「配置的 DSH 运行时是否装好、能否被解析执行」。
+ * 不启动模型、不读取凭据内容；供控制台状态卡片使用。
+ */
+export function inspectDshRuntime(command, cwd) {
+  const label = typeof command === 'string' && command.trim() ? command.trim() : 'dsh';
+  const plan = resolveCommandPlan(label, cwd);
+  if (plan.error) return { ready: false, command: label, mode: 'unavailable', detail: plan.error };
+  let productVersion = '';
+  try {
+    let root = null;
+    if (plan.fixedArgs.length > 0 && /\.(js|mjs|cjs)$/i.test(plan.fixedArgs[0])) {
+      root = path.resolve(cwd, plan.fixedArgs[0]);
+    } else if (/\.(js|mjs|cjs)$/i.test(plan.file)) {
+      root = path.resolve(plan.file);
+    }
+    let dir = root ? path.dirname(root) : null;
+    for (let depth = 0; dir && depth < 8; depth += 1) {
+      const pkgPath = path.join(dir, 'package.json');
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        if (pkg?.name === '@deepseek-ai/dsh') {
+          productVersion = String(pkg.version || '');
+          break;
+        }
+      } catch {
+        /* 继续向上找 */
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {
+    /* 版本只是展示信息，不影响可用性 */
+  }
+  return {
+    ready: true,
+    command: label,
+    executable: plan.file,
+    mode: 'on-demand',
+    version: productVersion,
+    detail: '按消息启动 headless 运行时，不会常驻进程',
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * 杀进程树（Windows 用 taskkill /T /F）
  * ------------------------------------------------------------------ */

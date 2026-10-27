@@ -52,6 +52,40 @@ try {
     assert.deepEqual(await pending, { textSent: true, voiceSent: true });
   });
 
+  await check('translation changes only speech after the original text succeeds', async () => {
+    const events = [];
+    const result = await deliverTextAndVoice('你好，今天天气真好。', {
+      voiceEnabled: true, voiceConfig: { translationEnabled: true, targetLanguage: '日语' }, ttsTempDir: root,
+      async sendText(text) { events.push(['text', text]); return true; },
+      async ttsTranslator(text, options) {
+        events.push(['translate', text, options.targetLanguage]);
+        return 'こんにちは。今日はいい天気ですね。';
+      },
+      ttsProvider: { async synthesize(text, { outputFile }) {
+        events.push(['tts', text]); await fs.writeFile(outputFile, audio);
+      } },
+      async sendRecord() { events.push(['record']); },
+    });
+    assert.deepEqual(result, { textSent: true, voiceSent: true });
+    assert.deepEqual(events, [
+      ['text', '你好，今天天气真好。'], ['translate', '你好，今天天气真好。', '日语'],
+      ['tts', 'こんにちは。今日はいい天気ですね。'], ['record'],
+    ]);
+  });
+
+  await check('translation failure retains text and never submits untranslated speech', async () => {
+    const logs = [];
+    const result = await deliverTextAndVoice('中文原文', {
+      voiceEnabled: true, voiceConfig: { translationEnabled: true }, ttsTempDir: root,
+      async sendText(text) { assert.equal(text, '中文原文'); return true; },
+      async ttsTranslator() { throw new Error('Bearer fixture-private-translation-key'); },
+      ttsProvider: unusedProvider, async sendRecord() { assert.fail('failed translations must not produce audio'); },
+      log: { warn(line) { logs.push(line); } },
+    });
+    assert.deepEqual(result, { textSent: true, voiceSent: false, error: 'tts_translation_failed' });
+    assert.doesNotMatch(logs.join('\n'), /private-translation|中文原文/);
+  });
+
   for (const [name, sendText] of [
     ['rejected text', async () => false],
     ['unconfirmed text', async () => undefined],

@@ -119,6 +119,8 @@ const SUITE = [
   },
   ...[
     ['回复语音 provider', 'reply-tts-test', '通过'],
+    ['语音翻译与无工具模型', 'tts-translation-test', 'fail 0'],
+    ['生图与语音多平台及密钥', 'media-providers-test', 'fail 0'],
     ['文字与语音发送顺序', 'reply-delivery-test', '通过'],
     ['B站平台适配器', 'bilibili-test', 'Passed: Bilibili'],
     ['B站浏览器登录态提取', 'bili-cookies-test', 'fail 0'],
@@ -129,6 +131,10 @@ const SUITE = [
     ['平台控制台接口', 'platform-webui-test', 'fail 0'],
     ['平台与语音端到端', 'e2e-platform-voice', 'fail 0'],
     ['JEV 实际消息准入', 'jev-admission-test', 'fail 0'],
+    ['局域网生图任务与交付', 'imagegen-test', 'fail 0'],
+    ['局域网生图控制台接口', 'imagegen-webui-test', 'fail 0'],
+    ['局域网生图桥接端到端', 'imagegen-bridge-test', 'fail 0'],
+    ['局域网生图浏览器与响应布局', 'imagegen-ui-test', 'fail 0'],
   ].map(([name, file, expected]) => ({
     name, file: `tests/${file}.mjs`, expect: [expected], timeoutMs: 120_000,
     note: '临时配置、模拟账号与模型，不连接真实平台或发布',
@@ -209,6 +215,20 @@ const SUITE = [
     expect: ['通过'],
     timeoutMs: 60_000,
     note: '加载/元数据校验/开关持久化/配置合并/钩子串联与接管/抛错隔离',
+  },
+  {
+    name: '文件发送路径与 DSH 运行时',
+    file: 'tests/file-bridge-test.mjs',
+    expect: ['通过'],
+    timeoutMs: 60_000,
+    note: '映射校验、跨容器 outbox 复制、越界拒绝、按需 DSH 状态',
+  },
+  {
+    name: 'QQ 文件上传路径',
+    file: 'tests/qq-upload-path-test.mjs',
+    expect: ['通过'],
+    timeoutMs: 60_000,
+    note: 'CLI 上传前把桥接路径翻译成 NapCat 可见路径，失败关闭',
   },
   {
     name: '端到端（插件）',

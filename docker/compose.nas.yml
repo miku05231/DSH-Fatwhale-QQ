@@ -1,0 +1,101 @@
+name: qq-bridge-nas
+
+services:
+  bridge:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.nas
+    image: qq-bridge-nas:20261027
+    container_name: qq-bridge-nas
+    init: true
+    restart: unless-stopped
+    environment:
+      QQ_CONFIG: /config/config.json
+      DSH_COMMAND: /opt/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js
+      TZ: Asia/Shanghai
+      WEBUI_HOST: 0.0.0.0
+    volumes:
+      - ../data/config:/config
+      - ../data/state:/app/state
+      - ../data/logs:/app/logs
+      - ../data/workspace:/app/qq-workspace
+      - ../data/memory:/app/memory
+      - ../data/dsh-home:/home/bridge/.dsh
+      - ../data/patches:/run/patches:ro
+      # NAS 文件区（只读）；NapCat 是 host 网络，看到的是宿主真实路径。
+      - '${NAS_MEDIA_ROOT:-/volume1}:/nas-media:ro'
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - private
+      - qq-net
+    cap_drop: [ALL]
+    pids_limit: 256
+    mem_limit: 3g
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+
+  console:
+    image: qq-bridge-nas:20261027
+    container_name: qq-bridge-nas-console
+    entrypoint: [node, /app/docker/nas-gateway.mjs]
+    restart: unless-stopped
+    env_file: ../data/console.env
+    environment:
+      CONSOLE_UPSTREAM: http://bridge:5830
+      CONSOLE_PORT: '5830'
+      HEALTH_PORT: '5831'
+    ports:
+      - '${NAS_BIND_IP:-127.0.0.1}:5830:5830'
+    depends_on: [bridge]
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    pids_limit: 32
+    mem_limit: 128m
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:5831/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: '2'}
+    networks:
+      - private
+      - qq-net
+
+  napcat:
+    image: '${NAPCAT_IMAGE:?Set NAPCAT_IMAGE to a verified image digest in docker/.env}'
+    container_name: qq-bridge-nas-napcat
+    restart: unless-stopped
+    environment:
+      NAPCAT_UID: '10001'
+      NAPCAT_GID: '10001'
+      MODE: ws
+      WEBUI_TOKEN: '${NAPCAT_WEBUI_TOKEN:?Set a private NapCat token in docker/.env}'
+    ports:
+      - '${NAS_BIND_IP:-127.0.0.1}:16099:6099'
+    volumes:
+      - ../data/napcat/config:/app/napcat/config
+      - ../data/napcat/qq:/app/.config/QQ
+      - ../data/state:/app/state:ro
+    shm_size: 256m
+    mem_limit: 2g
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+    networks:
+      - qq-net
+
+networks:
+  private:
+    internal: true
+  qq-net:

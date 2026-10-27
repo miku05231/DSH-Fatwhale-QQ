@@ -8,14 +8,7 @@ import { createLocalDshFixture, useIsolatedEnv } from './helpers/isolated-fixtur
 
 const fixture = await createLocalDshFixture({
   prefix: 'qq-config-kernel-',
-  reply(body) {
-    const messages = JSON.stringify(body.messages);
-    assert(messages.includes('fixture-cwd-marker'), 'The real model request must contain this test prompt');
-    assert(messages.toLowerCase().replaceAll('\\\\', '\\').replaceAll('/', '\\')
-      .includes(fixture.workspace.toLowerCase().replaceAll('/', '\\')),
-    'The DSH runtime context must report the configured working directory');
-    return 'fixture-cwd-confirmed';
-  },
+  reply: () => 'fixture-cwd-confirmed',
 });
 const restore = useIsolatedEnv(fixture.root, { QQ_FIXTURE_API_KEY: 'synthetic-local-key' });
 try {
@@ -31,11 +24,22 @@ try {
   const patchPath = resolvePath(fixture.root, config.dsh.patchPath);
   assert.equal(cwd, fixture.workspace);
   assert.equal(patchPath, path.join(fixture.root, 'relative-model.yml'));
-  const result = await runDsh('fixture-cwd-marker: confirm the runtime working directory.', {
+  const prompt = 'fixture-cwd-marker: confirm the runtime working directory.';
+  const result = await runDsh(prompt, {
     cfg: config, cwd, projectRoot: fixture.root,
   });
   assert.equal(result.finalText, 'fixture-cwd-confirmed');
   assert(fixture.requests.length > 0, 'The configured local model must receive a request');
+  // Newer DSH quotes paths as JSON and also makes separate title-generation requests.
+  assert(fixture.requests.some((body) => {
+    const texts = body.messages.map(({ content }) => typeof content === 'string' ? content :
+      (Array.isArray(content) ? content.map((part) => part.text ?? '').join('\n') : ''));
+    const messages = texts.join('\n');
+    return body.model === 'test-chat' &&
+      body.messages.some((message, index) => message.role === 'user' && texts[index] === prompt) &&
+      [fixture.workspace, JSON.stringify(fixture.workspace), fixture.workspace.replaceAll('\\', '/')]
+        .some((cwd) => messages.includes(cwd));
+  }), 'A real conversation request must contain the test prompt and the configured working directory');
   assert(result.sessionId);
   console.log('通过：isolated config cwd and relative patch reach the real DSH kernel');
 } finally {
