@@ -120,6 +120,48 @@ try {
     assert.match(result.error, /不在允许发送的目录内/);
   });
 
+  await asyncOk('an allowed directory alias is resolved before checking the canonical file', async () => {
+    const alias = path.join(tmp, 'shared-alias');
+    await fs.symlink(sharedDir, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const source = path.join(alias, 'aliased.txt');
+    await fs.writeFile(source, 'allowed alias\n');
+    const result = await prepareFileForNapcat(source, {
+      config: { files: { allowedRoots: [alias] } },
+      configRoot: tmp, stateDir: 'state',
+    });
+    assert.equal(result.ok, true, result.error);
+    const canonicalState = (await fs.realpath(stateDir)).replace(/\\/g, '/');
+    assert.ok(result.file.startsWith(`${canonicalState}/outbox/`), result.file);
+    assert.equal(await fs.readFile(path.join(stateDir, 'outbox', path.posix.basename(result.file)), 'utf8'), 'allowed alias\n');
+    await fs.rm(alias);
+  });
+
+  if (process.platform === 'win32') {
+    await asyncOk('Windows allowed roots accept case differences without accepting siblings', async () => {
+      const source = path.join(sharedDir, 'case.txt');
+      await fs.writeFile(source, 'case insensitive\n');
+      const settings = { files: { allowedRoots: [sharedDir.toUpperCase()] } };
+      const accepted = await prepareFileForNapcat(source, { config: settings, configRoot: tmp, stateDir });
+      assert.equal(accepted.ok, true, accepted.error);
+      const refused = await prepareFileForNapcat(path.join(outsideDir, 'secret.txt'), {
+        config: settings, configRoot: tmp, stateDir,
+      });
+      assert.equal(refused.ok, false);
+      assert.match(refused.error, /不在允许发送的目录内/);
+    });
+  }
+
+  await asyncOk('a directory link inside an allowed root cannot escape to a sibling', async () => {
+    const escape = path.join(sharedDir, 'escape');
+    await fs.symlink(outsideDir, escape, process.platform === 'win32' ? 'junction' : 'dir');
+    const result = await prepareFileForNapcat(path.join(escape, 'secret.txt'), {
+      config, configRoot: tmp, stateDir,
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /不在允许发送的目录内/);
+    await fs.rm(escape);
+  });
+
   await asyncOk('directories and missing files are refused', async () => {
     assert.match((await prepareFileForNapcat(sharedDir, {
       config, configRoot: tmp, stateDir, workspaceDir: path.join(tmp, 'workspace'),

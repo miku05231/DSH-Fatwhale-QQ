@@ -19,6 +19,10 @@ function text(value) {
 }
 
 function inside(root, file) {
+  if (/^(?:[a-z]:[\\/]|\\\\)/i.test(root) && /^(?:[a-z]:[\\/]|\\\\)/i.test(file)) {
+    const relative = path.win32.relative(root, file);
+    return relative === '' || (relative !== '..' && !relative.startsWith('..\\') && !path.win32.isAbsolute(relative));
+  }
   const normalize = (value) => path.posix.resolve(value.replace(/\\/g, '/')).replace(/\/+$/, '');
   const relative = path.posix.relative(normalize(root), normalize(file));
   return relative === '' || (relative !== '..' && !relative.startsWith('../') && !path.posix.isAbsolute(relative));
@@ -85,6 +89,7 @@ export async function prepareFileForNapcat(localPath, {
 } = {}) {
   const raw = text(localPath);
   if (!raw) return { ok: false, error: '文件路径为空' };
+  stateDir = resolvePath(configRoot || process.cwd(), text(stateDir) || text(config?.stateDir) || 'state');
   let absolute = path.sep === '\\'
     ? (path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw))
     : path.posix.isAbsolute(raw.replace(/\\/g, '/')) ? raw.replace(/\\/g, '/') : path.posix.resolve(raw.replace(/\\/g, '/'));
@@ -123,11 +128,14 @@ export async function prepareFileForNapcat(localPath, {
   if (stat.size > limit) return { ok: false, error: `文件超过发送上限（${limit} 字节）` };
 
   const roots = allowedFileRoots(config, { configRoot, stateDir, workspaceDir, memoryDir, stickerDir });
-  if (!roots.some((root) => inside(root, absolute))) {
+  const canonicalRoots = await Promise.all(roots.map(async (root) => {
+    try { return await fsp.realpath(root); } catch { return null; }
+  }));
+  if (!canonicalRoots.some((root) => root && inside(root, absolute))) {
     return { ok: false, error: `文件不在允许发送的目录内：${absolute}` };
   }
 
-  const state = path.resolve(stateDir);
+  const state = await fsp.realpath(stateDir).catch(() => path.resolve(stateDir));
   if (inside(state, absolute)) {
     const napcatState = resolveNapcatStateDir(config, state);
     const relative = path.relative(state, absolute).split(path.sep).join('/');

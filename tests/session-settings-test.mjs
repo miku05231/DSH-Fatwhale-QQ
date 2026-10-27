@@ -47,6 +47,9 @@ async function httpTests(root) {
   await fs.writeFile(file, JSON.stringify(config));
   check('The shared default is three hours',
     DEFAULT_SESSION_WINDOW_MINUTES === 180 && DEFAULTS.behavior.sessionWindowMinutes === 180);
+  const example = JSON.parse(await fs.readFile(path.join(ROOT, 'config.example.json'), 'utf8'));
+  check('The distributed example includes the shared session duration',
+    example.behavior.sessionWindowMinutes === DEFAULT_SESSION_WINDOW_MINUTES);
   check('Older startup configs gain the default duration',
     loadConfig(root, { configFile: file, createIfMissing: false }).config.behavior.sessionWindowMinutes === 180);
   for (const value of [...INVALID, NaN, Infinity, -Infinity]) {
