@@ -88,13 +88,13 @@ const VAULT_ROOT = path.join(HOME, 'Documents', 'Obsidian Vault');
 const BASE_REPLACEMENTS = [
   [VAULT_ROOT, 'C:\\Users\\you\\Documents\\Obsidian Vault'],
   [ROOT, 'D:\\code\\qq-bridge'],
-  [WORK_ROOT, 'C:\\DSH'],
+  [WORK_ROOT, 'C:\\your\\path'],
   [HOME, 'C:\\Users\\you'],
 ];
 
 /**
  * 同一个文件在不同机器上的路径写法不一样：文档里写反斜杠的单层路径，JS 字符串里写双层反斜杠。
- * 以及被小写化的 `C:\DSH`。三种都要换，否则自检会漏。
+ * 以及被小写化的本机路径。三种都要换，否则自检会漏。
  */
 function expandReplacements(pairs) {
   const out = [];
