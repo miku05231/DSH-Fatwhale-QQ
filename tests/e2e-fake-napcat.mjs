@@ -47,7 +47,7 @@ function section(title) {
 async function waitFor(predicate, { timeout = 120000, interval = 200, label = '条件' } = {}) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    const value = predicate();
+    const value = await predicate();
     if (value) return value;
     await new Promise((r) => setTimeout(r, interval));
   }
@@ -140,8 +140,17 @@ async function testFixture(fixture) {
     ok('桥接已连接');
 
     const statusPath = path.join(stateDir, 'status.json');
-    await waitFor(() => fs.existsSync(statusPath), { timeout: 10000, label: 'status.json 生成' });
-    const status = JSON.parse(await fsp.readFile(statusPath, 'utf8'));
+    // The server accepts the socket before the client records its ready event.
+    const status = await waitFor(async () => {
+      let current;
+      try {
+        current = JSON.parse(await fsp.readFile(statusPath, 'utf8'));
+      } catch (error) {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+      }
+      return current.pid === child.pid && current.connected === true ? current : false;
+    }, { timeout: 10000, label: 'status.json 记录桥接连接就绪' });
     if (status.pid === child.pid && status.connected === true) {
       ok('status.json 正确', `pid=${status.pid} connected=${status.connected}`);
     } else {
