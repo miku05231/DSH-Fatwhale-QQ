@@ -78,7 +78,7 @@ function responses({ data = release(), manifest = SUMS, zip = ZIP, apiResponse =
 
 async function fixture(options = {}, action) {
   const temporary = await realpath(os.tmpdir());
-  const root = await mkdtemp(path.join(temporary, 'qq update with space-'));
+  const root = await mkdtemp(path.join(temporary, options.apostrophe ? "qq update with space-[path]'" : 'qq update with space-'));
   const managers = [];
   try {
     await mkdir(path.join(root, 'scripts'));
@@ -862,6 +862,50 @@ await test('a stale installer lock from a dead process is recovered, while a liv
     const active = factory();
     await active.status();
     equal(await readdir(updates).then((names) => names.includes('install.lock')), true);
+  });
+});
+
+await test('Windows installer executes after its launching console exits', async () => {
+  if (process.platform !== 'win32') return;
+  await fixture({ apostrophe: true }, async ({ root }) => {
+    const marker = path.join(root, 'installer-ran.txt');
+    await writeFile(path.join(root, 'scripts', 'install-update.ps1'), `
+param([string]$JobPath)
+[IO.File]::WriteAllText((Join-Path (Split-Path (Split-Path (Split-Path (Split-Path $JobPath)))) 'installer-started.txt'), 'started')
+Start-Sleep -Milliseconds 1000
+[IO.File]::WriteAllText((Join-Path (Split-Path (Split-Path (Split-Path (Split-Path $JobPath)))) 'installer-ran.txt'), 'executed')
+`);
+    const childCode = `
+import { createUpdateManager } from ${JSON.stringify(new URL('../src/updates.mjs', import.meta.url).href)};
+import { existsSync } from 'node:fs';
+const manager = createUpdateManager({
+  projectRoot: ${JSON.stringify(root)}, platform: 'win32', isDocker: false,
+  fetchImpl: async url => new Response(url.endsWith('/latest') ? ${JSON.stringify(JSON.stringify(release()))} : url.endsWith('.zip') ? Buffer.from(${JSON.stringify([...ZIP])}) : ${JSON.stringify(SUMS)}),
+});
+await manager.check();
+await manager.install({ version: ${JSON.stringify(VERSION)} });
+for (let i = 0; i < 200; i++) {
+  const status = await manager.status();
+  if (status.phase === 'installing' && existsSync(${JSON.stringify(path.join(root, 'installer-started.txt'))})) process.exit(0);
+  if (status.phase === 'error') throw new Error(status.error);
+  await new Promise(resolve => setTimeout(resolve, 25));
+}
+throw new Error('Installer did not launch');
+`;
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', childCode], {
+      encoding: 'utf8', windowsHide: true, timeout: 15_000,
+    });
+    equal(child.status, 0, child.stderr || child.error?.message);
+    try {
+      await until(async () => (await readFile(marker, 'utf8').catch(() => '')) === 'executed', 8000);
+    } catch (error) {
+      const updates = path.join(root, 'state', 'updates');
+      for (const entry of await readdir(updates, { withFileTypes: true })) {
+        if (entry.isDirectory()) console.error(await readFile(path.join(updates, entry.name, 'installer.stderr.log'), 'utf8').catch(() => 'No installer output'));
+      }
+      throw error;
+    }
+    equal(await readFile(marker, 'utf8'), 'executed');
   });
 });
 

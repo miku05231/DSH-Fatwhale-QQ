@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { copyFile, lstat, mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -96,15 +96,16 @@ async function readSmallJson(file, maxBytes = 32 * 1024) {
 
 async function defaultLaunchInstaller({ scriptPath, jobPath, cwd }) {
   const executable = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const child = spawn(executable, [
-    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-    '-File', scriptPath, '-JobPath', jobPath,
-  ], { cwd, windowsHide: true, detached: true, stdio: 'ignore', shell: false });
-  await new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('spawn', resolve);
-  });
-  child.unref();
+  const literal = value => `'${value.replaceAll("'", "''")}'`;
+  // Start-Process resolves these provider paths as wildcard patterns, even quoted.
+  const providerPath = value => `([System.Management.Automation.WildcardPattern]::Escape(${literal(value)}))`;
+  // Start-Process creates an independent hidden console. DETACHED_PROCESS makes
+  // Windows PowerShell exit before -File; a shared console dies with the WebUI.
+  const argumentsLine = `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath}" -JobPath "${jobPath}"`;
+  const command = `$ErrorActionPreference = 'Stop'; Start-Process -FilePath ${literal(executable)} -ArgumentList ${literal(argumentsLine)} -WorkingDirectory ${providerPath(cwd)} -WindowStyle Hidden -RedirectStandardOutput ${providerPath(path.join(cwd, 'installer.stdout.log'))} -RedirectStandardError ${providerPath(path.join(cwd, 'installer.stderr.log'))} -ErrorAction Stop | Out-Null`;
+  await executeFile(executable, [
+    '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64'),
+  ], { cwd, windowsHide: true, timeout: 30_000, maxBuffer: 64 * 1024 });
 }
 
 /**
