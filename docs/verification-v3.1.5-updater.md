@@ -119,3 +119,12 @@ on failure; its local run passed all 367 assertions. A fresh cloud run is requir
 before claiming cloud success. This test-only change does not alter release
 program files. The historical intermittent `unknown` generation outcome is also
 not established as fixed by the recovery correction.
+
+The next cloud run, `40908610900`, passed all 367 update assertions but failed
+when fixture cleanup removed the helper's working directory before PowerShell
+released it (`EBUSY`). The helper now records its PID; the regression waits for
+that exact process to exit after verifying the completion marker. A deliberate
+one-second delay after that marker exercises the cleanup boundary locally.
+The runner's budget includes the bounded startup, completion and exit waits.
+The local corrected regression passed 368 assertions. This is a fixture-only
+correction; final release program files and hashes remain unchanged.

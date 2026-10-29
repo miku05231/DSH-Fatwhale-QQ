@@ -275,7 +275,7 @@ const SUITE = [
     name: '应用更新（版本与下载）',
     file: 'tests/updates-test.mjs',
     expect: ['失败 0 项'],
-    timeoutMs: 120_000,
+    timeoutMs: 180_000,
     note: '模拟 GitHub Release、版本比较、下载来源、校验和、自动检查与安装并发',
   },
   {

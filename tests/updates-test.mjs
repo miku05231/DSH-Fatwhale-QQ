@@ -871,9 +871,10 @@ await test('Windows installer executes after its launching console exits', async
     const marker = path.join(root, 'installer-ran.txt');
     await writeFile(path.join(root, 'scripts', 'install-update.ps1'), `
 param([string]$JobPath)
-[IO.File]::WriteAllText((Join-Path (Split-Path (Split-Path (Split-Path (Split-Path $JobPath)))) 'installer-started.txt'), 'started')
+[IO.File]::WriteAllText((Join-Path (Split-Path (Split-Path (Split-Path (Split-Path $JobPath)))) 'installer-started.txt'), [string]$PID)
 Start-Sleep -Milliseconds 1000
 [IO.File]::WriteAllText((Join-Path (Split-Path (Split-Path (Split-Path (Split-Path $JobPath)))) 'installer-ran.txt'), 'executed')
+Start-Sleep -Milliseconds 1000
 `);
     const childCode = `
 import { createUpdateManager } from ${JSON.stringify(new URL('../src/updates.mjs', import.meta.url).href)};
@@ -912,6 +913,14 @@ throw new Error('Installer did not launch within 60 seconds: ' + JSON.stringify(
       throw error;
     }
     equal(await readFile(marker, 'utf8'), 'executed');
+    // Writing the completion marker can precede PowerShell releasing its cwd
+    // and redirected log handles. Wait for this fixture's helper before removal.
+    const helperPid = Number(await readFile(path.join(root, 'installer-started.txt'), 'utf8'));
+    truthy(Number.isSafeInteger(helperPid) && helperPid > 0);
+    await until(() => {
+      try { process.kill(helperPid, 0); return false; }
+      catch (error) { if (error.code === 'ESRCH') return true; throw error; }
+    }, 60_000);
   });
 });
 
