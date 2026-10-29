@@ -1,7 +1,8 @@
 # Windows updater verification (2026-10-29)
 
-The application version remains 3.1.5. This source correction does not replace
-the existing v3.1.5 tag or published assets.
+The application version remains 3.1.5. After explicit maintainer approval,
+the four existing release assets were replaced from source commit `26b6478`.
+The existing v3.1.5 Git tag was retained.
 
 ## Finding and correction
 
@@ -36,12 +37,22 @@ because quoted bracket characters otherwise break `Start-Process` redirects.
 The installed DeepSeek Harness application was used for restart. OneBot was a
 local isolated fixture with empty message allow lists; this test does not prove
 real QQ delivery or model response quality. The successful UI test verifies the
-corrected launch path, not an untouched 3.1.3 installation. The published 3.1.5
-portable asset still contains the previous updater launch implementation.
+corrected launch path, not an untouched 3.1.3 installation. The subsequently
+reissued portable asset contains the corrected launcher, including bracket-path
+escaping. Its complete package installer regression passed all 66 checks.
+
+Reissued portable SHA256:
+`8e3fe768094152c2b01d6e82665501938b43bf4818e594ad759bd088e89ef92f`.
+All four new assets matched GitHub's asset digests. Fresh public downloads using
+a revision query also matched; the original download URLs initially returned
+cached pre-reissue assets. Client checks must allow time for those caches to
+expire. Existing 3.1.5 installations need a manual program-file replacement to
+receive a correction with the same version number. Git source installations
+following the unchanged tag also need to pull the corrected main branch.
 
 ## Privacy and broader test limits
 
-A scan of 57 commits and 673 reachable public blobs up to 4 MiB found no exact
+A scan of 58 commits and 676 reachable public blobs up to 4 MiB found no exact
 matches for qualifying sensitive live-configuration values or private IPv4
 patterns. The official portable package checksum matched its published
 manifest; inspection found no live configuration or private state payloads.
