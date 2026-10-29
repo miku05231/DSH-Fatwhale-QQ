@@ -134,15 +134,15 @@ export function initImagegen({ api, notify, confirm }) {
         row.prepend(link);
         void preview(job, img, link);
       }
-      if (['paused', 'unknown'].includes(job.status)) {
+      if (['created', 'paused', 'unknown'].includes(job.status)) {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'btn btn--tonal';
-        button.textContent = job.status === 'paused' ? '继续等待' : '解除占用';
+        button.textContent = job.status === 'created' ? '取消准备' : job.status === 'paused' ? '继续等待' : '解除占用';
         button.addEventListener('click', () => void act(button, async () => {
           if (job.status === 'unknown' && !await confirm('解除生图占用？', '请先到生图服务确认该任务已经结束。解除后不会重新提交或取消远端任务。', { okText: '已确认，解除' })) return;
-          await call(`/jobs/${job.id}/${job.status === 'paused' ? 'resume' : 'release'}`, {
-            method: 'POST', body: JSON.stringify(job.status === 'paused' ? {} : { confirmed: true }),
+          await call(`/jobs/${job.id}/${job.status === 'unknown' ? 'release' : 'resume'}`, {
+            method: 'POST', body: JSON.stringify(job.status === 'unknown' ? { confirmed: true } : {}),
           });
           await refresh();
         }));

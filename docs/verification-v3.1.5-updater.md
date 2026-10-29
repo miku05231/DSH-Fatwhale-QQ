@@ -62,3 +62,19 @@ The earlier full suite had 79 passes and one intermittent image-generation UI
 failure out of 80 tests. A subsequent isolated image-generation UI run passed
 47 checks over six layouts, but its original intermittent cause remains open.
 No full-suite green result is claimed here.
+
+## Image generation pre-submit recovery
+
+A deterministic isolated metadata-lock injection reproduced a stranded `created`
+job with a live worker PID and zero generation POSTs. Recovery previously
+rejected it as busy. Recovery now cancels an unsubmitted `created` record under
+the metadata lock and clears its worker token. The original worker must persist
+`submitting` with that token before any generation POST, so cancellation cannot
+race into a duplicate paid submission. The UI exposes this as “取消准备”. Live
+workers in `submitting` and later states retain their existing protection.
+
+The regression failed before the correction. Afterward, the service tests passed
+20 tests, the console API tests passed 9 tests, and the browser journey passed
+48 checks across six layouts, including cancellation with zero generation POSTs.
+This injection establishes a recoverability defect; it does not identify the
+cause of the two historical browser failures or explain the `unknown` result.

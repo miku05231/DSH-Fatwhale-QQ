@@ -55,6 +55,20 @@ test('isolated image generation console API, settings and private images', async
       assert.equal(response.status, 200);
       assert.deepEqual((await response.json()).data, { status: 'ok' });
     });
+    await t.test('a live process with a stranded created task can cancel it through the API', async () => {
+      let createdId;
+      const fault = new Error('isolated pre-submit failure');
+      await assert.rejects(() => f.service.generate({ prompt: 'not submitted' }, { onCreated(job) {
+        createdId = job.id;
+        throw fault;
+      } }), fault);
+      assert.equal((await f.service.get(createdId)).worker.pid, process.pid);
+      const result = await (await request(`/jobs/${createdId}/resume`, { method: 'POST', body: {} })).json();
+      assert.equal(result.ok, true);
+      assert.equal(result.data.status, 'cancelled');
+      assert.equal((await f.service.get(createdId)).worker, null);
+      assert.equal(f.state.posts.length, 0);
+    });
     let id;
     await t.test('asynchronous generation returns immediately then exposes a private preview', async () => {
       f.state.pollsBeforeComplete = 3;

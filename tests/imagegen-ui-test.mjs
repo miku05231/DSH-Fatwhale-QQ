@@ -70,9 +70,18 @@ new PerformanceObserver((list)=>{for(const entry of list.getEntries())window.__i
       await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
       await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
     };
+    let strandedId;
+    await assert.rejects(() => f.service.generate({ prompt: 'isolated unsubmitted task' }, { onCreated(job) {
+      strandedId = job.id;
+      throw new Error('isolated pre-submit failure');
+    } }), /isolated pre-submit failure/);
     await click('#imagegenTab');
     await waitUntil(() => cdp.evaluate('!document.getElementById("imagegenView").hidden && document.getElementById("imagegenEnabled").checked'));
     check('generation tab opens and service settings load', true);
+    await waitUntil(() => cdp.evaluate(`document.querySelector('#imagegenJobs button')?.textContent === '取消准备'`));
+    await click('#imagegenJobs button');
+    await waitUntil(async () => (await f.service.get(strandedId)).status === 'cancelled');
+    check('stranded preparation can be cancelled without a generation POST', f.state.posts.length === 0);
     await cdp.evaluate('document.getElementById("imagegenForm").requestSubmit()');
     check('empty prompt is rejected before a request', f.state.posts.length === 0);
     // A previous job can be left "unknown" if the browser navigated while its

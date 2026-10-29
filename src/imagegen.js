@@ -313,6 +313,15 @@ export function createImagegenService({ configPath, configRoot = path.dirname(co
         await checkContext(contextId);
       }
       if (TERMINAL.has(record.status)) return record;
+      // The submitting transition is durable before any paid POST. Cancelling
+      // a created record invalidates its token under the same metadata lock,
+      // so an original worker racing recovery cannot proceed to submission.
+      if (record.status === 'created' && !record.remote) {
+        record.status = 'cancelled';
+        record.error = '已取消尚未提交的任务，可以重新生成';
+        record.worker = null;
+        return record;
+      }
       if (record.worker && alive(record.worker.pid)) throw imagegenError('已有进程正在等待这个任务', 'IMAGEGEN_BUSY', 409);
       if (!record.remote) {
         record.status = record.status === 'created' ? 'cancelled' : 'unknown';

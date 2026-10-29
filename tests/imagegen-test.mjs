@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { test } from 'node:test';
@@ -17,6 +18,32 @@ const input = { prompt: 'A friendly cartoon robot, white background' };
 const withFixture = (name, fn) => test(name, async () => {
   const fixture = await createImagegenFixture();
   try { await fn(fixture); } finally { await fixture.close(); }
+});
+
+withFixture('a failed pre-submit metadata write can be cancelled without another POST', async (f) => {
+  const lock = path.join(f.service.runtimeDir, 'metadata.lock');
+  let id;
+  try {
+    await assert.rejects(() => f.service.generate(input, { onCreated(job) {
+      id = job.id;
+      fsSync.writeFileSync(lock, JSON.stringify({ pid: process.pid }), { flag: 'wx' });
+    } }), { code: 'IMAGEGEN_BUSY' });
+  } finally { await fs.rm(lock, { force: true }); }
+  assert.equal((await f.service.get(id)).status, 'created');
+  assert.equal(f.state.posts.length, 0);
+  const cancelled = await f.service.resume(id);
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.worker, null);
+  assert.equal(f.state.posts.length, 0);
+  // A possible paid submission must retain the live-worker protection.
+  await f.service.update(id, (job) => {
+    job.status = 'submitting';
+    job.worker = { pid: process.pid, token: 'live-submission' };
+  });
+  await assert.rejects(() => f.service.resume(id), { code: 'IMAGEGEN_BUSY' });
+  await f.service.update(id, (job) => { job.status = 'cancelled'; job.worker = null; });
+  assert.equal((await f.service.generate(input)).status, 'completed');
+  assert.equal(f.state.posts.length, 1);
 });
 
 test('request validation, presets and exact uint64 seeds', () => {
