@@ -63,11 +63,13 @@ test('isolated image generation console API, settings and private images', async
         throw fault;
       } }), fault);
       assert.equal((await f.service.get(createdId)).worker.pid, process.pid);
+      assert.equal((await request('/settings', { method: 'PUT', body: { enabled: false } })).status, 200);
       const result = await (await request(`/jobs/${createdId}/resume`, { method: 'POST', body: {} })).json();
       assert.equal(result.ok, true);
       assert.equal(result.data.status, 'cancelled');
       assert.equal((await f.service.get(createdId)).worker, null);
       assert.equal(f.state.posts.length, 0);
+      assert.equal((await request('/settings', { method: 'PUT', body: { enabled: true } })).status, 200);
     });
     let id;
     await t.test('asynchronous generation returns immediately then exposes a private preview', async () => {

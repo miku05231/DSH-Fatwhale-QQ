@@ -305,7 +305,7 @@ export function createImagegenService({ configPath, configRoot = path.dirname(co
   }
 
   async function resume(id, { signal, contextId, onCreated } = {}) {
-    const config = enabled();
+    let config;
     const token = randomUUID();
     const job = await update(id, async (record) => {
       if (contextId !== undefined) {
@@ -322,6 +322,7 @@ export function createImagegenService({ configPath, configRoot = path.dirname(co
         record.worker = null;
         return record;
       }
+      config = enabled();
       if (record.worker && alive(record.worker.pid)) throw imagegenError('已有进程正在等待这个任务', 'IMAGEGEN_BUSY', 409);
       if (!record.remote) {
         record.status = record.status === 'created' ? 'cancelled' : 'unknown';

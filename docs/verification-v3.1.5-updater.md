@@ -78,3 +78,9 @@ The regression failed before the correction. Afterward, the service tests passed
 48 checks across six layouts, including cancellation with zero generation POSTs.
 This injection establishes a recoverability defect; it does not identify the
 cause of the two historical browser failures or explain the `unknown` result.
+
+A follow-up review found that disabling the service also blocked this local
+cancellation. The enabled-service check now runs after the unsubmitted-record
+cancellation path. Service and API regressions cover cancellation while disabled;
+both suites still pass (20 and 9 tests). Monitoring remote tasks continues to
+require an enabled service, and administrator-context checks remain in place.

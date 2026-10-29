@@ -31,10 +31,14 @@ withFixture('a failed pre-submit metadata write can be cancelled without another
   } finally { await fs.rm(lock, { force: true }); }
   assert.equal((await f.service.get(id)).status, 'created');
   assert.equal(f.state.posts.length, 0);
+  f.config.imagegen.enabled = false;
+  f.save();
   const cancelled = await f.service.resume(id);
   assert.equal(cancelled.status, 'cancelled');
   assert.equal(cancelled.worker, null);
   assert.equal(f.state.posts.length, 0);
+  f.config.imagegen.enabled = true;
+  f.save();
   // A possible paid submission must retain the live-worker protection.
   await f.service.update(id, (job) => {
     job.status = 'submitting';
