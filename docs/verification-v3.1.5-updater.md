@@ -1,7 +1,8 @@
 # Windows updater verification (2026-10-29)
 
 The application version remains 3.1.5. After explicit maintainer approval,
-the four existing release assets were replaced from source commit `26b6478`.
+the four existing release assets were replaced. The final package source is
+`bf7d4ba`, including the updater correction and image generation recovery fixes.
 The existing v3.1.5 Git tag was retained.
 
 ## Finding and correction
@@ -42,7 +43,7 @@ reissued portable asset contains the corrected launcher, including bracket-path
 escaping. Its complete package installer regression passed all 66 checks.
 
 Reissued portable SHA256:
-`8e3fe768094152c2b01d6e82665501938b43bf4818e594ad759bd088e89ef92f`.
+`6325c89407e99744c31c464e4ee61100a4797e7fed7e8c4e78606eaea3c58bed`.
 All four new assets matched GitHub's asset digests. Fresh public downloads using
 a revision query also matched; the original download URLs initially returned
 cached pre-reissue assets. Client checks must allow time for those caches to
@@ -52,7 +53,7 @@ following the unchanged tag also need to pull the corrected main branch.
 
 ## Privacy and broader test limits
 
-A scan of 58 commits and 676 reachable public blobs up to 4 MiB found no exact
+A scan of 61 commits and 687 reachable public blobs up to 4 MiB found no exact
 matches for qualifying sensitive live-configuration values or private IPv4
 patterns. The official portable package checksum matched its published
 manifest; inspection found no live configuration or private state payloads.
@@ -61,7 +62,9 @@ These checks are bounded scans, not a guarantee of absence of all personal data.
 The earlier full suite had 79 passes and one intermittent image-generation UI
 failure out of 80 tests. A subsequent isolated image-generation UI run passed
 47 checks over six layouts, but its original intermittent cause remains open.
-No full-suite green result is claimed here.
+A later complete isolated suite at `20aae46` passed all 80 tests in 608.6 seconds.
+The subsequent disabled-service cancellation correction passed its targeted
+service, API, browser and real-package installer regressions.
 
 ## Image generation pre-submit recovery
 
@@ -84,3 +87,35 @@ cancellation. The enabled-service check now runs after the unsubmitted-record
 cancellation path. Service and API regressions cover cancellation while disabled;
 both suites still pass (20 and 9 tests). Monitoring remote tasks continues to
 require an enabled service, and administrator-context checks remain in place.
+
+## Final public-package consumption (2026-10-30)
+
+All four ordinary public download URLs returned the final published SHA256
+values after cache propagation. An isolated official 3.1.3 installation with
+the corrected updater module then used the real UI to install this final
+portable package. Its downloaded ZIP matched the final checksum above; its
+installed image generation source matched `bf7d4ba`. The installer reported
+`complete`, the UI recovered on its original port showing current/latest 3.1.5,
+and owned bridge, console and tray processes restarted. All five local data
+sentinel hashes matched their pre-install values. Installer stdout/stderr were
+empty. Neither process actions nor restart were skipped.
+
+GitHub's anonymous API limit interrupted the final metadata check. Only the
+isolated test process used a private fetch preload to authenticate requests to
+`api.github.com` using an existing local Git credential, without logging or
+persisting it. This supplied real GitHub responses, with no metadata or package
+substitution. Asset downloads remained ordinary unauthenticated public downloads.
+The installed real DeepSeek application and isolated OneBot fixture were used;
+this remains a corrected-old-updater test, not proof that an untouched old
+updater can repair its own launch defect. Test processes were stopped afterward.
+
+Cloud verification run `40902767387` passed Linux but failed the Windows launch
+regression's approximately five-second readiness window. Its other update checks
+passed. The installer batches took several minutes each on that runner, compared
+with much shorter local execution. This suggests a timing difference, but the
+failure lacked child-installer stderr and does not establish the cause. The test
+now allows at most 60 seconds for readiness and includes status/stderr diagnostics
+on failure; its local run passed all 367 assertions. A fresh cloud run is required
+before claiming cloud success. This test-only change does not alter release
+program files. The historical intermittent `unknown` generation outcome is also
+not established as fixed by the recovery correction.

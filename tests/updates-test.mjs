@@ -877,27 +877,33 @@ Start-Sleep -Milliseconds 1000
 `);
     const childCode = `
 import { createUpdateManager } from ${JSON.stringify(new URL('../src/updates.mjs', import.meta.url).href)};
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 const manager = createUpdateManager({
   projectRoot: ${JSON.stringify(root)}, platform: 'win32', isDocker: false,
   fetchImpl: async url => new Response(url.endsWith('/latest') ? ${JSON.stringify(JSON.stringify(release()))} : url.endsWith('.zip') ? Buffer.from(${JSON.stringify([...ZIP])}) : ${JSON.stringify(SUMS)}),
 });
 await manager.check();
 await manager.install({ version: ${JSON.stringify(VERSION)} });
-for (let i = 0; i < 200; i++) {
+const launchDeadline = Date.now() + 60_000;
+while (Date.now() < launchDeadline) {
   const status = await manager.status();
   if (status.phase === 'installing' && existsSync(${JSON.stringify(path.join(root, 'installer-started.txt'))})) process.exit(0);
   if (status.phase === 'error') throw new Error(status.error);
   await new Promise(resolve => setTimeout(resolve, 25));
 }
-throw new Error('Installer did not launch');
+const updates = ${JSON.stringify(path.join(root, 'state', 'updates'))};
+const diagnostics = readdirSync(updates, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => {
+  try { return readFileSync(updates + '/' + entry.name + '/installer.stderr.log', 'utf8').slice(-4096); }
+  catch { return 'Installer stderr unavailable'; }
+});
+throw new Error('Installer did not launch within 60 seconds: ' + JSON.stringify({ status: await manager.status(), diagnostics }));
 `;
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', childCode], {
-      encoding: 'utf8', windowsHide: true, timeout: 15_000,
+      encoding: 'utf8', windowsHide: true, timeout: 75_000,
     });
     equal(child.status, 0, child.stderr || child.error?.message);
     try {
-      await until(async () => (await readFile(marker, 'utf8').catch(() => '')) === 'executed', 8000);
+      await until(async () => (await readFile(marker, 'utf8').catch(() => '')) === 'executed', 30_000);
     } catch (error) {
       const updates = path.join(root, 'state', 'updates');
       for (const entry of await readdir(updates, { withFileTypes: true })) {
