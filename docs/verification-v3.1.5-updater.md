@@ -145,3 +145,11 @@ and uses bounded filesystem retries after the process-exit check. The local
 updated regression passed 369 assertions, including through the suite runner.
 CI runs this case before the slower installer batches, retaining every former
 update case without duplicate execution. A new cloud result is still required.
+
+Run `41042551186` passed the detached-installer lifecycle case. Its early update
+gate instead failed when the 8.3-path fixture's PowerShell process exceeded its
+30-second limit. That helper compiled a C# interop type at runtime just to read
+a short path. It now reads the same Windows short-path property through the
+built-in FileSystemObject, removing the compiler dependency without skipping
+alias checks or extending their timeout. This change does not establish which
+part of the timed-out PowerShell invocation was delayed on that runner.

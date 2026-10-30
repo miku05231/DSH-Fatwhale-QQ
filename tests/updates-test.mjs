@@ -132,19 +132,8 @@ function windowsShortPath(value) {
   const script = `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
-public static class UpdateShortPath {
-  [DllImport("kernel32.dll", EntryPoint = "GetShortPathNameW", CharSet = CharSet.Unicode, SetLastError = true)]
-  public static extern uint GetShortPathName(string path, StringBuilder output, uint size);
-}
-'@
-$output = New-Object Text.StringBuilder 32768
-$length = [UpdateShortPath]::GetShortPathName($env:QQ_UPDATE_TEST_PATH, $output, 32768)
-if ($length -eq 0 -or $length -ge 32768) { throw 'GetShortPathNameW failed.' }
-[Console]::Write($output.ToString())
+$filesystem = New-Object -ComObject Scripting.FileSystemObject
+[Console]::Write($filesystem.GetFolder($env:QQ_UPDATE_TEST_PATH).ShortPath)
 `;
   const shell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const result = spawnSync(shell, [
@@ -448,7 +437,7 @@ await test('Windows 8.3 aliases allow checks, settings and a verified mocked ins
       console.log('SKIP this volume does not provide an 8.3 alias for the fixture.');
       return;
     }
-    truthy(/~\d/.test(short), 'GetShortPathNameW returned an actual 8.3 alias.');
+    truthy(/~\d/.test(short), 'Windows returned an actual 8.3 alias.');
     const manager = factory({
       projectRoot: short,
       stateDir: path.join(canonical, 'state'),
