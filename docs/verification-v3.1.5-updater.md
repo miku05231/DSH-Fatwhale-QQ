@@ -153,3 +153,22 @@ a short path. It now reads the same Windows short-path property through the
 built-in FileSystemObject, removing the compiler dependency without skipping
 alias checks or extending their timeout. This change does not establish which
 part of the timed-out PowerShell invocation was delayed on that runner.
+
+## Completed cloud verification (2026-10-30)
+
+[Run 41043419719](https://github.com/miku05231/DSH-Fatwhale-QQ/actions/runs/41043419719)
+completed successfully for `f9faaddbe1e355e2bf53ea3aa13c62358b62909c`.
+Both Linux and Windows jobs passed. Windows passed the detached-updater gate,
+all remaining update and rollback batches, executable and export checks,
+administrator boundaries, DSH Web, conversation, voice and platform automation.
+It built the real portable package, passed all 66 isolated package-installation
+checks, and validated the four assets and release notes. This was a verification
+run; its publication step was intentionally skipped. Previously published
+3.1.5 program files and checksums were not replaced by this test-only revision.
+
+All four ordinary public release download URLs were checked again after this
+success and matched the final published hashes. The earlier privacy scan covered
+65 commits and 697 reachable public blobs up to 4 MiB with no matches under its
+stated rules. The bounded privacy scope, corrected-old-updater test condition,
+same-version manual replacement requirement and historical image-generation
+uncertainty described above continue to apply.
