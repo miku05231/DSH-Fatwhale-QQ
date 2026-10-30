@@ -128,3 +128,20 @@ one-second delay after that marker exercises the cleanup boundary locally.
 The runner's budget includes the bounded startup, completion and exit waits.
 The local corrected regression passed 368 assertions. This is a fixture-only
 correction; final release program files and hashes remain unchanged.
+
+Run `40916281917` also failed fixture cleanup after 368 assertions. Its launch
+case took 75.3 seconds, matching the child-console timeout; cleanup had obscured
+any earlier exception. An isolated local process probe demonstrated that a child
+can exit with status zero while inherited capture pipes cause `spawnSync` to
+report `ETIMEDOUT` (311 ms with a 300 ms limit). Capturing output in files instead
+returned status zero without an error in 59 ms. This proves the test risk, not
+the exact cause of every earlier cloud failure.
+
+The launch regression now captures console output in files and checks both the
+spawn error and exit status. Its helper holds the console process handle and
+waits for that console to exit before writing completion, making the lifecycle
+ordering explicit. Cleanup preserves the original error if removal also fails
+and uses bounded filesystem retries after the process-exit check. The local
+updated regression passed 369 assertions, including through the suite runner.
+CI runs this case before the slower installer batches, retaining every former
+update case without duplicate execution. A new cloud result is still required.

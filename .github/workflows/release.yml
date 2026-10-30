@@ -91,10 +91,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'The pinned DSH test runtime could not be installed.' }
           $taskDshBin = Join-Path (Get-Location).Path 'state/test-dsh/node_modules/.bin'
           Add-Content -LiteralPath $env:GITHUB_PATH -Value $taskDshBin -Encoding utf8
+      - name: Test detached updater launch and download safety
+        shell: pwsh
+        run: |
+          node tests/run-all.mjs --only '应用更新（版本与下载）'
+          if ($LASTEXITCODE -ne 0) { throw 'Updater launch and download checks failed.' }
       - name: Test updates, packaging and the executable
         shell: pwsh
         run: |
-          foreach ($taskGroup in @('测试运行器', '桌面连伴', '模型跟随', 'webui', 'NapCat', '封装应用', '公开导出', '托盘', '表情', '打开本地', '更新', 'exe')) {
+          foreach ($taskGroup in @('测试运行器', '桌面连伴', '模型跟随', 'webui', 'NapCat', '封装应用', '公开导出', '托盘', '表情', '打开本地', '应用更新（HTTP 安全）', '应用更新（安装与回滚）', '应用更新（控制台界面）', 'exe')) {
             node tests/run-all.mjs --only $taskGroup
             if ($LASTEXITCODE -ne 0) { throw "Tests failed: $taskGroup" }
           }

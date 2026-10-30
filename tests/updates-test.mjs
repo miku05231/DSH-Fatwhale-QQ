@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, readdir, realpath, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, open, readFile, readdir, realpath, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createUpdateManager, compareVersions } from '../src/updates.mjs';
@@ -80,6 +80,7 @@ async function fixture(options = {}, action) {
   const temporary = await realpath(os.tmpdir());
   const root = await mkdtemp(path.join(temporary, options.apostrophe ? "qq update with space-[path]'" : 'qq update with space-'));
   const managers = [];
+  let actionError;
   try {
     await mkdir(path.join(root, 'scripts'));
     await writeFile(path.join(root, 'package.json'), JSON.stringify({ version: '0.2.0' }));
@@ -101,11 +102,19 @@ async function fixture(options = {}, action) {
       return manager;
     };
     await action({ root, http, jobs, factory, manager: factory() });
+  } catch (error) {
+    actionError = error;
+    throw error;
   } finally {
     for (const manager of managers) manager.stop();
     const absolute = path.resolve(root);
     assert.ok(path.dirname(absolute) === temporary && path.basename(absolute).startsWith('qq update with space-'));
-    await rm(absolute, { recursive: true, force: true });
+    try {
+      await rm(absolute, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch (cleanupError) {
+      if (actionError) throw new AggregateError([actionError, cleanupError], 'Update fixture failed and could not be removed', { cause: actionError });
+      throw cleanupError;
+    }
   }
 }
 
@@ -115,7 +124,7 @@ async function test(name, action) {
     console.log(`PASS ${name}`);
   } catch (error) {
     failures += 1;
-    console.error(`FAIL ${name}: ${error.stack || error}`);
+    console.error(`FAIL ${name}:`, error);
   }
 }
 
@@ -871,8 +880,13 @@ await test('Windows installer executes after its launching console exits', async
     const marker = path.join(root, 'installer-ran.txt');
     await writeFile(path.join(root, 'scripts', 'install-update.ps1'), `
 param([string]$JobPath)
+$ErrorActionPreference = 'Stop'
+$consolePid = (Get-Content -LiteralPath $JobPath -Raw | ConvertFrom-Json).consolePid
+$console = [Diagnostics.Process]::GetProcessById($consolePid)
 [IO.File]::WriteAllText((Join-Path (Split-Path (Split-Path (Split-Path (Split-Path $JobPath)))) 'installer-started.txt'), [string]$PID)
-Start-Sleep -Milliseconds 1000
+try {
+  if (-not $console.WaitForExit(65000)) { throw 'The launching console did not exit.' }
+} finally { $console.Dispose() }
 [IO.File]::WriteAllText((Join-Path (Split-Path (Split-Path (Split-Path (Split-Path $JobPath)))) 'installer-ran.txt'), 'executed')
 Start-Sleep -Milliseconds 1000
 `);
@@ -899,10 +913,23 @@ const diagnostics = readdirSync(updates, { withFileTypes: true }).filter(entry =
 });
 throw new Error('Installer did not launch within 60 seconds: ' + JSON.stringify({ status: await manager.status(), diagnostics }));
 `;
-    const child = spawnSync(process.execPath, ['--input-type=module', '-e', childCode], {
-      encoding: 'utf8', windowsHide: true, timeout: 75_000,
-    });
-    equal(child.status, 0, child.stderr || child.error?.message);
+    // A detached installer must not keep spawnSync's capture pipes open after
+    // the console exits. Capture diagnostics in files instead of inherited pipes.
+    const stdoutPath = path.join(root, 'console.stdout.log');
+    const stderrPath = path.join(root, 'console.stderr.log');
+    const stdout = await open(stdoutPath, 'w');
+    const stderr = await open(stderrPath, 'w');
+    let child;
+    try {
+      child = spawnSync(process.execPath, ['--input-type=module', '-e', childCode], {
+        stdio: ['ignore', stdout.fd, stderr.fd], windowsHide: true, timeout: 75_000,
+      });
+    } finally {
+      await Promise.all([stdout.close(), stderr.close()]);
+    }
+    const diagnostics = await readFile(stderrPath, 'utf8');
+    equal(child.error, undefined, diagnostics || child.error?.message);
+    equal(child.status, 0, diagnostics);
     try {
       await until(async () => (await readFile(marker, 'utf8').catch(() => '')) === 'executed', 30_000);
     } catch (error) {
