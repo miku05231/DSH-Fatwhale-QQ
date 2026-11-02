@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULTS, loadConfig } from '../src/config.js';
 import { STICKER_DEFAULTS, normalizeStickerSettings } from '../src/stickers.js';
 import { createWebUiServer } from '../src/webui/server.mjs';
+import { runWebUiAppInContext } from './helpers/webui-app-vm.mjs';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VALUES = [0, 0.35, 1];
@@ -217,7 +218,7 @@ async function uiTests() {
     },
   });
   const script = await fsp.readFile(path.join(PROJECT_ROOT, 'src', 'webui', 'public', 'app.js'), 'utf8');
-  vm.runInContext(script, context);
+  runWebUiAppInContext(script, context);
   context.initEvents();
   const range = elements.get('#stickerSendProbability');
   const output = elements.get('#stickerSendProbabilityValue');

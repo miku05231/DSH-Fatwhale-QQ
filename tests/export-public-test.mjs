@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_SESSION_WINDOW_MINUTES } from '../src/sessions.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(HERE, '..');
@@ -207,6 +208,9 @@ async function main() {
     ok(fs.existsSync(full), `产物含 ${rel}`);
   }
   const screenshotRoot = path.join(PROJECT_ROOT, 'docs', 'screenshots');
+  const exampleConfig = JSON.parse(await fsp.readFile(path.join(out, 'config.example.json'), 'utf8'));
+  ok(exampleConfig.behavior.sessionWindowMinutes === DEFAULT_SESSION_WINDOW_MINUTES,
+    '公开配置模板保留与运行时一致的会话时长');
   const expectedDocs = new Set(PUBLIC_DOC_FILES.map((rel) => path.join(out, rel.split('/').join(path.sep))));
   for (const file of await walk(screenshotRoot)) {
     expectedDocs.add(path.join(out, 'docs', 'screenshots', path.relative(screenshotRoot, file)));

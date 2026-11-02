@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULTS, loadConfig } from '../src/config.js';
 import { DEFAULT_SESSION_WINDOW_MINUTES, isValidSessionWindowMinutes } from '../src/sessions.js';
 import { createWebUiServer } from '../src/webui/server.mjs';
+import { runWebUiAppInContext } from './helpers/webui-app-vm.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MAX_MINUTES = Math.floor(Number.MAX_SAFE_INTEGER / 60000);
@@ -152,7 +153,7 @@ async function uiTests() {
       } };
     },
   });
-  vm.runInContext(await fs.readFile(path.join(ROOT, 'src/webui/public/app.js'), 'utf8'), context);
+  runWebUiAppInContext(await fs.readFile(path.join(ROOT, 'src/webui/public/app.js'), 'utf8'), context);
   context.initEvents();
   check('The existing settings save button is wired', typeof events.get('settingsSave:click') === 'function');
   const control = elements.get('#setSessionWindowMinutes');

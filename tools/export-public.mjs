@@ -372,6 +372,7 @@ const EXAMPLE_CONFIG = {
   behavior: {
     queuedNotice: '收到，马上回复。',
     maxReplyChunk: 1200,
+    sessionWindowMinutes: 180,
     showErrors: true,
     wakeWord: '',
     wakeWordMatch: 'contains',
