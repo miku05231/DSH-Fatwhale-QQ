@@ -10,3 +10,4 @@
 *.html text eol=lf
 *.json text eol=lf
 *.yml text eol=lf
+*.sh text eol=lf

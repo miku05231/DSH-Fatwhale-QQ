@@ -8,7 +8,7 @@
  * 不碰真实数据：只写临时目录，人格/记忆只读。
  */
 
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, appendFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -227,6 +227,20 @@ async function httpTests(tmpRoot) {
     if (logs.body?.ok === true && Array.isArray(logs.body.data?.lines)) ok('日志可读', `${logs.body.data.lines.length} 行`);
     else bad('日志读取失败');
 
+    const dailyLog = path.join(tmpRoot, 'logs', 'bridge-2026-11-01.log');
+    await writeFile(dailyLog, '真实运行日志\ntoken=synthetic-daily-secret\n');
+    const daily = await get('/api/logs?name=bridge&lines=5');
+    eq(daily.body?.data?.source, 'bridge-daily', 'HTTP 日志端点优先使用实际日期文件');
+    eq(daily.body?.data?.lines?.includes('真实运行日志'), true, 'HTTP 返回日期文件内容');
+    eq(JSON.stringify(daily.body).includes('synthetic-daily-secret'), false, '日期文件内容也经过脱敏');
+    eq(daily.res.headers.get('cache-control')?.includes('no-store'), true, '日志 HTTP 响应禁用缓存');
+    await appendFile(dailyLog, '追加日志\n');
+    const appended = await get('/api/logs?name=bridge&lines=5');
+    eq(appended.body?.data?.lines?.at(-1), '追加日志', '重复 HTTP 请求读到追加内容');
+    await writeFile(path.join(tmpRoot, 'logs', 'bridge-2026-11-02.log'), '轮转后日志\n');
+    const rotated = await get('/api/logs?name=bridge&lines=5');
+    eq(rotated.body?.data?.lines?.join('\n'), '轮转后日志', 'HTTP 请求重新识别日期轮转');
+
     const model = await get('/api/model');
     if (model.body?.ok === true && Array.isArray(model.body.data?.providers)) {
       ok('模型快照可读', `${model.body.data.providers.length} 个供应商，mode=${model.body.data.mode}`);
@@ -372,6 +386,10 @@ async function httpTests(tmpRoot) {
     const jsText = await js.text();
     if (js.status === 200 && jsText.includes('/api/overview')) ok('前端脚本可访问');
     else bad('前端脚本异常', `HTTP ${js.status}`);
+
+    const logModule = await fetch(base + '/logs.js');
+    eq(logModule.status, 200, '日志轮询模块可由静态服务加载');
+    eq(logModule.headers.get('content-type')?.includes('javascript'), true, '日志模块响应使用 JavaScript MIME');
 
     const traversalStatic = await fetch(base + '/..%2f..%2fconfig.json');
     if (traversalStatic.status === 404 || traversalStatic.status === 403) ok('静态资源拒绝穿越', `HTTP ${traversalStatic.status}`);

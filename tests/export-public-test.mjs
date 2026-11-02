@@ -18,6 +18,30 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(HERE, '..');
 const TOOL = path.join(PROJECT_ROOT, 'tools', 'export-public.mjs');
+const PUBLIC_DOC_FILES = [
+  'docs/astrbot.md',
+  'docs/控制台架构.md',
+  'docs/测试清单.md',
+  'docs/Docker部署.md',
+  'docs/更新发布.md',
+  'docs/automation-and-voice.md',
+  'docs/image-generation.md',
+  'docs/media-providers.md',
+  'docs/releases/v3.2.0.md',
+  'docs/releases/v3.2.0-verification.md',
+  'docs/releases/v3.1.5.md',
+  'docs/releases/v3.1.4.md',
+  'docs/releases/v3.1.3.md',
+  'docs/releases/v3.1.2.md',
+  'docs/releases/v3.1.1.md',
+  'docs/releases/v3.1.0.md',
+  'docs/releases/v3.0.0.md',
+  'docs/releases/v0.2.9.md',
+  'docs/releases/v0.2.8.md',
+  'docs/releases/v0.2.7.md',
+  'docs/releases/v0.2.6.md',
+  'docs/releases/v0.2.5.md',
+];
 
 let passed = 0;
 let failed = 0;
@@ -133,6 +157,12 @@ async function main() {
   ok(run.status === 0, '导出脚本退出码 0', `status=${run.status}`);
   ok(String(run.stdout).includes('脱敏自检通过'), '脚本自检通过');
   const files = await walk(out);
+  const shellScripts = files.filter((file) => path.extname(file).toLowerCase() === '.sh');
+  const shellScriptsWithCrlf = [];
+  for (const file of shellScripts) {
+    if ((await fsp.readFile(file, 'utf8')).includes('\r\n')) shellScriptsWithCrlf.push(path.relative(out, file));
+  }
+  ok(shellScriptsWithCrlf.length === 0, '导出产物中的 shell 脚本统一为 LF', shellScriptsWithCrlf.join('; '));
 
   console.log('\n[2/5 该有的文件都在]');
   const required = [
@@ -156,23 +186,7 @@ async function main() {
     'src/webui/public/index.html',
     'launcher/Launcher.ps1',
     'tests/run-all.mjs',
-    'docs/控制台架构.md',
-    'docs/Docker部署.md',
-    'docs/Docker验证报告.md',
-    'docs/隐私审计报告.md',
-    'docs/从零验证报告.md',
-    'docs/更新发布.md',
-    'docs/automation-and-voice.md',
-    'docs/verification-v3.0.0.md',
-    'docs/releases/v3.0.0.md',
-    'docs/verification-v3.1.0.md',
-    'docs/releases/v3.1.0.md',
-    'docs/verification-v3.1.1.md',
-    'docs/releases/v3.1.1.md',
-    'docs/verification-v3.1.2.md',
-    'docs/releases/v3.1.2.md',
-    'docs/verification-v3.1.3.md',
-    'docs/releases/v3.1.3.md',
+    ...PUBLIC_DOC_FILES,
     'scripts/install-update.ps1',
     '.github/workflows/release.yml',
     'deepseek-waitou.png',
@@ -192,6 +206,18 @@ async function main() {
     const full = path.join(out, rel.split('/').join(path.sep));
     ok(fs.existsSync(full), `产物含 ${rel}`);
   }
+  const screenshotRoot = path.join(PROJECT_ROOT, 'docs', 'screenshots');
+  const expectedDocs = new Set(PUBLIC_DOC_FILES.map((rel) => path.join(out, rel.split('/').join(path.sep))));
+  for (const file of await walk(screenshotRoot)) {
+    expectedDocs.add(path.join(out, 'docs', 'screenshots', path.relative(screenshotRoot, file)));
+  }
+  const actualDocs = files.filter((file) => path.relative(out, file).split(path.sep)[0] === 'docs');
+  const unexpectedDocs = actualDocs.filter((file) => !expectedDocs.has(file));
+  const missingDocs = [...expectedDocs].filter((file) => !actualDocs.includes(file));
+  ok(unexpectedDocs.length === 0 && missingDocs.length === 0, '文档仅包含公开白名单', [
+    ...unexpectedDocs.map((file) => `unexpected:${path.relative(out, file)}`),
+    ...missingDocs.map((file) => `missing:${path.relative(out, file)}`),
+  ].join('; '));
   ok(!fs.existsSync(path.join(out, 'companion')), '公开源码不带顶级 companion 目录');
 
   console.log('\n[3/5 项目展示完整保留]');
@@ -212,7 +238,6 @@ async function main() {
   const exportedIcon = fs.readFileSync(path.join(out, 'deepseek-waitou.png'));
   ok(exportedIcon.equals(sourceIcon), '根目录图标源文件按原始字节导出');
   ok(exportedIcon.equals(fs.readFileSync(path.join(out, 'assets', 'app-icon.png'))), '图标源文件与应用 PNG 图标一致');
-  const screenshotRoot = path.join(PROJECT_ROOT, 'docs', 'screenshots');
   const screenshots = await walk(screenshotRoot);
   const changedImages = screenshots.filter((file) =>
     !fs.readFileSync(file).equals(fs.readFileSync(path.join(out, 'docs', 'screenshots', path.relative(screenshotRoot, file)))));

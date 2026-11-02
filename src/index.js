@@ -21,6 +21,10 @@ import { SessionStore, readSessionWindowMinutes } from './sessions.js';
 import { GroupMemory } from './groupmem.js';
 import { resolveModelPlan } from './model-follow.js';
 import { PluginHost } from './plugins.js';
+import { createAstrbotPolicy } from './astrbot-policy.mjs';
+import { createAstrbotBridge } from './astrbot-bridge.mjs';
+import { createAstrbotManager } from './astrbot-manager.mjs';
+import { createAstrbotModelProvider } from './astrbot-model.mjs';
 import { PersonaLoader } from './persona.js';
 import {
   buildPersonaListText,
@@ -489,6 +493,36 @@ async function main() {
   });
 
   const platformAbort = new AbortController();
+  const astrbotPolicy = createAstrbotPolicy({ root: configRoot, readConfig: accessConfig });
+  const astrbotManager = createAstrbotManager({ projectRoot: configRoot, configPath, readConfig: accessConfig, logger: log });
+  const astrbotModel = createAstrbotModelProvider({
+    readConfig: accessConfig,
+    modelPlan: () => ({ extraPatchPaths: refreshModelPlan(), model: modelInfo?.effective ?? null }),
+    cwd: dshCwd, projectRoot: configRoot, stateDir, patchPath, log,
+  });
+  const astrbot = createAstrbotBridge({
+    root: configRoot, readConfig: accessConfig, policy: astrbotPolicy, manager: astrbotManager,
+    host: process.env.QQ_ASTRBOT_CALLBACK_HOST || '127.0.0.1',
+    port: Number(process.env.QQ_ASTRBOT_CALLBACK_PORT || 5832), logger: log, generate: astrbotModel,
+    send: async (action, params) => {
+      if (!connected || shuttingDown) throw new Error('onebot_unavailable');
+      return bot.call(action, params);
+    },
+  });
+  async function astrbotEnabled() {
+    try { return await astrbotPolicy.getEnabled(); }
+    catch { log.warn('AstrBot 策略无法读取，插件通道已拒绝本轮请求。'); return false; }
+  }
+  // Restore callback delivery after bridge restart, including scheduled tasks.
+  // A missing/off policy opens no new port, and Python setup cannot block OneBot.
+  async function restoreAstrbotCallbacks() {
+    if (await astrbotEnabled()) await astrbot.start();
+  }
+  const astrbotHeartbeat = setInterval(() => {
+    void restoreAstrbotCallbacks().catch(() => log.warn('AstrBot 回调接口暂不可用。'));
+  }, 5000);
+  astrbotHeartbeat.unref();
+  void restoreAstrbotCallbacks().catch(() => log.warn('AstrBot 回调接口暂不可用。'));
   const defaultGroupClassifier = createDefaultGroupClassifier({
     readConfig: accessConfig,
     modelPlan: () => ({ extraPatchPaths: refreshModelPlan(), model: modelInfo?.effective ?? null }),
@@ -692,6 +726,26 @@ async function main() {
       return;
     }
 
+    // This separate lane cannot grant access to the existing JS/DSH computer lane.
+    // Commands may run without an @; generic plugin AI still requires an explicit wake.
+    let astrbotRateTaken = false;
+    if (await astrbotEnabled() && await astrbot.admit(msg)) {
+      const word = String(config?.behavior?.wakeWord || '').trim();
+      const wake = !isGroup || isAtSelf(msg, config) || Boolean(word && (
+        config?.behavior?.wakeWordMatch === 'contains' ? text.includes(word) : text.startsWith(word)
+      ));
+      if (!limiter.take(String(userId))) return;
+      astrbotRateTaken = true;
+      if (queue.size(`astrbot:${chatKey}`) >= 20) return;
+      const handled = await queue.enqueue(`astrbot:${chatKey}`, async () => {
+        if (shuttingDown) return true;
+        const result = await astrbot.dispatch(msg, { text, isWake: wake, signal: platformAbort.signal });
+        if (result.status === 'failed') log.warn('AstrBot 本轮处理失败，未重放消息；可在插件页检查服务。');
+        return result.handled;
+      });
+      if (handled) return;
+    }
+
     // 群号白名单/allowGroups 已经在上面 isGroupWatched 里判过了，这里只判
     // 「这句话是不是在跟它说」：@ 了算；没 @ 时看唤醒词。
     // behavior.wakeWordMatch：
@@ -717,7 +771,7 @@ async function main() {
       }
     }
 
-    if (!limiter.take(String(userId))) {
+    if (!astrbotRateTaken && !limiter.take(String(userId))) {
       noteDrop(`用户 ${userId} 触发限流`);
       log.warn(`用户 ${userId} 触发限流，忽略本条`);
       if (!isGroup || explicitWake) await safeSend(msg, '慢一点，我还在处理上一条 🙂');
@@ -1206,6 +1260,9 @@ async function main() {
     reflectScheduler.stop();
     platformScheduler.stop();
     platformAbort.abort();
+    clearInterval(astrbotHeartbeat);
+    await astrbot.stop();
+    await astrbotManager.stop();
     if (stickerTargetTimer) clearInterval(stickerTargetTimer);
     try {
       await stickerCollector?.flush?.();

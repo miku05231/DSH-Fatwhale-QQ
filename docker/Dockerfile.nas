@@ -6,8 +6,11 @@ RUN apk add --no-cache bash git ripgrep python3 \
  && npm cache clean --force
 
 ENV NODE_ENV=production \
+    NARB_DISABLE_NATIVE_CACHE=1 \
     TZ=Asia/Shanghai \
     WEBUI_HOST=0.0.0.0 \
+    QQ_BRIDGE_LOG_SOURCE=daily \
+    QQ_NAPCAT_LOG_SOURCE=webui \
     DSH_HOME=/home/bridge/.dsh \
     QQ_BRIDGE_ROOT=/app
 WORKDIR /app
@@ -18,10 +21,12 @@ COPY patches ./patches
 COPY assets ./assets
 COPY docs ./docs
 COPY docker ./docker
+COPY runtime ./runtime
 RUN addgroup -g 10001 bridge \
  && adduser -D -u 10001 -G bridge -h /home/bridge bridge \
  && mkdir -p /app/state /app/logs /app/qq-workspace /app/memory /config /home/bridge/.dsh \
  && chown -R bridge:bridge /app /config /home/bridge \
+ && sed -i 's/\r$//' /app/docker/entrypoint.sh \
  && chmod +x /app/docker/entrypoint.sh
 USER bridge
 EXPOSE 5830

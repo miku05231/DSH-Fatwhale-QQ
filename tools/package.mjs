@@ -31,7 +31,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 
 /** 只复制这些（目录递归、文件单个） */
-const INCLUDE_DIRS = ['src', 'launcher', 'tools', 'tests', 'docs', 'patches', 'assets', 'scripts', 'docker'];
+const INCLUDE_DIRS = ['src', 'launcher', 'tools', 'tests', 'patches', 'assets', 'scripts', 'docker', 'runtime'];
 const INCLUDE_FILES = [
   'README.md',
   'deepseek-waitou.png',
@@ -50,6 +50,33 @@ const INCLUDE_FILES = [
   '.env.example',
 ];
 
+/** Public documentation only; internal acceptance, drafts, and local topology stay out. */
+const PUBLIC_DOC_DIRS = ['docs/screenshots'];
+const PUBLIC_DOC_FILES = [
+  'docs/astrbot.md',
+  'docs/控制台架构.md',
+  'docs/测试清单.md',
+  'docs/Docker部署.md',
+  'docs/更新发布.md',
+  'docs/automation-and-voice.md',
+  'docs/image-generation.md',
+  'docs/media-providers.md',
+  'docs/releases/v3.2.0.md',
+  'docs/releases/v3.2.0-verification.md',
+  'docs/releases/v3.1.5.md',
+  'docs/releases/v3.1.4.md',
+  'docs/releases/v3.1.3.md',
+  'docs/releases/v3.1.2.md',
+  'docs/releases/v3.1.1.md',
+  'docs/releases/v3.1.0.md',
+  'docs/releases/v3.0.0.md',
+  'docs/releases/v0.2.9.md',
+  'docs/releases/v0.2.8.md',
+  'docs/releases/v0.2.7.md',
+  'docs/releases/v0.2.6.md',
+  'docs/releases/v0.2.5.md',
+];
+
 /** 这些目录/文件永远不进包 */
 const EXCLUDE = [
   /(^|[\\/])\.imagegen-runtime([\\/]|$)/,
@@ -58,6 +85,7 @@ const EXCLUDE = [
   /(^|[\\/])logs([\\/]|$)/,
   /(^|[\\/])napcat([\\/]|$)/,
   /(^|[\\/])node_modules([\\/]|$)/,
+  /(^|[\\/])(?:__pycache__|\.venv)([\\/]|$)/,
   /(^|[\\/])qq-workspace([\\/]|$)/,
   /(^|[\\/])dist([\\/]|$)/,
   /(^|[\\/])\.git([\\/]|$)/,
@@ -75,7 +103,7 @@ const EXCLUDE = [
   /\.tmp$/,
 ];
 
-const TEXT_EXT = new Set(['.js', '.mjs', '.cjs', '.json', '.md', '.yml', '.yaml', '.ps1', '.cmd', '.sh', '.txt', '.html', '.css']);
+const TEXT_EXT = new Set(['.js', '.mjs', '.cjs', '.json', '.md', '.yml', '.yaml', '.ps1', '.cmd', '.sh', '.txt', '.html', '.css', '.py', '.toml']);
 
 /**
  * 个人/私有信息 → 占位符（顺序敏感：长的先换）。
@@ -208,6 +236,7 @@ async function copyFile(src, dest, rel) {
     if (!text.includes(from)) continue;
     text = text.split(from).join(to);
   }
+  if (ext === '.sh') text = text.replace(/\r\n/g, '\n');
   // .ps1 必须是 UTF-8 with BOM，否则 PS 5.1 会把中文读成乱码
   const bom = ext === '.ps1' ? '\uFEFF' : '';
   await fsp.writeFile(dest, `${bom}${text.replace(/^\uFEFF/, '')}`, 'utf8');
@@ -249,6 +278,12 @@ async function build({ outDir, zip }) {
   for (const dir of INCLUDE_DIRS) {
     const rels = await walk(ROOT, dir);
     for (const rel of rels) files.push(rel);
+  }
+  for (const dir of PUBLIC_DOC_DIRS) {
+    for (const rel of await walk(ROOT, dir)) files.push(rel);
+  }
+  for (const file of PUBLIC_DOC_FILES) {
+    if (!excluded(file) && fs.existsSync(path.join(ROOT, file))) files.push(file);
   }
   for (const file of INCLUDE_FILES) {
     if (excluded(file)) continue;

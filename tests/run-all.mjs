@@ -31,6 +31,34 @@ const skipNet = argv.includes('--skip-net');
  */
 const SUITE = [
   {
+    name: 'WebUI 真实日志与自动刷新', file: 'tests/webui-logs-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
+    note: '日期日志追加与轮转、禁止容器旧日志回退、前端轮询与乱序取消',
+  },
+  {
+    name: 'NapCat 实时日志读取', file: 'tests/napcat-logs-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
+    note: '认证的有界实时日志、连接复用、鉴权刷新、关闭与错误状态',
+  },
+  {
+    name: 'AstrBot 定时任务与主动发送授权', file: 'tests/astrbot-outbound-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
+    note: '精确目标授权、撤销、快照回滚、并发失效与无入站身份的纯文本发送',
+  },
+  {
+    name: 'AstrBot 环境事务与运行生命周期', file: 'tests/astrbot-manager-test.mjs', expect: ['fail 0'], timeoutMs: 90_000,
+    note: '整套代际切换、依赖和数据回退、默认关闭、外部运行时与保留插件标识',
+  },
+  {
+    name: 'AstrBot 管理与 NAS 认证代理', file: 'tests/astrbot-api-test.mjs', expect: ['失败 0 项'], timeoutMs: 60_000,
+    note: '异步安装作业、配置秘密字段、分群策略、CSRF 和代理断言防重放',
+  },
+  {
+    name: 'AstrBot DSH 模型网关', file: 'tests/astrbot-model-test.mjs', expect: ['fail 0'], timeoutMs: 90_000,
+    note: '当前模型、结构化工具、多模态、取消与无电脑工具的隔离内核',
+  },
+  {
+    name: 'AstrBot 权限与消息桥', file: 'tests/astrbot-bridge-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
+    note: '普通成员授权、跨群拒绝、撤权、持久任务身份、媒体路径与不重放',
+  },
+  {
     name: '启动配置路径', file: 'tests/config-entry-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
     note: '自定义文件名、目录参数、命令行优先级与环境变量相对路径',
   },

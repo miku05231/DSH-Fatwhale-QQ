@@ -1,3 +1,11 @@
+# QQ-DSH v3.2.0
+
+当前版本：**v3.2.0**。AstrBot 是可选扩展，默认关闭；功能边界见[发行说明](docs/releases/v3.2.0.md)。
+
+> **测试状态：尚未完成全面测试。**真实 QQ 新适配投递、公开天气 API、真实模型供应商、从零安装和全部 AstrBot 插件兼容性未全面验证。请查看[匿名验收摘要](docs/releases/v3.2.0-verification.md)，遇到问题请到 [GitHub Issues](https://github.com/miku05231/DSH-Fatwhale-QQ/issues) 提交。
+>
+> **DSH 兼容验证：**0.2.1-rc.5 已在 Windows 与 NAS 的受控场景完成验证；生产 DSH 核心仍为 0.2.0-rc.2，不代表生产已升级或真实模型供应商认证。
+
 <!-- showcase:start -->
 <p align="center">
   <a href="deepseek-waitou.png"><img src="deepseek-waitou.png" width="112" height="112" alt="QQ-DSH 应用图标"></a>
@@ -7,13 +15,17 @@
 
 你在手机或电脑 QQ 里发消息，本机 DSH 执行并回复。
 
-当前版本：**v3.1.5**。新增 NAS Docker 与局域网媒体支持，修复文件交付、DSH 状态显示和更新器残留锁，详见 [发行说明](docs/releases/v3.1.5.md)。
+当前版本：**v3.2.0**。新增默认关闭的 AstrBot 插件运行时与管理、群授权边界，以及 NAS 日志和持久调度适配，见 [v3.2.0 发行说明](docs/releases/v3.2.0.md)。
+
+> **测试状态：尚未完成全面测试。**真实 QQ 新适配投递、公开天气 API、真实模型供应商、从零安装和全部 AstrBot 插件兼容性未全面验证。请按[匿名验收摘要](docs/releases/v3.2.0-verification.md)的边界使用；遇到问题请到 [GitHub Issues](https://github.com/miku05231/DSH-Fatwhale-QQ/issues) 提交。
+>
+> **DSH 兼容验证：**0.2.1-rc.5 已在 Windows 与 NAS 的受控场景完成验证；生产 DSH 核心仍为 0.2.0-rc.2，不代表生产已升级或真实模型供应商认证。
 
 应用图标源文件：[deepseek-waitou.png](deepseek-waitou.png)（保留原始 PNG）。
 
 多平台生图与语音：支持 ComfyUI 异步生图、OpenAI、硅基流动和自定义兼容接口；TTS 继续支持 Edge。密钥可选，配置入口与格式见 [多平台接入](docs/media-providers.md)，生图任务恢复见 [生图文档](docs/image-generation.md)。
 
-DSH 兼容性：已分别使用 `0.2.0-rc.2` 和 `0.2.1-rc.3` 验证真实 Web、companion 与 headless 链路；详见各版本验证说明。
+DSH 兼容性：最新受控验证版本为 0.2.1-rc.5，双端各 5/5；生产核心保持 0.2.0-rc.2。范围见 [v3.2.0 匿名验收摘要](docs/releases/v3.2.0-verification.md)。
 
 ## 项目展示
 
@@ -129,7 +141,7 @@ JEV URL 和 Token 均已填写时使用 JEV，缺任一项时使用当前 DSH �
 - DSH（DeepSeek Harness）已安装并可用 `dsh` 命令
 - NapCat（同一个发布包里的无头版本即可，无需另装 QQ 客户端）
 
-Docker 部署见 [部署说明](docs/Docker部署.md)；[历史容器验证](docs/Docker验证报告.md) 不代表 v3.1.3 已完成真实容器测试。
+Docker 部署见[部署说明](docs/Docker部署.md)。
 
 ## 快速开始
 
@@ -161,7 +173,7 @@ node src\webui\server.mjs   # 然后访问 http://127.0.0.1:5830
 
 ```powershell
 $env:QQ_TEST_DSH_COMMAND = 'dsh' # 已安装 0.2.0-rc.2 的命令，也可填写 lib\bin.js 的绝对路径
-$env:QQ_TEST_DSH_VERSION = '0.2.0-rc.2' # 必须与上述入口匹配；新版已验证 0.2.1-rc.3
+$env:QQ_TEST_DSH_VERSION = '0.2.0-rc.2' # 必须与上述入口匹配；受控兼容范围见 docs/releases/v3.2.0-verification.md
 $env:QQ_TEST_BROWSER_EXE = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
 node tests\run-all.mjs
 node tests\plugins-test.mjs # 单跑插件宿主
@@ -173,7 +185,7 @@ node tests\plugins-test.mjs # 单跑插件宿主
 
 命令行启停核对本安装的入口脚本；修复自定义配置文件名、命令行与环境变量优先级，以及相对环境路径。私聊黑名单模式不再绕过群成员白名单；过期限流记录定期清理，活跃额度保留。NapCat 健康工作线程不继承测试入口参数。
 
-本版修复使用模拟 NapCat、隔离配置与测试进程验证。详见 [v3.1.3 验证说明](docs/verification-v3.1.3.md) 和 [发行说明](docs/releases/v3.1.3.md)。真实 QQ 投递、长期登录、真实平台发布、Docker 与 macOS 未新增验收。
+本版历史修复使用模拟 NapCat、隔离配置与测试进程验证；详见 [v3.1.3 发行说明](docs/releases/v3.1.3.md)。这些历史结果不代表 v3.2.0 的全量验证。
 
 ## v3.1.2 修复与验证范围
 
@@ -183,7 +195,7 @@ node tests\plugins-test.mjs # 单跑插件宿主
 
 **未完成**：真实 QQ 文字/语音投递、QQ 定时推送、B站实际评论与 @、长期真实群聊判定，以及完整工作日登录稳定性、网络切换、休眠及 Windows 用户注销恢复，本版 Docker 和其他系统。语音与平台功能沿用旧版的未实测边界；不能承诺永久免重新授权，也不自动启用自启。
 
-详见 [功能配置](docs/automation-and-voice.md)、[测试与未测试说明](docs/verification-v3.1.2.md) 和 [v3.1.2 发行说明](docs/releases/v3.1.2.md)。历史说明保留于 [v3.1.0](docs/releases/v3.1.0.md) 和 [v3.1.1](docs/releases/v3.1.1.md)；这两个标签未创建正式 Release。
+详见[功能配置](docs/automation-and-voice.md)和 [v3.1.2 发行说明](docs/releases/v3.1.2.md)。历史说明保留于 [v3.1.0](docs/releases/v3.1.0.md) 和 [v3.1.1](docs/releases/v3.1.1.md)；这两个标签未创建正式 Release。
 
 ## 插件
 
@@ -203,6 +215,8 @@ export async function onMessage(ctx) {
 ```
 
 三个钩子：`onMessage` / `beforeReply` / `afterReply`；插件按文件名排序，异常只记日志。详见 `docs/控制台架构.md`。
+
+另有默认关闭的 AstrBot 插件兼容运行时，支持 Windows 专用 Python 与 NAS 可选容器。安装、群授权、模型和调度边界见 [AstrBot 插件说明](docs/astrbot.md)；受控验证范围见 [v3.2.0 匿名验收摘要](docs/releases/v3.2.0-verification.md)，不代表全部插件兼容。
 
 ## 目录
 

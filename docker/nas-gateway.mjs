@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { createProxyAssertion } from '../src/webui/proxy-assertion.mjs';
 
 const HOP_BY_HOP = new Set([
   'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
@@ -51,6 +52,13 @@ export function createGateway({ username, passwordHash, upstream, timeoutMs = 30
     const headers = cleanHeaders(req.headers);
     delete headers.authorization;
     delete headers['proxy-authorization'];
+    // Replace any client-supplied value. The bridge verifies this short-lived
+    // assertion for AstrBot admin requests that arrive through this gateway.
+    headers['x-qq-console-assertion'] = createProxyAssertion(passwordHash, {
+      method: req.method,
+      url: req.url,
+      host: req.headers.host,
+    });
     const proxy = http.request({
       hostname: target.hostname,
       port: target.port || 80,

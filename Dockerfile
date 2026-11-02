@@ -16,6 +16,7 @@ LABEL org.opencontainers.image.title="QQ-DSH Bridge" \
       org.opencontainers.image.version="0.1.0"
 
 ENV NODE_ENV=production \
+    NARB_DISABLE_NATIVE_CACHE=1 \
     TZ=Asia/Shanghai \
     WEBUI_HOST=0.0.0.0 \
     DSH_HOME=/home/bridge/.dsh \
@@ -31,6 +32,7 @@ COPY patches ./patches
 COPY assets ./assets
 COPY docs ./docs
 COPY docker ./docker
+COPY runtime ./runtime
 COPY README.md ./
 
 RUN mkdir -p /app/state /app/logs /app/qq-workspace /app/memory /app/config /config \
@@ -38,6 +40,7 @@ RUN mkdir -p /app/state /app/logs /app/qq-workspace /app/memory /app/config /con
  && adduser -D -u 10001 -G bridge -h /home/bridge bridge \
  && mkdir -p /home/bridge/.dsh \
  && chown -R bridge:bridge /app /home/bridge /config \
+ && sed -i 's/\r$//' /app/docker/entrypoint.sh \
  && chmod +x /app/docker/entrypoint.sh
 
 USER bridge

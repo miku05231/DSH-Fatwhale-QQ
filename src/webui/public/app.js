@@ -3,9 +3,12 @@
  * 零依赖 ES module。所有请求走 /api/*，统一 { ok, data } / { ok, error } 信封。
  */
 
+import { createLogView } from './logs.js';
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 let imagegenUi;
+let astrbotUi;
 
 const STATE = {
   page: 'overview',
@@ -253,6 +256,7 @@ function setPage(name, { push = true } = {}) {
   if (!PAGES[name]) return;
   if (STATE.page === 'automation' && name !== 'automation') stopBiliQrLogin({ notify: false });
   STATE.page = name;
+  if (name !== 'overview' && name !== 'system') logView.stop();
 
   $$('.page').forEach((el) => el.classList.toggle('is-active', el.dataset.page === name));
   $$('.nav-item').forEach((el) => {
@@ -271,6 +275,7 @@ function setPage(name, { push = true } = {}) {
   }
 
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (name === 'overview') void logView.refresh();
   refreshPage(name).catch((err) => snackbar(err.message));
 }
 
@@ -285,7 +290,7 @@ async function refreshPage(name = currentPage()) {
   if (name === 'persona') return loadPersonas();
   if (name === 'sessions') return loadSessions();
   if (name === 'model') return loadModel();
-  if (name === 'plugins') return loadPlugins();
+  if (name === 'plugins') { await loadPlugins(); return astrbotUi?.load(); }
   if (name === 'automation') return loadAutomation();
   if (name === 'system') return loadSystem();
 }
@@ -451,18 +456,6 @@ async function loadOverview() {
   stat('#statMessages', String(Number(data.today?.messages) || 0));
   stat('#statSessions', String(Number(data.bridge?.sessions) || 0));
   stat('#overviewTime', clockTime(data.now));
-
-  // 概览页底部迷你日志
-  try {
-    const logs = await api('/api/logs?name=bridge&lines=12');
-    const box = $('#overviewLog');
-    if (box) {
-      box.textContent = logs.missing || !logs.lines?.length ? '暂时没有日志' : logs.lines.join('\n');
-      box.scrollTop = box.scrollHeight;
-    }
-  } catch {
-    /* 日志失败不影响概览 */
-  }
 
   return data;
 }
@@ -2069,23 +2062,21 @@ function renderSystemInfo(overview) {
   }
 }
 
-async function loadLogs() {
-  const box = $('#logBox');
-  if (!box) return;
-  try {
-    const data = await api(`/api/logs?name=${encodeURIComponent(STATE.logName)}&lines=240`);
-    if (data.missing) {
-      box.textContent = `日志文件还没生成：${data.file}`;
-    } else if (!data.lines?.length) {
-      box.textContent = '日志是空的';
-    } else {
-      box.textContent = data.lines.join('\n');
-      box.scrollTop = box.scrollHeight;
-    }
-  } catch (err) {
-    box.textContent = `读取日志失败：${err.message}`;
-  }
+function requestLogs(url, options) {
+  const requestUrl = new URL(url, window.location.href);
+  requestUrl.searchParams.set('lines', STATE.page === 'overview' ? '12' : '240');
+  return api(`${requestUrl.pathname}${requestUrl.search}`, options);
 }
+
+const logView = createLogView({
+  api: requestLogs,
+  getName: () => STATE.page === 'overview' ? 'bridge' : STATE.logName,
+  isActive: () => ['overview', 'system'].includes(STATE.page) && document.visibilityState === 'visible',
+  getBox: () => STATE.page === 'overview' ? $('#overviewLog') : $('#logBox'),
+  getStatus: () => STATE.page === 'system' ? $('#logStatus') : null,
+});
+
+function loadLogs() { return logView.refresh(); }
 
 /** 把 textarea 里的 QQ 号/群号解析成数字数组（逗号、空格、换行都认） */
 function parseIdList(value) {
@@ -2479,11 +2470,12 @@ async function importBilibiliCookie() {
 }
 
 async function loadSystem() {
+  const logs = loadLogs();
   const overview = await api('/api/overview');
   STATE.overview = overview;
   setStatusChip(overview);
   renderSystemInfo(overview);
-  await Promise.all([loadLogs(), loadSettings(), loadAutostart(), loadPaths(), loadUpdates()]);
+  await Promise.all([logs, loadSettings(), loadAutostart(), loadPaths(), loadUpdates()]);
 }
 
 /* ------------------------------------------------------------ 路径 */
@@ -2939,6 +2931,10 @@ function init() {
   void import('./imagegen.js').then(({ initImagegen }) => {
     imagegenUi = initImagegen({ api, notify: snackbar, confirm: confirmDialog });
   }).catch((err) => snackbar(err.message));
+  void import('./astrbot.js').then(({ initAstrbot }) => {
+    astrbotUi = initAstrbot({ notify: snackbar, confirm: confirmDialog });
+    if (STATE.page === 'plugins') astrbotUi.load();
+  }).catch((err) => snackbar(err.message));
   initEvents();
   initRipples();
   initPullToRefresh();
@@ -2946,6 +2942,13 @@ function init() {
   const initial = location.hash.replace(/^#/, '');
   setPage(PAGES[initial] ? initial : 'overview', { push: false });
   loadUpdates();
+
+  document.addEventListener('visibilitychange', () => {
+    if (STATE.page === 'system' && document.visibilityState === 'visible') void loadLogs();
+    else if (STATE.page === 'overview' && document.visibilityState === 'visible') void logView.refresh();
+    else logView.stop();
+  });
+  window.addEventListener('pagehide', () => logView.stop());
 
   // 概览状态每 8 秒悄悄刷新一次（只在概览页）
   window.setInterval(() => {

@@ -235,6 +235,26 @@ test('nested config, BOM and disabled WebUI do not contact another installation'
   try { assert.equal((await health.check({ running: false })).state, 'stopped'); } finally { health.close(); }
 }));
 
+test('container WebUI URL uses the shared settings token and honors explicit config', () => fixture(async ({ root }) => {
+  const previous = process.env.QQ_NAPCAT_WEBUI_URL;
+  process.env.QQ_NAPCAT_WEBUI_URL = 'http://napcat:6099';
+  try {
+    const dir = path.join(root, 'napcat', 'config');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'webui.json'), JSON.stringify({ host: '0.0.0.0', port: 6099, token: TOKEN }));
+    const settings = readNapcatSettings(root, {});
+    assert.equal(settings.baseUrl, 'http://napcat:6099');
+    assert.equal(settings.token, TOKEN);
+    assert.equal(settings.webuiEnabled, true);
+    assert.equal(readNapcatSettings(root, { napcat: { webui: 'http://custom:7000/webui/' } }).baseUrl, 'http://custom:7000');
+    await fs.writeFile(path.join(dir, 'webui.json'), JSON.stringify({ disableWebUI: true }));
+    assert.equal(readNapcatSettings(root, {}).webuiEnabled, false);
+  } finally {
+    if (previous === undefined) delete process.env.QQ_NAPCAT_WEBUI_URL;
+    else process.env.QQ_NAPCAT_WEBUI_URL = previous;
+  }
+}));
+
 test('lifecycle journal preserves transitions and bounds files without identity or secrets', () => fixture(async ({ root }) => {
   const logDir = path.join(root, 'logs');
   const journal = createNapcatHealthJournal({ logDir, maxBytes: 250, heartbeatMs: 60_000 });

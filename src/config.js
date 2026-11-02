@@ -112,6 +112,11 @@ export const DEFAULTS = deepFreeze({
   },
   logDir: 'logs',
   stateDir: 'state',
+  // Disabled until an administrator explicitly enables the isolated plugin lane.
+  astrbot: {
+    enabled: false,
+    runtimeUrl: 'http://127.0.0.1:5831',
+  },
   // 跨进程文件可见性：桥接容器里的绝对路径 → NapCat 里的绝对路径。
   // 只在需要把宿主文件交给另一个容器/进程读取时使用；默认空表示不启用映射。
   files: {

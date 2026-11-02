@@ -22,6 +22,30 @@ import { isolatedEnv, prepareIsolatedHome } from './helpers/isolated-fixtures.mj
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const PACKAGER = path.join(ROOT, 'tools', 'package.mjs');
+const PUBLIC_DOC_FILES = [
+  'docs/astrbot.md',
+  'docs/控制台架构.md',
+  'docs/测试清单.md',
+  'docs/Docker部署.md',
+  'docs/更新发布.md',
+  'docs/automation-and-voice.md',
+  'docs/image-generation.md',
+  'docs/media-providers.md',
+  'docs/releases/v3.2.0.md',
+  'docs/releases/v3.2.0-verification.md',
+  'docs/releases/v3.1.5.md',
+  'docs/releases/v3.1.4.md',
+  'docs/releases/v3.1.3.md',
+  'docs/releases/v3.1.2.md',
+  'docs/releases/v3.1.1.md',
+  'docs/releases/v3.1.0.md',
+  'docs/releases/v3.0.0.md',
+  'docs/releases/v0.2.9.md',
+  'docs/releases/v0.2.8.md',
+  'docs/releases/v0.2.7.md',
+  'docs/releases/v0.2.6.md',
+  'docs/releases/v0.2.5.md',
+];
 
 let passed = 0;
 let failed = 0;
@@ -103,18 +127,7 @@ const REQUIRED = [
   '初始化配置.cmd',
   '一键启动.cmd',
   'README.md',
-  'docs/控制台架构.md',
-  'docs/automation-and-voice.md',
-  'docs/verification-v3.0.0.md',
-  'docs/releases/v3.0.0.md',
-  'docs/verification-v3.1.0.md',
-  'docs/releases/v3.1.0.md',
-  'docs/verification-v3.1.1.md',
-  'docs/releases/v3.1.1.md',
-  'docs/verification-v3.1.2.md',
-  'docs/releases/v3.1.2.md',
-  'docs/verification-v3.1.3.md',
-  'docs/releases/v3.1.3.md',
+  ...PUBLIC_DOC_FILES,
   'docs/screenshots/console-jev-settings.png',
   'docs/screenshots/console-reply-tts.png',
   'docs/screenshots/console-bilibili-automation.png',
@@ -271,6 +284,20 @@ async function main() {
     for (const rel of REQUIRED) {
       check(fs.existsSync(path.join(outDir, rel)), `存在 ${rel}`);
     }
+    const expectedDocs = new Set([
+      ...PUBLIC_DOC_FILES,
+      ...walk(path.join(ROOT, 'docs', 'screenshots')).map((rel) =>
+        path.posix.join('docs/screenshots', rel.split(path.sep).join('/'))),
+    ]);
+    const actualDocs = walk(outDir)
+      .map((rel) => rel.split(path.sep).join('/'))
+      .filter((rel) => rel.startsWith('docs/'));
+    const unexpectedDocs = actualDocs.filter((rel) => !expectedDocs.has(rel));
+    const missingDocs = [...expectedDocs].filter((rel) => !actualDocs.includes(rel));
+    check(unexpectedDocs.length === 0 && missingDocs.length === 0, '文档仅包含公开白名单', [
+      ...unexpectedDocs.map((rel) => `unexpected:${rel}`),
+      ...missingDocs.map((rel) => `missing:${rel}`),
+    ].join('；'));
     for (const rel of [
       'src/third-party/croner/croner.js', 'src/third-party/croner/LICENSE', 'src/third-party/croner/README.md',
       'src/third-party/qrcode-generator/qrcode.mjs', 'src/third-party/qrcode-generator/LICENSE', 'src/third-party/qrcode-generator/README.md',
@@ -302,6 +329,9 @@ async function main() {
 
     section('5/7 产物里没有个人信息');
     const files = walk(outDir);
+    const shellScripts = files.filter((rel) => path.extname(rel).toLowerCase() === '.sh');
+    const shellScriptsWithCrlf = shellScripts.filter((rel) => readText(path.join(outDir, rel)).includes('\r\n'));
+    check(shellScriptsWithCrlf.length === 0, '打包产物中的 shell 脚本统一为 LF', shellScriptsWithCrlf.join('；'));
     const hits = [];
     for (const rel of files) {
       if (!/\.(js|mjs|json|md|yml|yaml|ps1|cmd|txt|html|css)$/i.test(rel)) continue;

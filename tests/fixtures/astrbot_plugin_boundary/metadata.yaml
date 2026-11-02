@@ -1,0 +1,6 @@
+name: qq_boundary_fixture
+display_name: QQ boundary test fixture
+desc: Offline compatibility acceptance fixture; never install in a production session.
+version: v1.0.0
+author: miku05231
+repo: https://github.com/miku05231/DSH-Fatwhale-QQ

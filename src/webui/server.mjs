@@ -29,6 +29,8 @@ import { createImagegenApi } from './imagegen-api.mjs';
 import { createPlatformScheduler } from '../platform-scheduler.js';
 import { createBilibiliQrLogin } from '../platforms/bilibili-login.js';
 import { createNapcatHealth, createNapcatHealthJournal, readNapcatSettings } from '../napcat-health.js';
+import { createWebUiLogReader } from './logs.mjs';
+import { createNapcatLogReader } from './napcat-logs.mjs';
 import { DEFAULT_SESSION_WINDOW_MINUTES, isValidSessionWindowMinutes } from '../sessions.js';
 import { openLocalPath, openExternalUrl } from '../open-path.js';
 import { describeModelState, writeModelState, validateModelSelection, MODEL_MODES, REASONING_EFFORTS } from '../model-follow.js';
@@ -90,7 +92,6 @@ const ACTION_TIMEOUT_MS = 60_000;
 /** 请求体上限，人格文件再长也不该超过这个数 */
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 /** 读取日志时最多回看的字节数，避免把整个日志读进内存 */
-const LOG_TAIL_BYTES = 256 * 1024;
 
 const SERVICE_NAMES = ['napcat', 'bridge', 'dsh'];
 const SERVICE_ACTIONS = ['start', 'stop', 'restart'];
@@ -465,7 +466,7 @@ function sendJson(res, status, payload) {
   sendBuffer(res, status, Buffer.from(body, 'utf8'), 'application/json; charset=utf-8');
 }
 
-const ok = (res, data) => sendJson(res, 200, { ok: true, data });
+const ok = (res, data, status = 200) => sendJson(res, status, { ok: true, data });
 const fail = (res, status, error) => sendJson(res, status, { ok: false, error: text(error) });
 
 function readBody(req, limit = MAX_BODY_BYTES) {
@@ -602,6 +603,7 @@ function configFileOf(root) {
 export function createWebUiServer({
   config = {}, configRoot, log, port = DEFAULT_PORT, host = '127.0.0.1', updateManager,
   openPath = openLocalPath, openUrl = openExternalUrl, platformControl, platformQrLogin, napcatHealth,
+  astrbotManager, astrbotPolicy, astrbotProxySecret = process.env.CONSOLE_PASSWORD_SHA256,
 } = {}) {
   const root = path.resolve(text(configRoot) || PROJECT_ROOT);
   const basePort = Number.isInteger(Number(port)) && Number(port) > 0 ? Number(port) : DEFAULT_PORT;
@@ -658,6 +660,13 @@ export function createWebUiServer({
       catch { safeLog.warn?.('NapCat 状态记录写入失败'); }
     },
   });
+  const napcatLogs = createNapcatLogReader({ root, config, healthProbe });
+  const readLogs = createWebUiLogReader({
+    logDir,
+    bridgeSource: process.env.QQ_BRIDGE_LOG_SOURCE || 'auto',
+    napcatSource: process.env.QQ_NAPCAT_LOG_SOURCE || (process.platform === 'win32' ? 'console' : 'webui'),
+    readNapcat: (limit) => napcatLogs.read(limit), redact: redactSecrets,
+  });
   let healthTimer = null;
   let healthEnabled = false;
   let healthSampling = null;
@@ -673,6 +682,31 @@ export function createWebUiServer({
   const platforms = platformControl ?? createPlatformScheduler({ configPath, stateDir, log: safeLog });
   const automationToken = randomBytes(32).toString('hex');
   const imagegen = createImagegenApi({ configPath, configRoot: root, config, readBody, ok, fail, log: safeLog });
+  const astrbotApiState = { promise: null };
+  async function getAstrbotApi() {
+    if (!astrbotApiState.promise) {
+      astrbotApiState.promise = (async () => {
+        let manager = astrbotManager;
+        let policy = astrbotPolicy;
+        if (!manager || !policy) {
+          const [{ createAstrbotManager }, { createAstrbotPolicy }, { loadConfig }] = await Promise.all([
+            import('../astrbot-manager.mjs'),
+            import('../astrbot-policy.mjs'),
+            import('../config.js'),
+          ]);
+          const readConfig = () => loadConfig(root, { configFile: configPath, createIfMissing: false }).config;
+          manager ??= createAstrbotManager({ projectRoot: root, configPath, readConfig, logger: safeLog });
+          policy ??= createAstrbotPolicy({ root, readConfig });
+        }
+        const { createAstrbotApi } = await import('./astrbot-api.mjs');
+        return createAstrbotApi({ manager, policy, readBody, ok, fail, log: safeLog, proxySecret: astrbotProxySecret });
+      })().catch((error) => {
+        astrbotApiState.promise = null;
+        throw error;
+      });
+    }
+    return astrbotApiState.promise;
+  }
   const qrLogin = platformQrLogin ?? createBilibiliQrLogin({
     saveCookies: (cookies, options) => platforms.importLoginCookies(cookies, options),
   });
@@ -905,46 +939,11 @@ export function createWebUiServer({
   async function getLogs(url, res) {
     const name = text(url.searchParams.get('name') || 'napcat').trim();
     if (name !== 'napcat' && name !== 'bridge') return fail(res, 400, 'name 只能是 napcat 或 bridge');
-    const linesRaw = Number(url.searchParams.get('lines'));
-    const lines = Number.isFinite(linesRaw) ? Math.min(1000, Math.max(1, Math.floor(linesRaw))) : 200;
-    const file = path.join(logDir, name === 'napcat' ? 'napcat-console.log' : 'bridge-console.log');
-    let st;
     try {
-      st = await fsp.stat(file);
-    } catch {
-      return ok(res, { name, file, lines: [], bytes: 0, updatedAt: null, missing: true });
-    }
-    if (!st.isFile()) return fail(res, 400, '日志路径不是文件');
-
-    const from = Math.max(0, st.size - LOG_TAIL_BYTES);
-    let chunk = '';
-    let fh = null;
-    try {
-      fh = await fsp.open(file, 'r');
-      const buf = Buffer.alloc(st.size - from);
-      await fh.read(buf, 0, buf.length, from);
-      chunk = buf.toString('utf8');
+      return ok(res, await readLogs(name, url.searchParams.get('lines')));
     } catch (err) {
       return fail(res, 500, `读取日志失败：${err?.message ?? err}`);
-    } finally {
-      await fh?.close().catch(() => {});
     }
-    if (from > 0) {
-      const idx = chunk.indexOf('\n');
-      if (idx >= 0) chunk = chunk.slice(idx + 1);
-    }
-    const all = chunk.split(/\r?\n/);
-    if (all.length && all[all.length - 1] === '') all.pop();
-    const tail = all.slice(-lines).map((line) => redactSecrets(line));
-    return ok(res, {
-      name,
-      file,
-      lines: tail,
-      total: all.length,
-      bytes: st.size,
-      truncated: from > 0,
-      updatedAt: st.mtime.toISOString(),
-    });
   }
 
   async function getMemoryStats(res) {
@@ -2554,6 +2553,16 @@ export function createWebUiServer({
 
     const method = req.method === 'HEAD' ? 'GET' : req.method;
 
+    if (pathname === '/api/astrbot' || pathname.startsWith('/api/astrbot/')) {
+      try {
+        const api = await getAstrbotApi();
+        return api.route(req, res, pathname, method);
+      } catch (error) {
+        safeLog.warn?.(`AstrBot 管理接口不可用（${error?.code || 'module_unavailable'}）`);
+        return fail(res, 503, 'AstrBot 管理模块暂不可用');
+      }
+    }
+
     if (pathname === '/api/imagegen' || pathname.startsWith('/api/imagegen/')) {
       return imagegen.route(req, res, pathname, method, url);
     }
@@ -2752,6 +2761,7 @@ export function createWebUiServer({
     healthEnabled = false;
     clearInterval(healthTimer);
     healthTimer = null;
+    napcatLogs.close();
     healthProbe.close?.();
     await healthSampling?.catch(() => {});
     updates.stop();

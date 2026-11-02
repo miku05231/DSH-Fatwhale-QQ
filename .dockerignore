@@ -13,3 +13,7 @@ config.json
 *.zip
 *.log
 state/ui-shots
+**/__pycache__
+**/.venv
+**/*.pyc
+.tmp

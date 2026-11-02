@@ -19,12 +19,12 @@ export function readNapcatSettings(root, config) {
   if (host.includes(':') && !host.startsWith('[')) host = `[${host}]`;
   let baseUrl = '';
   try {
-    const url = new URL(config?.napcat?.webui || `http://${host}:${Number(webui.port) || 6099}`);
+    const url = new URL(config?.napcat?.webui || process.env.QQ_NAPCAT_WEBUI_URL || `http://${host}:${Number(webui.port) || 6099}`);
     if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) baseUrl = url.origin;
   } catch { /* Invalid endpoints remain unavailable, never authenticated. */ }
   return {
     baseUrl,
-    webuiEnabled: Boolean(baseUrl && (file || config?.napcat?.webui) && !webui.disableWebUI),
+    webuiEnabled: Boolean(baseUrl && (file || config?.napcat?.webui || process.env.QQ_NAPCAT_WEBUI_URL) && !webui.disableWebUI),
     token: String(config?.napcat?.webuiToken || webui.token || ''),
     onebotUrl: String(config?.onebot?.url || ''),
     accessToken: String(config?.onebot?.accessToken || ''),

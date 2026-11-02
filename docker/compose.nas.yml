@@ -5,15 +5,25 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.nas
-    image: qq-bridge-nas:20261027
+    image: qq-bridge-nas:3.2.0
     container_name: qq-bridge-nas
     init: true
     restart: unless-stopped
+    env_file: ../data/console.env
     environment:
       QQ_CONFIG: /config/config.json
       DSH_COMMAND: /opt/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js
+      # Load verified native packages in place; Docker's /tmp is normally noexec.
+      NARB_DISABLE_NATIVE_CACHE: '1'
       TZ: Asia/Shanghai
       WEBUI_HOST: 0.0.0.0
+      QQ_BRIDGE_LOG_SOURCE: daily
+      QQ_NAPCAT_LOG_SOURCE: webui
+      QQ_NAPCAT_WEBUI_URL: http://napcat:6099
+      ASTRBOT_RUNTIME_MODE: ${ASTRBOT_RUNTIME_MODE:-external}
+      ASTRBOT_RUNTIME_URL: ${ASTRBOT_RUNTIME_URL:-http://astrbot:5831}
+      QQ_ASTRBOT_CALLBACK_HOST: 0.0.0.0
+      QQ_ASTRBOT_CALLBACK_PORT: '5832'
     volumes:
       - ../data/config:/config
       - ../data/state:/app/state
@@ -22,6 +32,8 @@ services:
       - ../data/memory:/app/memory
       - ../data/dsh-home:/home/bridge/.dsh
       - ../data/patches:/run/patches:ro
+      # Read-only WebUI settings supply the existing NapCat log authentication.
+      - ../data/napcat/config:/app/napcat/config:ro
       # NAS 文件区（只读）；NapCat 是 host 网络，看到的是宿主真实路径。
       - '${NAS_MEDIA_ROOT:-/volume1}:/nas-media:ro'
     security_opt:
@@ -36,8 +48,62 @@ services:
       driver: json-file
       options: {max-size: 10m, max-file: '3'}
 
+  astrbot:
+    profiles: [astrbot]
+    build:
+      context: ..
+      dockerfile: docker/astrbot.Dockerfile
+    image: qq-astrbot-sidecar:4.29.3-python3.12.10
+    container_name: qq-bridge-nas-astrbot
+    init: true
+    restart: unless-stopped
+    depends_on: [bridge]
+    user: '10001:10001'
+    environment:
+      QQ_ASTRBOT_HOST: 0.0.0.0
+      QQ_ASTRBOT_PORT: '5831'
+      QQ_ASTRBOT_ROOT: /app/qq-astrbot
+      QQ_ASTRBOT_STATE_ROOT: /app/state/astrbot
+      QQ_ASTRBOT_CALLBACK_URL: http://bridge:5832/rpc/callback
+      QQ_ASTRBOT_ALLOW_NETWORK_BIND: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      PYTHONNOUSERSITE: '1'
+      HOME: /tmp
+      TMPDIR: /tmp
+    volumes:
+      - ../data/state/astrbot/rpc-token:/run/secrets/qq-astrbot-rpc-token:ro
+      - ../data/state/astrbot/plugins:/app/state/astrbot/plugins:ro
+      - ../data/state/astrbot/generations:/app/state/astrbot/generations
+      - ../data/state/astrbot/staging:/app/state/astrbot/staging
+      - ../data/state/astrbot/media:/app/state/astrbot/media:ro
+      - ../data/state/astrbot/inbox:/app/state/astrbot/inbox:ro
+      - ../data/state/astrbot/outbox:/app/state/astrbot/outbox:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    pids_limit: 256
+    mem_limit: 3g
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,pathlib,urllib.request; t=pathlib.Path('/run/secrets/qq-astrbot-rpc-token').read_text('utf-8').strip(); q=urllib.request.Request('http://127.0.0.1:5831/rpc',data=json.dumps({'version':1,'id':'health','method':'health','params':{}}).encode(),headers={'Authorization':'Bearer '+t,'Content-Type':'application/json'}); x=json.loads(urllib.request.urlopen(q,timeout=3).read()); raise SystemExit(0 if x.get('result',{}).get('healthy') is True else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: '2'}
+    networks: [private, qq-net]
+
   console:
-    image: qq-bridge-nas:20261027
+    image: qq-bridge-nas:3.2.0
     container_name: qq-bridge-nas-console
     entrypoint: [node, /app/docker/nas-gateway.mjs]
     restart: unless-stopped
@@ -82,6 +148,7 @@ services:
       - ../data/napcat/config:/app/napcat/config
       - ../data/napcat/qq:/app/.config/QQ
       - ../data/state:/app/state:ro
+      - /dev/null:/app/state/astrbot/rpc-token:ro
     shm_size: 256m
     mem_limit: 2g
     init: true

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "frozenAt": "2026-10-30",
+  "baseline": "AstrBot 4.29.3 / Python 3.12",
+  "note": "Original archives and source hashes are preserved. Windows and NAS command smoke passed on 2026-11-01. Additional NAS phase results are recorded independently; failed scheduled delivery is not certified by command smoke. Real QQ remains separate. Never rewrite plugin source during verification.",
+  "advancedEvidence": "docs/astrbot-live-acceptance-20261101.md",
+  "boundaryFixtureQq": { "status": "passed", "date": "2026-11-01", "cases": 8, "incoming": 8, "acknowledgments": 10, "evidence": "docs/astrbot-qq-live-acceptance.md", "model": "controlled-stub", "mediaTransport": "isolated-cache-to-base64" },
+  "nasEvidence": "docs/astrbot-acceptance-20261101.md",
+  "windowsEvidence": "docs/astrbot-windows-acceptance.md",
+  "samples": [
+    {
+      "repository": "https://github.com/Soulter/helloworld",
+      "commit": "0c0d52b17e2feb76a7bcff887cac3d0e12eecc09",
+      "archiveSHA256": "ed85848e9de2cd69e87baacab3e019af9d1618c7a025fbe60bcf16042a770a54",
+      "mainPySHA256": "a88ddc03117bf020c1eaa8797ab953618cbcd0c23fd767446f605dd5d2d46a52",
+      "windows": "native-command-smoke-passed", "nas": "native-command-smoke-passed", "qq": "pending"
+    },
+    {
+      "repository": "https://github.com/konley/astrbot_plugin_randommeme",
+      "commit": "c5e22b1e430f5d0bafbd2826f13f8e3bcf452329",
+      "archiveSHA256": "945c88fd47132567198e6a8a60c1394fb16fcf25ee55c6dd7b80e45ff288ba7e",
+      "mainPySHA256": "511e08893cbb1cc945c2e04af19b06240654040723403e0e18c9baf3cfd76d5c",
+      "windows": "native-command-smoke-passed", "nas": "native-command-smoke-passed", "qq": "pending"
+    },
+    {
+      "repository": "https://github.com/Foolllll-J/astrbot_plugin_reminder",
+      "nasAdvanced": { "creationAndWhitelist": "passed", "restartDelivery": "failed", "coldWorkerChanged": true, "sendDiagnosis": "ASTRBOT_SEND_PROVENANCE_MISSING", "diagnosticEvidence": "docs/astrbot-reminder-root-cause.md", "crossGroup": "not-run", "syntheticEvent": "not-tested" },
+      "commit": "95bddae559bdc2a7451f029f80e0cab76247d3f5",
+      "archiveSHA256": "d13f101e1e1eaed05ff6b1209549c9c97fab1ec5c797d088dc71fb007db88755",
+      "mainPySHA256": "7ccdc09a78a5bb5e7a9d99e378ea1aeea6304bc382ca66285a5f10a97328fd75",
+      "windows": "native-command-smoke-passed", "nas": "native-command-smoke-passed", "qq": "pending"
+    },
+    {
+      "repository": "https://github.com/zzby-poi/astrbot_plugin_weather",
+      "nasAdvanced": { "controlledNativeQuery": "passed", "publicApiNativeQuery": "passed", "intentModel": "controlled-stub", "scheduledDailyPush": "failed", "sendDiagnosis": "ASTRBOT_SEND_PROVENANCE_MISSING", "diagnosticEvidence": "docs/astrbot-weather-root-cause.md" },
+      "commit": "70c4913adf24e5520d5f85d2bee5876bbf872399",
+      "archiveSHA256": "d149d4754147ac26e531fd63e78b7c040af3f1b4dee0e6a694300da3dcf32f30",
+      "mainPySHA256": "d4b7a3a94062eb31353bed1508fd8bde370d54dec5546c3485a0ff14b74ac142",
+      "windows": "native-command-smoke-passed", "nas": "native-command-smoke-passed", "qq": "pending"
+    }
+  ]
+}

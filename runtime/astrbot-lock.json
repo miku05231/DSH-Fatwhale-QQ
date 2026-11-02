@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "application": {
+    "version": "3.2.0",
+    "featureDefault": "disabled"
+  },
+  "python": {
+    "version": "3.12.10",
+    "distribution": "Astral Python Build Standalone install_only",
+    "architecture": "x86_64-pc-windows-msvc",
+    "archive": {
+      "fileName": "cpython-3.12.10+20250529-x86_64-pc-windows-msvc-install_only.tar.gz",
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20250529/cpython-3.12.10%2B20250529-x86_64-pc-windows-msvc-install_only.tar.gz",
+      "sha256": "3e0fd10e4bd60e66baad8be2a0e60775bb389e97e4f4a07138c34599c356aaed",
+      "releaseTag": "20250529",
+      "checksumSource": "Official GitHub release .sha256 sidecar."
+    },
+    "baseExecutable": "runtime/python/python.exe",
+    "managedExecutable": "runtime/venv/Scripts/python.exe",
+    "packages": [
+      "astrbot @ https://codeload.github.com/AstrBotDevs/AstrBot/zip/refs/tags/v4.29.3#sha256=4f7187273a3fa3e9bea327e1338dcff7567af5ab095c4847da12452ad22d8508",
+      "aiohttp>=3.11.18,<4",
+      "APScheduler==3.11.3"
+    ]
+  },
+  "astrbot": {
+    "version": "4.29.3",
+    "source": "https://codeload.github.com/AstrBotDevs/AstrBot/zip/refs/tags/v4.29.3",
+    "sha256": "4f7187273a3fa3e9bea327e1338dcff7567af5ab095c4847da12452ad22d8508",
+    "releaseCommit": "f61a7f4",
+    "hashProvenance": "Measured from the official GitHub codeload archive; the v4.29.3 release tag identifies the signed release commit."
+  },
+  "docker": {
+    "image": "python:3.12.10-slim-bookworm",
+    "indexDigest": "sha256:fd95fa221297a88e1cf49c55ec1828edd7c5a428187e67b5d1805692d11588db",
+    "amd64ManifestDigest": "sha256:97983fa8cc88343512862c62307159a82261c3528dc025f79e5a3f7af43e50b4",
+    "indexPlatforms": [
+      "linux/386",
+      "linux/amd64",
+      "linux/arm/v5",
+      "linux/arm/v7",
+      "linux/arm64/v8",
+      "linux/ppc64le",
+      "linux/s390x"
+    ],
+    "applicationAcceptanceVerified": false
+  },
+  "dependencyResolution": {
+    "transitivePackagesHashLocked": false,
+    "method": "pip resolves transitive AstrBot dependencies from the pinned 4.29.3 source metadata during managed installation or image build.",
+    "inventory": "qq_astrbot.inventory records installed distribution versions and metadata hashes after managed installation and image build."
+  }
+}

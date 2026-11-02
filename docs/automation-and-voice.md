@@ -40,7 +40,7 @@ API 平台使用 `POST /v1/audio/speech`，填写服务根地址、语音模型�
 
 Provider 合同为 `synthesize(text, {outputFile, speechLanguage, voice, python, baseUrl, model, apiVoice, responseFormat, apiKey, timeoutMs, signal})`。普通聊天的可信语音插件不会开放管理员专用的任意用户插件或电脑工具。
 
-2026-10-25 的 Irodori 局域网排查表明，HTTP 200、有效 WAV 和存在波形都不足以证明内容正确。补齐翻译后仍有异常，SSH 排查发现 LoRA 的 71 条训练文本全部是同一句占位句。停用该 LoRA 并使用原模型加真红参考后，日语直输、默认调用、真实翻译和 QQ 转码后的短句转写均与目标一致；人工试听和长文仍待验收。见 [诊断报告](tts-translation-diagnosis-20261025.md)。
+2026-10-25 的 Irodori 局域网排查表明，HTTP 200、有效 WAV 和存在波形都不足以证明内容正确。补齐翻译后仍有异常，SSH 排查发现 LoRA 的 71 条训练文本全部是同一句占位句。停用该 LoRA 并使用原模型加真红参考后，日语直输、默认调用、真实翻译和 QQ 转码后的短句转写均与目标一致；人工试听和长文仍待验收。见 旧版诊断记录未随公开包分发。
 
 ## 自动化配置
 
