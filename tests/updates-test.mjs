@@ -131,16 +131,18 @@ async function test(name, action) {
 function windowsShortPath(value) {
   const script = `
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
-$filesystem = New-Object -ComObject Scripting.FileSystemObject
-[Console]::Write($filesystem.GetFolder($env:QQ_UPDATE_TEST_PATH).ShortPath)
+Add-Type -Namespace QQUpdateTest -Name NativePath -MemberDefinition '[System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint="GetShortPathNameW", CharSet=System.Runtime.InteropServices.CharSet.Unicode, ExactSpelling=true, SetLastError=true)] public static extern uint GetShortPathName(string path, System.Text.StringBuilder result, uint length);'
+$buffer = New-Object Text.StringBuilder 32768
+$length = [QQUpdateTest.NativePath]::GetShortPathName($env:QQ_UPDATE_TEST_PATH, $buffer, 32768)
+if ($length -eq 0 -or $length -ge 32768) { throw 'Cannot obtain short path for the regression fixture.' }
+[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($buffer.ToString())))
 `;
   const shell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const result = spawnSync(shell, [
     '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64'),
   ], { encoding: 'utf8', windowsHide: true, timeout: 30_000, env: { ...process.env, QQ_UPDATE_TEST_PATH: value } });
   assert.equal(result.status, 0, result.stderr || result.error?.message);
-  return result.stdout.trim();
+  return Buffer.from(result.stdout.trim(), 'base64').toString('utf8');
 }
 
 await test('strict SemVer ordering and invalid versions', async () => {
