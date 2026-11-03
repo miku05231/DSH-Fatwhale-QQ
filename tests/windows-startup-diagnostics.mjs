@@ -16,7 +16,7 @@ Start-Process -FilePath $env:ComSpec -ArgumentList '/d /c exit 0' -WindowStyle H
 [Console]::Out.WriteLine('start-process-complete')
 `;
 
-for (const mode of ['inherited', 'isolated', 'system-paths', 'system-modules', 'system-drive']) {
+for (const mode of ['PSModulePath', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramData', 'ALLUSERSPROFILE', 'ProgramW6432', 'CommonProgramFiles']) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'qq-startup-probe-'));
   await prepareIsolatedHome(root);
   const env = mode === 'inherited' ? { ...process.env } : isolatedEnv(root);
@@ -25,6 +25,7 @@ for (const mode of ['inherited', 'isolated', 'system-paths', 'system-modules', '
       if (process.env[key] !== undefined) env[key] = process.env[key];
     }
   }
+  if (process.env[mode] !== undefined) env[mode] = process.env[mode];
   if (mode === 'system-modules') env.PSModulePath = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules');
   if (mode === 'system-drive') env.SystemDrive = process.env.SystemDrive;
   const started = Date.now();
