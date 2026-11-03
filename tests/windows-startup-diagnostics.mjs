@@ -16,7 +16,7 @@ Start-Process -FilePath $env:ComSpec -ArgumentList '/d /c exit 0' -WindowStyle H
 [Console]::Out.WriteLine('start-process-complete')
 `;
 
-for (const mode of ['PSModulePath', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramData', 'ALLUSERSPROFILE', 'ProgramW6432', 'CommonProgramFiles']) {
+for (const mode of ['isolated', 'legacy-system', 'native-system']) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'qq-startup-probe-'));
   await prepareIsolatedHome(root);
   const env = mode === 'inherited' ? { ...process.env } : isolatedEnv(root);
@@ -27,6 +27,8 @@ for (const mode of ['PSModulePath', 'ProgramFiles', 'ProgramFiles(x86)', 'Progra
   }
   if (process.env[mode] !== undefined) env[mode] = process.env[mode];
   if (mode === 'system-modules') env.PSModulePath = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules');
+  if (mode === 'legacy-system') env.PSModulePath = [path.join(process.env.ProgramFiles, 'WindowsPowerShell', 'Modules'), path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')].join(path.delimiter);
+  if (mode === 'native-system') env.PSModulePath = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules');
   if (mode === 'system-drive') env.SystemDrive = process.env.SystemDrive;
   const started = Date.now();
   const child = spawn(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
@@ -40,5 +42,7 @@ for (const mode of ['PSModulePath', 'ProgramFiles', 'ProgramFiles(x86)', 'Progra
   });
   clearTimeout(timer);
   console.log(JSON.stringify({ mode, elapsedMs: Date.now() - started, ...result }));
+  if (path.dirname(path.resolve(root)).toLowerCase() !== path.resolve(os.tmpdir()).toLowerCase()
+      || !path.basename(root).startsWith('qq-startup-probe-')) throw new Error('Unexpected probe cleanup path');
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

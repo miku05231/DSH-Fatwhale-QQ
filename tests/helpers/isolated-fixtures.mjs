@@ -10,8 +10,16 @@ export const DSH_TEST_VERSION = process.env.QQ_TEST_DSH_VERSION || '0.2.0-rc.2';
 export function isolatedEnv(root, extra = {}) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (/^(?:path|pathext|systemroot|windir|comspec|processor_architecture|lang|lc_all|tz|ci|node_no_warnings)$/i.test(key)
+    if (/^(?:path|pathext|systemroot|windir|comspec|processor_architecture|programfiles(?:\(x86\))?|programw6432|programdata|lang|lc_all|tz|ci|node_no_warnings)$/i.test(key)
         || /^QQ_TEST_/.test(key) || key === 'QQ_PLATFORM_BROWSER_TEST') env[key] = value;
+  }
+  if (process.platform === 'win32') {
+    const systemRoots = ['SystemRoot', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'ProgramData']
+      .map(key => process.env[key]).filter(Boolean);
+    env.PSModulePath = (process.env.PSModulePath || '').split(path.delimiter).filter(dir => dir && systemRoots.some(rootPath => {
+      const relative = path.relative(rootPath, dir);
+      return !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`);
+    })).join(path.delimiter);
   }
   const home = path.join(root, 'home');
   return {
