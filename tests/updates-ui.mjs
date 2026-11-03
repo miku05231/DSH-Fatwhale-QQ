@@ -36,6 +36,7 @@ function check(name, condition) {
 async function startServer() {
   const files = new Map(await Promise.all([
     ['/', 'index.html', 'text/html'], ['/app.js', 'app.js', 'application/javascript'],
+    ['/logs.js', 'logs.js', 'application/javascript'],
     ['/app.css', 'app.css', 'text/css'], ['/app-icon.png', 'app-icon.png', 'image/png'],
   ].map(async ([url, name, type]) => [url, {
     bytes: await readFile(path.join(ROOT, 'src', 'webui', 'public', name)), type,
