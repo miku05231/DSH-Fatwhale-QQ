@@ -20,7 +20,7 @@ const GROUPS = {
   '1': { start: 1, end: 15 },
   '2': { start: 16, end: 30 },
   '3': { start: 31, end: 45 },
-  '4': { start: 46, end: 60 },
+  '4': { start: 46, end: 61 },
 };
 if (group && !Object.hasOwn(GROUPS, group)) {
   console.error(`Unknown installer test group: ${group}`);
@@ -395,8 +395,27 @@ if (process.platform !== 'win32') {
       assert.match(result.state.message, /configured data path/);
       unchanged(f);
     });
-    test('valid ZIP overlays app files and preserves local data in Chinese, spaced and apostrophe paths', () => {
-      const f = fixture('success', { config: { dsh: { cwd: '.' }, persona: { path: 'qq-workspace/AGENTS.md', dir: 'state/personas' } } });
+    test('valid ZIP installs managed AstrBot runtime files and preserves local data and generated runtimes', () => {
+      const runtimeFiles = [
+        { name: `qq-bridge-${VERSION}/runtime/astrbot-lock.json`, body: '{"application":{"version":"0.2.0"}}' },
+        { name: `qq-bridge-${VERSION}/runtime/astrbot-samples.json`, body: '{"samples":[]}' },
+        { name: `qq-bridge-${VERSION}/runtime/astrbot/pyproject.toml`, body: '[project]\nname = "astrbot-runtime"\n' },
+        { name: `qq-bridge-${VERSION}/runtime/astrbot/THIRD_PARTY_NOTICES.md`, body: 'release notices' },
+        { name: `qq-bridge-${VERSION}/runtime/astrbot/licenses/ASTRBOT-LICENSE`, body: 'upstream license' },
+        { name: `qq-bridge-${VERSION}/runtime/astrbot/qq_astrbot/worker.py`, body: 'release worker' },
+      ];
+      const f = fixture('success', {
+        config: { dsh: { cwd: '.' }, persona: { path: 'qq-workspace/AGENTS.md', dir: 'state/personas' } },
+        entries: runtimeFiles,
+      });
+      write(f.root, 'runtime/astrbot-lock.json', 'installed old lock');
+      write(f.root, 'runtime/astrbot/qq_astrbot/worker.py', 'installed old worker');
+      const generatedRuntime = {
+        'runtime/python/python.exe': 'locally managed base Python',
+        'runtime/venv/Scripts/python.exe': 'locally managed AstrBot Python',
+        'runtime/data/plugin-state.json': 'locally managed plugin data',
+      };
+      for (const [relative, content] of Object.entries(generatedRuntime)) write(f.root, relative, content);
       const oldConfig = fs.readFileSync(path.join(f.root, 'config.json'));
       const result = run(f);
       assert.equal(result.code, 0, result.output);
@@ -409,6 +428,15 @@ if (process.platform !== 'win32') {
       assert.deepEqual(fs.readFileSync(path.join(f.root, 'config.json')), oldConfig);
       for (const rel of ['state/personas/active.json', 'state/stickers/image.png', 'logs/test.log', 'qq-workspace/AGENTS.md', '记忆库/note.md', 'napcat/config/account.json', 'src/user-added.js']) {
         assert.equal(fs.readFileSync(path.join(f.root, rel), 'utf8'), `keep ${rel}`);
+      }
+      for (const { name, body } of runtimeFiles) {
+        const relative = name.slice(`qq-bridge-${VERSION}/`.length);
+        assert.equal(fs.readFileSync(path.join(f.root, relative), 'utf8'), body, `release runtime asset installed: ${relative}`);
+      }
+      assert.equal(fs.readFileSync(path.join(f.jobDir, 'backup', 'runtime/astrbot-lock.json'), 'utf8'), 'installed old lock');
+      assert.equal(fs.readFileSync(path.join(f.jobDir, 'backup', 'runtime/astrbot/qq_astrbot/worker.py'), 'utf8'), 'installed old worker');
+      for (const [relative, content] of Object.entries(generatedRuntime)) {
+        assert.equal(fs.readFileSync(path.join(f.root, relative), 'utf8'), content, `generated runtime preserved: ${relative}`);
       }
       assert.equal(fs.readFileSync(path.join(f.jobDir, 'backup', 'src/index.js'), 'utf8'), 'old // new bridge');
       assert.ok(fs.existsSync(f.job.packagePath));
@@ -586,15 +614,23 @@ if (process.platform !== 'win32') {
     });
     test('partial overlay failure restores every original and removes introduced files', () => {
       const f = fixture('rollback', { alter: (items) => [
+        { name: `qq-bridge-${VERSION}/runtime/astrbot-lock.json`, body: 'new runtime lock' },
+        { name: `qq-bridge-${VERSION}/runtime/astrbot/qq_astrbot/new-module.py`, body: 'new runtime module' },
         { name: `qq-bridge-${VERSION}/src/new-file.js`, body: 'new file' },
         ...items,
       ] });
+      write(f.root, 'runtime/astrbot-lock.json', 'old runtime lock');
+      write(f.root, 'runtime/python/python.exe', 'local Python survives rollback');
       const result = run(f, ['-TestFailAfterFiles', '3']);
       assert.equal(result.code, 1, result.output);
       assert.match(result.state.message, /restored/);
       unchanged(f);
       assert.equal(fs.readFileSync(path.join(f.root, 'qq-bridge.exe'), 'utf8'), 'old new launcher');
       assert.ok(!fs.existsSync(path.join(f.root, 'src/new-file.js')));
+      assert.equal(fs.readFileSync(path.join(f.root, 'runtime/astrbot-lock.json'), 'utf8'), 'old runtime lock');
+      assert.ok(!fs.existsSync(path.join(f.root, 'runtime/astrbot/qq_astrbot/new-module.py')));
+      assert.equal(fs.readFileSync(path.join(f.root, 'runtime/python/python.exe'), 'utf8'), 'local Python survives rollback');
+      assert.equal(fs.readFileSync(path.join(f.jobDir, 'backup', 'runtime/astrbot-lock.json'), 'utf8'), 'old runtime lock');
       assert.ok(fs.existsSync(path.join(f.jobDir, 'backup', 'qq-bridge.exe')));
     });
     test('filesystem failure after partial overlay rolls back cleanly', () => {
@@ -857,6 +893,25 @@ if (process.platform !== 'win32') {
       assert.match(`${result.stdout}${result.stderr}`, /isolated-test switches/);
       unchanged(f);
     });
+    test('runtime allowlist refuses generated environment and unknown runtime paths before staging', () => {
+      for (const [label, relative] of [
+        ['python', 'runtime/python/python.exe'],
+        ['venv', 'runtime/venv/Scripts/python.exe'],
+        ['unknown', 'runtime/private.json'],
+      ]) {
+        const f = fixture(`runtime-reject-${label}`, {
+          entries: [{ name: `qq-bridge-${VERSION}/${relative}`, body: 'must not be installed' }],
+        });
+        write(f.root, 'runtime/python/python.exe', 'keep local Python');
+        const result = run(f);
+        assert.equal(result.code, 1, result.output);
+        assert.match(result.state.message, /unmanaged runtime path/);
+        unchanged(f);
+        assert.equal(fs.readFileSync(path.join(f.root, 'runtime/python/python.exe'), 'utf8'), 'keep local Python');
+        assert.ok(!fs.existsSync(path.join(f.jobDir, 'staging')));
+        assert.ok(!fs.existsSync(path.join(f.jobDir, 'backup')));
+      }
+    });
   } finally {
     cleanupTempDirectory(TEMP, TEMP_PARENT);
   }
@@ -866,8 +921,8 @@ if (group && selected !== GROUPS[group].end - GROUPS[group].start + 1) {
   console.error(`Installer test group ${group} selected ${selected} cases, expected ${GROUPS[group].end - GROUPS[group].start + 1}.`);
   failed += 1;
 }
-if (!group && !only && registered !== 60) {
-  console.error(`Installer suite registered ${registered} cases, expected 60.`);
+if (!group && !only && registered !== 61) {
+  console.error(`Installer suite registered ${registered} cases, expected 61.`);
   failed += 1;
 }
 console.log(`\nPortable installer: ${passed} passed, ${failed} failed.`);

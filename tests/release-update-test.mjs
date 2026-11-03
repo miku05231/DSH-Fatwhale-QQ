@@ -10,11 +10,15 @@ import { compareVersions } from '../src/updates.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const version = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
 const name = `qq-bridge-${version}-portable-win64.zip`;
-const artifact = path.join(root, 'dist', 'release', name);
+const artifactDirectory = path.resolve(process.env.QQ_RELEASE_ARTIFACT_DIR || path.join(root, 'dist', 'release'));
+const artifact = path.join(artifactDirectory, name);
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'qq-release-update-'));
 // Exact helper shipped in v0.2.3 (commit 777b149), retained offline for shallow CI checkouts.
 const legacyHelperPath = path.join(root, 'tests', 'fixtures', 'updates', 'install-update-v0.2.3.ps1');
 const legacyHelperHash = '12d4985bcd81b394e6d9fbe451a8c8d51b195fccdbc643d80e4e416da66f0fa2';
+// Exact helper from the v3.1.5 release source (commit 91ab30b3), retained offline.
+const v315HelperPath = path.join(root, 'tests', 'fixtures', 'updates', 'install-update-v3.1.5.ps1');
+const v315HelperHash = '326c1fb1f06aecc32e9335e175e12ed14e4b1cd3fb9b9beabd2c216abcc7fee4';
 let passed = 0;
 
 function check(label, condition) {
@@ -29,7 +33,7 @@ async function put(applicationRoot, relative, value) {
   await writeFile(target, value);
 }
 
-async function installArtifact({ label, directory, helperSource }, digest) {
+async function installArtifact({ label, directory, helperSource, expectRuntimeRejection = false }, digest) {
   const applicationRoot = path.join(temporary, directory);
   for (const relative of [
     'qq-bridge.exe', 'launcher/bootstrap.ps1', 'launcher/Launcher.ps1',
@@ -55,6 +59,9 @@ async function installArtifact({ label, directory, helperSource }, digest) {
     'logs/local.log': 'local log',
     'src/local-plugin.js': '// user-added file',
     'companion/local-data.txt': 'user-owned top-level companion data',
+    'runtime/python/python.exe': 'locally managed base Python',
+    'runtime/venv/Scripts/python.exe': 'locally managed AstrBot Python',
+    'runtime/data/plugin-state.json': 'locally managed plugin data',
   };
   for (const [relative, content] of Object.entries(preserved)) await put(applicationRoot, relative, content);
 
@@ -80,6 +87,25 @@ async function installArtifact({ label, directory, helperSource }, digest) {
     '-JobPath', jobPath, '-SkipProcessActions', '-SkipRestart',
   ], { encoding: 'utf8', windowsHide: true, timeout: 120_000 });
   if (result.error) throw result.error;
+  if (expectRuntimeRejection) {
+    assert.notEqual(result.status, 0, `${label} unexpectedly installed a runtime package:\n${result.stdout}\n${result.stderr}`);
+    const rejected = JSON.parse(await readFile(resultPath, 'utf8'));
+    check(`${label}: the genuine old helper rejects v3.2.0 runtime paths`,
+      rejected.phase === 'error' && /unmanaged path: runtime[\\/]/i.test(rejected.message));
+    check(`${label}: refusal happens before staging or backup`,
+      !(await access(path.join(jobDir, 'staging')).then(() => true, () => false)) &&
+      !(await access(path.join(jobDir, 'backup')).then(() => true, () => false)));
+    check(`${label}: refusal leaves the installed application and local data unchanged`,
+      JSON.parse(await readFile(path.join(applicationRoot, 'package.json'), 'utf8')).version === '0.2.3' &&
+      await readFile(path.join(applicationRoot, 'src/index.js'), 'utf8') === 'old application file' &&
+      await readFile(path.join(applicationRoot, 'config.json'), 'utf8') === preserved['config.json'] &&
+      await readFile(path.join(applicationRoot, 'runtime/python/python.exe'), 'utf8') === preserved['runtime/python/python.exe']);
+    for (const [relative, content] of Object.entries(preserved)) {
+      check(`${label}: local data remains intact after refusal: ${relative}`,
+        await readFile(path.join(applicationRoot, relative), 'utf8') === content);
+    }
+    return;
+  }
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   const installed = JSON.parse(await readFile(resultPath, 'utf8'));
   check(`${label}: the trusted installed helper accepts the complete generated portable package`,
@@ -87,10 +113,15 @@ async function installArtifact({ label, directory, helperSource }, digest) {
   check(`${label}: the installed package has the release version`,
     JSON.parse(await readFile(path.join(applicationRoot, 'package.json'), 'utf8')).version === version);
   for (const relative of [
+    'launcher/bootstrap.ps1',
     'src/open-path.ps1', 'src/open-path.js', 'src/sticker-prompt.js',
     'src/sessions.js', 'src/config.js', 'src/index.js',
-    'src/webui/server.mjs', 'src/webui/public/app.js', 'src/webui/public/index.html',
+    'src/webui/server.mjs', 'src/webui/public/app.js', 'src/webui/public/logs.js', 'src/webui/public/index.html',
     'src/companion/lib/index.js', 'src/companion/package.json', 'tools/install-companion.mjs',
+    'scripts/astrbot-runtime.ps1', 'scripts/install-update.ps1',
+    'runtime/astrbot-lock.json', 'runtime/astrbot-samples.json',
+    'runtime/astrbot/pyproject.toml', 'runtime/astrbot/THIRD_PARTY_NOTICES.md',
+    'runtime/astrbot/licenses/ASTRBOT-LICENSE', 'runtime/astrbot/qq_astrbot/worker.py',
   ]) {
     const expected = (await readFile(path.join(root, relative), 'utf8')).replace(/^\uFEFF/, '');
     const actual = (await readFile(path.join(applicationRoot, relative), 'utf8')).replace(/^\uFEFF/, '');
@@ -125,15 +156,19 @@ try {
   assert.ok(compareVersions(version, '0.2.3') > 0, 'The real upgrade artifact must be newer than 0.2.3.');
   const bytes = await readFile(artifact);
   const digest = createHash('sha256').update(bytes).digest('hex');
-  const checksumLines = (await readFile(path.join(root, 'dist', 'release', 'SHA256SUMS.txt'), 'utf8'))
+  const checksumLines = (await readFile(path.join(artifactDirectory, 'SHA256SUMS.txt'), 'utf8'))
     .replace(/^\uFEFF/, '').trim().split(/\r?\n/);
-  check('The actual portable artifact matches its published checksum',
+  check('The portable artifact matches its SHA256SUMS.txt checksum',
     checksumLines.filter((line) => line === `${digest}  ${name}`).length === 1);
   const legacyHelper = await readFile(legacyHelperPath);
   check('The offline legacy helper is the exact v0.2.3 source',
     createHash('sha256').update(legacyHelper).digest('hex') === legacyHelperHash);
+  const v315Helper = await readFile(v315HelperPath);
+  check('The offline v3.1.5 helper matches the original release source',
+    createHash('sha256').update(v315Helper).digest('hex') === v315HelperHash);
   for (const installer of [
-    { label: 'v0.2.3 helper', directory: 'legacy-0.2.3', helperSource: legacyHelper },
+    { label: 'v0.2.3 helper', directory: 'legacy-0.2.3', helperSource: legacyHelper, expectRuntimeRejection: true },
+    { label: 'v3.1.5 helper', directory: 'legacy-3.1.5', helperSource: v315Helper, expectRuntimeRejection: true },
     { label: 'current helper', directory: 'current', helperSource: await readFile(path.join(root, 'scripts', 'install-update.ps1')) },
   ]) await installArtifact(installer, digest);
   console.log(`\n通过 ${passed} 项，失败 0 项。`);
