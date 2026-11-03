@@ -880,7 +880,22 @@ try {
 Start-Sleep -Milliseconds 1000
 `);
     const childCode = `
-import { createUpdateManager } from ${JSON.stringify(new URL('../src/updates.mjs', import.meta.url).href)};
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { promisify } from 'node:util';
+const nativeExecFile = childProcess.execFile;
+const tracedExecFile = (...args) => nativeExecFile(...args);
+Object.defineProperty(tracedExecFile, promisify.custom, { value: (...args) => {
+  const operation = nativeExecFile[promisify.custom](...args);
+  operation.catch(error => console.error('NATIVE_LAUNCH_DIAGNOSTIC', JSON.stringify({
+    code: error.code, signal: error.signal, killed: error.killed,
+    stdout: String(error.stdout || '').slice(-4096), stderr: String(error.stderr || '').slice(-4096),
+  })));
+  return operation;
+} });
+childProcess.execFile = tracedExecFile;
+syncBuiltinESMExports();
+const { createUpdateManager } = await import(${JSON.stringify(new URL('../src/updates.mjs', import.meta.url).href)});
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 const manager = createUpdateManager({
   projectRoot: ${JSON.stringify(root)}, platform: 'win32', isDocker: false,

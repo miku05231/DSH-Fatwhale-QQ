@@ -1,0 +1,21 @@
+name: Windows startup diagnostics
+on:
+  push:
+    branches: [codex/v320-updater-diagnostics]
+permissions:
+  contents: read
+jobs:
+  startup:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Compare PowerShell startup environments
+        run: node tests/windows-startup-diagnostics.mjs
+      - name: Diagnose the actual isolated updater
+        run: node tests/run-all.mjs --only updates-test
