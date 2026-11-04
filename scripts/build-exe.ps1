@@ -146,15 +146,10 @@ class QqBridgeHost
         string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
             "WindowsPowerShell", "v1.0", "powershell.exe");
         if (!File.Exists(powershell)) powershell = "powershell.exe";
-        // -EncodedCommand keeps Unicode paths intact; set PS 5.1's redirected encoding explicitly.
-        string command = "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); "
-            + "$ErrorActionPreference = 'Stop'; try { & '" + bootstrap.Replace("'", "''")
-            + "'; $completed = $?; if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }; "
-            + "if (-not $completed) { exit 1 }; exit 0 } "
-            + "catch { [Console]::Error.WriteLine($_.ToString()); exit 1 }";
+        // Use the same native script entry as the .cmd launcher.
         ProcessStartInfo info = new ProcessStartInfo(powershell, ArgumentLine(new string[] {
             "-NoProfile", "-NonInteractive", "-STA", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
-            "-OutputFormat", "Text", "-EncodedCommand", Convert.ToBase64String(Encoding.Unicode.GetBytes(command))
+            "-OutputFormat", "Text", "-File", bootstrap
         }));
         info.WorkingDirectory = root;
         info.UseShellExecute = false;

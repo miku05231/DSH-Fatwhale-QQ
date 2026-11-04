@@ -1,8 +1,8 @@
-# QQ-DSH v3.2.0
+# QQ-DSH v3.2.1
 
-当前版本：**v3.2.0**。AstrBot 是可选扩展，默认关闭；功能边界见[发行说明](docs/releases/v3.2.0.md)。
+当前版本：**v3.2.1**。修复 Windows 启动器、测试可移植性与容器版本标识；AstrBot 仍为默认关闭的可选扩展，详见[发行说明](docs/releases/v3.2.1.md)。
 
-> **测试状态：尚未完成全面测试。**真实 QQ 新适配投递、公开天气 API、真实模型供应商、从零安装和全部 AstrBot 插件兼容性未全面验证。请查看[匿名验收摘要](docs/releases/v3.2.0-verification.md)，遇到问题请到 [GitHub Issues](https://github.com/miku05231/DSH-Fatwhale-QQ/issues) 提交。
+> **验证范围：**隔离回归和容器验证见[v3.2.1 验证说明](docs/releases/v3.2.1-verification.md)。真实 QQ 投递、公开天气 API、真实模型供应商、从零安装和全部 AstrBot 插件兼容性仍未全面验证。遇到问题请到 [GitHub Issues](https://github.com/miku05231/DSH-Fatwhale-QQ/issues) 提交。
 >
 > **DSH 兼容验证：**0.2.1-rc.5 已在 Windows 与 NAS 的受控场景完成验证；生产 DSH 核心仍为 0.2.0-rc.2，不代表生产已升级或真实模型供应商认证。
 
@@ -15,9 +15,9 @@
 
 你在手机或电脑 QQ 里发消息，本机 DSH 执行并回复。
 
-当前版本：**v3.2.0**。新增默认关闭的 AstrBot 插件运行时与管理、群授权边界，以及 NAS 日志和持久调度适配，见 [v3.2.0 发行说明](docs/releases/v3.2.0.md)。
+当前版本：**v3.2.1**。修复 Windows 启动器、AstrBot 模型网关测试与系统页加载验收，并统一容器版本，见 [v3.2.1 发行说明](docs/releases/v3.2.1.md)。
 
-> **测试状态：尚未完成全面测试。**真实 QQ 新适配投递、公开天气 API、真实模型供应商、从零安装和全部 AstrBot 插件兼容性未全面验证。请按[匿名验收摘要](docs/releases/v3.2.0-verification.md)的边界使用；遇到问题请到 [GitHub Issues](https://github.com/miku05231/DSH-Fatwhale-QQ/issues) 提交。
+> **验证范围：**隔离回归和容器验证见[v3.2.1 验证说明](docs/releases/v3.2.1-verification.md)。真实 QQ 投递、公开天气 API、真实模型供应商、从零安装和全部 AstrBot 插件兼容性仍未全面验证；遇到问题请到 [GitHub Issues](https://github.com/miku05231/DSH-Fatwhale-QQ/issues) 提交。
 >
 > **DSH 兼容验证：**0.2.1-rc.5 已在 Windows 与 NAS 的受控场景完成验证；生产 DSH 核心仍为 0.2.0-rc.2，不代表生产已升级或真实模型供应商认证。
 

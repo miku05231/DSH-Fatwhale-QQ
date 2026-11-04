@@ -472,8 +472,14 @@ async function main() {
 
     // ---------------------------------------------------------- 系统
     await goto('system');
-    await sleep(1200);
-    check('系统信息键值对已填充', (await evaluate('document.querySelectorAll("#systemInfo dt").length')) > 6);
+    const systemInfoDeadline = Date.now() + 10000;
+    let systemInfoCount;
+    do {
+      systemInfoCount = await evaluate('document.querySelectorAll("#systemInfo dt").length');
+      if (systemInfoCount > 6) break;
+      await sleep(100);
+    } while (Date.now() < systemInfoDeadline);
+    check('系统信息键值对已填充', systemInfoCount > 6);
     check('日志盒子有内容', await evaluate('(()=>{const t=document.getElementById("logBox").textContent.trim();return t.length>0&&t!=="加载中…";})()'));
     check(
       '日志里不出现明文 token',

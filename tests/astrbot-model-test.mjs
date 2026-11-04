@@ -6,8 +6,9 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 import { convertDshChunks, createAstrbotModelProvider, normalizeAstrbotRequest } from '../src/astrbot-model.mjs';
 import { executeAstrbotModelHost } from '../src/astrbot-model-host.mjs';
+import { resolveDshInstallRoot } from '../src/dsh-desktop.js';
 
-const DSH_ROOT = 'C:\\dev\\nodejs\\node_modules\\@deepseek-ai\\dsh';
+const DSH_ROOT = resolveDshInstallRoot(process.env.QQ_TEST_DSH_COMMAND || 'dsh', process.cwd());
 const DSH_COMMAND = path.join(DSH_ROOT, 'lib', 'bin.js');
 const SECRET = 'astrbot-runtime-secret-sentinel';
 const requireAttachment = createRequire(path.join(DSH_ROOT, 'node_modules', '@deepseek-ai', 'dsh-attachment-local', 'package.json'));

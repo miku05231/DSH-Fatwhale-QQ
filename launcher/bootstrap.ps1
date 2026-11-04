@@ -9,6 +9,7 @@
 # ============================================================
 
 $ErrorActionPreference = 'Continue'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 $script:ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $script:LogPath     = Join-Path $script:ProjectRoot 'state\launcher.log'

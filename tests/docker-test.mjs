@@ -45,6 +45,15 @@ function read(rel) {
 console.log('\n[1] Dockerfile');
 
 const dockerfile = read('Dockerfile');
+const version = JSON.parse(read('package.json')).version;
+for (const file of ['Dockerfile', 'docker/Dockerfile.nas']) {
+  check(read(file).includes(`org.opencontainers.image.version="${version}"`), `${file} 版本标签与应用一致`);
+}
+for (const [file, image] of [['docker-compose.yml', 'qq-dsh-bridge'], ['docker/compose.nas.yml', 'qq-bridge-nas']]) {
+  const images = [...read(file).matchAll(new RegExp(`image: ${image}:([^\\s]+)`, 'g'))];
+  check(images.length > 0 && images.every((match) => match[1] === version), `${file} 镜像版本与应用一致`);
+}
+check(JSON.parse(read('runtime/astrbot-lock.json')).application.version === version, 'AstrBot 清单中的应用版本一致');
 check(/^FROM node:\d+-alpine/m.test(dockerfile), '基础镜像是 node alpine', (dockerfile.match(/^FROM .*/m) || [''])[0]);
 check(/WORKDIR \/app/.test(dockerfile), 'WORKDIR 是 /app');
 check(/EXPOSE 5830/.test(dockerfile), '暴露控制台端口 5830');

@@ -146,8 +146,12 @@ try {
   });
   await check('container loads bundled plugins from the image', () => {
     const status = JSON.parse(fs.readFileSync(path.join(temp, 'state', 'status.json')));
-    assert.equal(status.plugins, 1);
-    return 'bundled ping plugin loaded with config outside /app';
+    const snapshot = JSON.parse(inside(bridge, "console.log(await (await fetch('http://127.0.0.1:5830/api/plugins')).text())")).data;
+    assert.deepEqual(snapshot.failures, []);
+    const names = snapshot.plugins.map((plugin) => plugin.name);
+    for (const name of ['ping', 'reply-tts']) assert.ok(names.includes(name), `${name} is not loaded`);
+    assert.equal(status.plugins, names.length);
+    return `bundled plugins loaded with config outside /app: ${names.join(', ')}`;
   });
   // ponytail: the default fixture needs no credentials; opt in to real model calls.
   await check(`message to bridge to ${runtimeVolume ? 'real' : 'fixture'} DSH to OneBot`, async () => {

@@ -325,6 +325,7 @@ setInterval(() => {}, 1000);
     const bootstrapCapture = path.join(temporary, 'bootstrap.json');
     await fs.writeFile(bootstrap, '\uFEFF' + `
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $data = [pscustomobject]@{
   script = $PSCommandPath
   cwd = [Environment]::CurrentDirectory

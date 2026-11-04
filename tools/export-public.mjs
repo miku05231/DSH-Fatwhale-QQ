@@ -42,6 +42,8 @@ const INCLUDE = [
   'docs/automation-and-voice.md',
   'docs/image-generation.md',
   'docs/media-providers.md',
+  'docs/releases/v3.2.1.md',
+  'docs/releases/v3.2.1-verification.md',
   'docs/releases/v3.2.0.md',
   'docs/releases/v3.2.0-verification.md',
   'docs/releases/v3.1.5.md',

@@ -1,5 +1,7 @@
 FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
 
+LABEL org.opencontainers.image.version="3.2.1"
+
 ARG DSH_VERSION=0.2.0-rc.2
 RUN apk add --no-cache bash git ripgrep python3 \
  && npm install --prefix /opt/dsh --omit=dev "@deepseek-ai/dsh@${DSH_VERSION}" \
