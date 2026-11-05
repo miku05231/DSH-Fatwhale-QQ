@@ -383,11 +383,11 @@ try {
       compat: { supportsReasoningEffort: true },
       baseURL: `http://127.0.0.1:${modelServer.address().port}/v1`,
       apiKeyEnv: 'QQ_WEB_TEST_API_KEY',
-      models: [{ id: 'web-test', input: ['text'], contextWindow: 32000, reasoningEfforts: { high: 'high' } }],
+      models: [{ id: 'web-test', input: ['text'], contextWindow: 200000, reasoningEfforts: { high: 'high' } }],
     }, 'web-switch-local': {
       api: 'openai-completions', baseURL: `http://127.0.0.1:${modelServer.address().port}/v1`,
       compat: { supportsReasoningEffort: true },
-      apiKeyEnv: 'QQ_WEB_TEST_API_KEY', models: [{ id: 'web-switched', input: ['text'], contextWindow: 32000,
+      apiKeyEnv: 'QQ_WEB_TEST_API_KEY', models: [{ id: 'web-switched', input: ['text'], contextWindow: 200000,
         reasoningEfforts: { off: null, high: 'high', max: 'max' } }],
     } } } },
     { id: 'agent-default-model', config: { provider: 'web-test-local', model: 'web-test', reasoningEffort: 'high' } },

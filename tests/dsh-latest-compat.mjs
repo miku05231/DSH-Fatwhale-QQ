@@ -3,17 +3,27 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createAstrbotModelProvider } from '../src/astrbot-model.mjs';
+import { dshSplitsToolExecutors } from '../src/dsh-version.js';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DSH_ROOT = path.resolve(process.env.DSH_LATEST_ROOT || path.join(
   PROJECT_ROOT, '.tmp', 'dsh-latest-compat', 'node_modules', '@deepseek-ai', 'dsh',
 ));
-const EXPECTED_DSH_VERSION = '0.2.1-rc.5';
+function installedDshVersion() {
+  try {
+    return JSON.parse(fsSync.readFileSync(path.join(DSH_ROOT, 'package.json'), 'utf8')).version;
+  } catch {
+    return '';
+  }
+}
+const EXPECTED_DSH_VERSION = process.env.QQ_TEST_DSH_VERSION || installedDshVersion();
+const SPLIT_TOOLS = dshSplitsToolExecutors(EXPECTED_DSH_VERSION);
 const ROUTE = 'compat-route';
 const MODEL = 'compat-model';
 const TEST_KEY_ENV = 'QQ_DSH_COMPAT_TEST_KEY';
@@ -98,7 +108,7 @@ async function prepareCliEnvironment(root, label) {
   env.APPDATA = path.join(paths.home, 'AppData', 'Roaming');
   env.LOCALAPPDATA = path.join(paths.home, 'AppData', 'Local');
   env.DSH_HOME = paths.dshHome;
-  env.DSH_TOOLS_MODE = 'native';
+  if (!SPLIT_TOOLS) env.DSH_TOOLS_MODE = 'native';
   env.DSH_TELEMETRY_DISABLED = '1';
   env.TMPDIR = paths.temp;
   env.TMP = paths.temp;
@@ -192,7 +202,24 @@ function spawnCaptured(command, args, options, timeoutMs) {
   });
 }
 
-test('DSH 0.2.1-rc.5 serves real AstrBot requests through a loopback OpenAI fixture', async (t) => {
+test('installed DSH keeps boot and bundle-list entry points', async () => {
+  const manifest = JSON.parse(await fs.readFile(path.join(DSH_ROOT, 'package.json'), 'utf8'));
+  const requireDsh = createRequire(path.join(DSH_ROOT, 'package.json'));
+  const boot = await import(pathToFileURL(requireDsh.resolve('@deepseek-ai/dsh-app-boot')).href);
+  assert.equal(typeof boot.boot, 'function');
+  assert.equal(typeof boot.loadLayeredEnv, 'function');
+  if (dshSplitsToolExecutors(manifest.version)) {
+    assert.match(String(manifest.engines?.node ?? ''), /24\.9/);
+    assert.equal(boot.OFFICIAL_ON_DEMAND_CATALOG, undefined);
+    const official = await import(pathToFileURL(requireDsh.resolve('@deepseek-ai/dsh-official-bundles')).href);
+    assert.ok(official.DEFAULT_PROFILE_BUNDLES);
+    assert.equal(typeof (await import(pathToFileURL(requireDsh.resolve('@deepseek-ai/dsh-tool-executor-native')).href)).apply, 'function');
+  } else {
+    assert.ok(boot.DEFAULT_PROFILE_BUNDLES || boot.OFFICIAL_ON_DEMAND_CATALOG);
+  }
+});
+
+test(`DSH ${EXPECTED_DSH_VERSION || 'installed'} serves real AstrBot requests through a loopback OpenAI fixture`, async (t) => {
   const manifest = JSON.parse(await fs.readFile(path.join(DSH_ROOT, 'package.json'), 'utf8'));
   assert.equal(manifest.name, '@deepseek-ai/dsh');
   assert.equal(manifest.version, EXPECTED_DSH_VERSION,

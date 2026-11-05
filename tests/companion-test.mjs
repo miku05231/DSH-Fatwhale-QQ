@@ -1329,7 +1329,11 @@ ok('插件：只依赖 node: 内置模块，导出 name/inject/apply', () => {
   assert.match(pluginSource, /export const name = 'qq-bridge-companion'/);
   assert.match(pluginSource, /export const inject = \[/);
   assert.match(pluginSource, /export async function apply\(ctx/);
-  assert.doesNotMatch(pluginSource, /from '(?!node:)[^']+'/);
+  assert.doesNotMatch(pluginSource, /from '(?!node:|\.{1,2}\/)[^']+'/);
+  for (const file of ['console-mount.js', 'bridge-supervisor.js', 'client.js']) {
+    const source = fs.readFileSync(path.join(ROOT, 'src/companion/lib', file), 'utf8');
+    assert.doesNotMatch(source, /from '(?!node:|\.{1,2}\/)[^']+'/, file);
+  }
   assert.doesNotMatch(pluginSource, /require\(/);
 });
 

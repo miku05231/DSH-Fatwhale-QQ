@@ -30,6 +30,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { resolvePath } from './config.js';
 import { activeFilePath, personaDir, readState, resolvePersonaFor } from './personas.js';
 
 export const DEFAULT_PERSONA_PATH = path.join('qq-workspace', 'AGENTS.md');
@@ -39,6 +40,9 @@ export const DEFAULT_PERSONA_MAX_CHARS = 8000;
 export function expandPath(raw, { homedir = os.homedir() } = {}) {
   let value = String(raw ?? '').trim();
   if (!value) return '';
+  if (process.platform !== 'win32' && !/^[A-Za-z]:[\\/]/.test(value) && !value.startsWith('\\\\')) {
+    value = value.replace(/\\/g, '/');
+  }
   if (value === '~') value = homedir;
   else if (/^~[\\/]/.test(value)) value = path.join(homedir, value.slice(2));
   value = value.replace(/%([A-Za-z_][A-Za-z0-9_]*)%/g, (whole, name) =>
@@ -55,21 +59,21 @@ export function expandPath(raw, { homedir = os.homedir() } = {}) {
 export function resolvePersonaPath({ configRoot, config, homedir } = {}) {
   const raw = String(config?.persona?.path ?? '').trim();
   const value = expandPath(raw || DEFAULT_PERSONA_PATH, { homedir });
-  return path.isAbsolute(value) ? path.normalize(value) : path.resolve(configRoot ?? '.', value);
+  return resolvePath(configRoot ?? '.', value);
 }
 
 /** 记忆库根目录（配置为空时回 `记忆库`；相对路径按项目根） */
 export function resolveMemoryRoot({ configRoot, config, homedir } = {}) {
   const raw = String(config?.memory?.root ?? '').trim();
   const value = expandPath(raw || '记忆库', { homedir });
-  return path.isAbsolute(value) ? path.normalize(value) : path.resolve(configRoot ?? '.', value);
+  return resolvePath(configRoot ?? '.', value);
 }
 
 /** 工作区目录（配置为空时回项目根；相对路径按项目根） */
 export function resolveWorkspace({ configRoot, config, homedir } = {}) {
   const raw = String(config?.dsh?.cwd ?? '').trim();
   const value = expandPath(raw || '.', { homedir });
-  return path.isAbsolute(value) ? path.normalize(value) : path.resolve(configRoot ?? '.', value);
+  return resolvePath(configRoot ?? '.', value);
 }
 
 function clampText(value, maxChars) {

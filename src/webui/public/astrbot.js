@@ -207,7 +207,7 @@ export function initAstrbot({ notify = () => {}, confirm = async () => window.co
       headers['X-QQ-Astrbot-Token'] = state.token;
       options.body = JSON.stringify(payload ?? {});
     }
-    const response = await fetch(path, options);
+    const response = await fetch(`${globalThis.__QQ_BRIDGE_BASE__ || ''}${path}`, options);
     let envelope;
     try { envelope = await response.json(); }
     catch { throw new Error(`服务端返回了非 JSON（HTTP ${response.status}）`); }

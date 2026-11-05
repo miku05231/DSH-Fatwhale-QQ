@@ -23,7 +23,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: qq-dsh-bridge:3.2.1
+    image: qq-dsh-bridge:3.3.0
     container_name: qq-dsh-bridge
     init: true
     restart: unless-stopped

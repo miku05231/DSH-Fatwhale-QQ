@@ -1,0 +1,5 @@
+# The bundle patch inserts this package. A top-level id would only edit an
+# entry that already exists.
+- insert:
+    - id: qq-bridge-companion
+      name: qq-bridge-companion

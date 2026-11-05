@@ -8,6 +8,7 @@ import process from 'node:process';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { resolveDshInstallRoot } from './dsh-desktop.js';
+import { dshSplitsToolExecutors } from './dsh-version.js';
 import { killProcessTree, resolvePatchChain } from './dsh.js';
 import { redactSecrets } from './redact.js';
 
@@ -93,7 +94,7 @@ export function isChatOnlySessionId(value) {
 }
 
 /** The executable module list is closed even when a patch replaces a row name. */
-export function buildChatOnlyEntries({ dataRoot, modelConfig = {} } = {}) {
+export function buildChatOnlyEntries({ dataRoot, modelConfig = {}, dshVersion = '' } = {}) {
   if (!path.isAbsolute(String(dataRoot ?? ''))) throw new Error('Chat-only dataRoot must be absolute.');
   const settings = selectChatOnlyModelConfig([Object.entries(modelConfig).map(([id, config]) => ({ id, config }))]);
   const configs = {
@@ -112,9 +113,17 @@ export function buildChatOnlyEntries({ dataRoot, modelConfig = {} } = {}) {
     'agent-loop': { agents: [] },
     ...settings,
   };
-  return Object.entries(CHAT_ONLY_MODULES).map(([id, name]) => ({
-    id, name, ...(configs[id] ? { config: configs[id] } : {}),
-  }));
+  const splitTools = dshSplitsToolExecutors(dshVersion);
+  const modules = splitTools
+    ? { ...CHAT_ONLY_MODULES, 'native-tool-executor': '@deepseek-ai/dsh-tool-executor-native' }
+    : CHAT_ONLY_MODULES;
+  return Object.entries(modules).map(([id, name]) => {
+    // 0.2.2 rejects tools.mode. The kernel still loads the registry plus the
+    // native executor the agent loop now requires, and then denies every call.
+    // It does not load bash, filesystem, MCP, or PTC tool packages.
+    if (id === 'tools' && splitTools) return { id, name };
+    return { id, name, ...(configs[id] ? { config: configs[id] } : {}) };
+  });
 }
 
 /** Fail closed if a DSH version does not expose the monotonic tool boundary. */
@@ -127,10 +136,12 @@ export function installChatOnlyPolicy(ctx) {
   tools.guard(() => CHAT_ONLY_DENIAL);
   return (agentCtx) => {
     const scoped = agentCtx.get('tools');
-    if (!scoped || typeof scoped.presentAs !== 'function' || typeof scoped.restrict !== 'function') {
+    if (!scoped || typeof scoped.restrict !== 'function' || typeof scoped.guard !== 'function') {
       throw new Error('This DSH version cannot enforce the scoped chat-only tool policy.');
     }
-    scoped.presentAs('native');
+    // 0.2.1 and earlier select native presentation here. 0.2.2 moved that to a
+    // separate executor plugin, which this kernel deliberately does not mount.
+    if (typeof scoped.presentAs === 'function') scoped.presentAs('native');
     scoped.restrict({ allow: [] });
     scoped.guard(() => CHAT_ONLY_DENIAL);
   };
