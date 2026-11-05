@@ -107,6 +107,25 @@ function stripBlock(text) {
   return text.slice(0, start) + (after < 0 ? '' : text.slice(after + 1));
 }
 
+/** 去掉注释、空行和文档分隔后，正文是不是空序列 `[]`。 */
+function isEmptySequenceDocument(text) {
+  const code = String(text ?? '')
+    .replace(/^\uFEFF/, '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#') && line !== '---' && line !== '...');
+  return code.join('').replace(/\s+/g, '') === '[]';
+}
+
+/**
+ * 全新的 dsh web profile 会把 cordis.patch.yml 写成 `[]`。
+ * 直接在它后面接 `- insert:` 不是合法 YAML，要先拿掉这个空序列。
+ * 已经有条目的文件原样保留。
+ */
+function patchBase(text) {
+  return isEmptySequenceDocument(text) ? '' : String(text ?? '');
+}
+
 function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
@@ -140,7 +159,8 @@ function main() {
   const workspace = resolveWorkspace();
   const sessionMap = path.join(PROJECT_ROOT, 'state', 'sessions.json');
   const block = buildBlock(workspace, sessionMap, options.runMode);
-  const next = `${cleaned}${cleaned.endsWith('\n') || cleaned === '' ? '' : '\n'}${block}`;
+  const base = patchBase(cleaned);
+  const next = `${base}${base === '' || base.endsWith('\n') || base.endsWith('\r\n') ? '' : '\n'}${block}`;
 
   console.log('DSH_HOME   :', home);
   console.log('profile    :', profileDir);
