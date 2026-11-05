@@ -31,6 +31,7 @@ const PUBLIC_DOC_FILES = [
   'docs/automation-and-voice.md',
   'docs/image-generation.md',
   'docs/media-providers.md',
+  'docs/releases/v3.4.0-beta.1.md',
   'docs/releases/v3.3.0.md',
   'docs/releases/v3.2.1.md',
   'docs/releases/v3.2.1-verification.md',

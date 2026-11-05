@@ -443,6 +443,7 @@ export class OneBot extends EventEmitter {
       this.#reconnectTimer = null;
       this.#open();
     }, delay);
+    this.#reconnectTimer.unref?.();
   }
 
   #clearReconnectTimer() {

@@ -150,7 +150,7 @@ async function pluginFixture({
   if (historicalSessions !== undefined) {
     fs.writeFileSync(sessionMapPath, JSON.stringify(historicalSessions));
   }
-  let dispose;
+  const disposers = [];
   let started;
   const promptStarted = new Promise((resolve) => { started = resolve; });
   let flushed;
@@ -255,7 +255,7 @@ async function pluginFixture({
       warn: (line) => calls.warnings.push(line),
       info: (line) => { if (line.includes('已把')) historyAttached(); },
     },
-    effect: (register) => { dispose = register(); },
+    effect: (register) => { disposers.push(register()); },
   }, {
     discoveryPath: pluginDiscovery,
     ...(promptTimeoutMs ? { promptTimeoutMs } : {}),
@@ -270,7 +270,12 @@ async function pluginFixture({
     sessionFlushed,
     historyFinished,
     session,
-    dispose,
+    dispose() {
+      while (disposers.length) {
+        const disposeOne = disposers.pop();
+        try { disposeOne(); } catch { /* 夹具清理失败不影响断言 */ }
+      }
+    },
   };
 }
 
@@ -1306,11 +1311,22 @@ ok('安装器：安装后写入标记块，卸载后恢复原内容', () => {
   assert.match(installed, /name: 'file:\/\/\/.*\/src\/companion\/lib\/index\.js'/);
   assert.match(installed, /workspacePath: '/);
   assert.match(installed, /sessionMapPath: '/);
+  assert.doesNotMatch(installed, /runMode/);
   assert.match(installed, /# existing/);
 
   const remove = runInstaller(['--remove']);
   assert.equal(remove.status, 0, remove.stderr);
   assert.equal(fs.readFileSync(patchPath, 'utf8'), '# existing\n');
+});
+
+ok('安装器：--run-mode embedded 才写入进程内开关', () => {
+  assert.equal(runInstaller(['--run-mode', 'embedded']).status, 0);
+  const text = fs.readFileSync(patchPath, 'utf8');
+  assert.match(text, /runMode: embedded/);
+  assert.match(text, /projectRoot: '/);
+  assert.match(text, /configFile: '/);
+  assert.equal(runInstaller(['--run-mode', 'nope']).status, 1);
+  assert.equal(runInstaller(['--remove']).status, 0);
 });
 
 ok('安装器：重复安装不会重复写块', () => {
@@ -1330,7 +1346,7 @@ ok('插件：只依赖 node: 内置模块，导出 name/inject/apply', () => {
   assert.match(pluginSource, /export const inject = \[/);
   assert.match(pluginSource, /export async function apply\(ctx/);
   assert.doesNotMatch(pluginSource, /from '(?!node:|\.{1,2}\/)[^']+'/);
-  for (const file of ['console-mount.js', 'bridge-supervisor.js', 'client.js']) {
+  for (const file of ['console-mount.js', 'bridge-supervisor.js', 'client.js', 'embedded-bridge.js', 'in-process-agent.js']) {
     const source = fs.readFileSync(path.join(ROOT, 'src/companion/lib', file), 'utf8');
     assert.doesNotMatch(source, /from '(?!node:|\.{1,2}\/)[^']+'/, file);
   }
@@ -1365,6 +1381,9 @@ ok('新文件都能通过 node --check', () => {
     'src/agent-runner.js',
     'src/config.js',
     'src/companion/lib/index.js',
+    'src/companion/lib/embedded-bridge.js',
+    'src/companion/lib/in-process-agent.js',
+    'src/bridge-run-mode.js',
     'tools/install-companion.mjs',
   ]) {
     const result = spawnSync(process.execPath, ['--check', path.join(ROOT, file)], {

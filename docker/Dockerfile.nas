@@ -1,7 +1,7 @@
 # node:24-alpine digest is left unpinned until a NAS rebuild records the musl image.
 FROM node:24-alpine
 
-LABEL org.opencontainers.image.version="3.3.0"
+LABEL org.opencontainers.image.version="3.4.0-beta.1"
 
 ARG DSH_VERSION=0.2.0-rc.2
 RUN apk add --no-cache bash git ripgrep python3 \

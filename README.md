@@ -1,6 +1,6 @@
-# QQ-DSH v3.3.0
+# QQ-DSH v3.4.0-beta.1
 
-当前版本：**v3.3.0**。兼容 DSH 0.2.2-rc.1 与 0.2.1-rc.5，并在 DSH 插件页提供控制台。AstrBot 仍为默认关闭的可选扩展，详见[发行说明](docs/releases/v3.3.0.md)。
+当前版本：**v3.4.0-beta.1**。兼容 DSH 0.2.2-rc.1 与 0.2.1-rc.5。默认仍是独立桥接进程；可选在 `dsh web` 里把消息核心放进宿主进程。详见[发行说明](docs/releases/v3.4.0-beta.1.md)。
 
 > **验证范围：**隔离回归和容器验证见[v3.2.1 验证说明](docs/releases/v3.2.1-verification.md)。真实 QQ 投递、公开天气 API、真实模型供应商、从零安装和全部 AstrBot 插件兼容性仍未全面验证。遇到问题请到 [GitHub Issues](https://github.com/miku05231/DSH-Fatwhale-QQ/issues) 提交。
 >
@@ -15,7 +15,7 @@
 
 你在手机或电脑 QQ 里发消息，本机 DSH 执行并回复。
 
-当前版本：**v3.3.0**。兼容 DSH 0.2.2-rc.1，并在插件页挂载控制台，见 [v3.3.0 发行说明](docs/releases/v3.3.0.md)。
+当前版本：**v3.4.0-beta.1**。兼容 DSH 0.2.2-rc.1，默认仍是独立桥接进程，可选进程内模式见 [v3.4.0-beta.1 发行说明](docs/releases/v3.4.0-beta.1.md)。
 
 > **验证范围：**隔离回归和容器验证见[v3.2.1 验证说明](docs/releases/v3.2.1-verification.md)。真实 QQ 投递、公开天气 API、真实模型供应商、从零安装和全部 AstrBot 插件兼容性仍未全面验证；遇到问题请到 [GitHub Issues](https://github.com/miku05231/DSH-Fatwhale-QQ/issues) 提交。
 >
@@ -165,7 +165,20 @@ node src\webui\server.mjs   # 然后访问 http://127.0.0.1:5830
 
 见 `config.example.json`，每个字段都有注释式说明写在 `docs/控制台架构.md` 与 `README.md`（本文件由导出脚本生成，更完整的说明在导出的 `README.md` 之外的 `docs/`）。
 
-关键字段：`onebot.url`、`security.allowFrom`（主人 QQ）、`security.allowGroupIds`、`behavior.wakeWord`、`dsh.command` = `dsh`、`memory.root`（Obsidian 库路径）。
+关键字段：`onebot.url`、`security.allowFrom`（主人 QQ）、`security.allowGroupIds`、`behavior.wakeWord`、`dsh.command` = `dsh`、`memory.root`（Obsidian 库路径）、`bridge.runMode`。
+
+## 进程内模式（可选）
+
+`bridge.runMode` 默认是 `standalone`。DSH 插件页仍然只挂 `/qq-bridge/` 控制台，消息核心继续由独立进程运行。NAS Compose、托盘和 `node src/index.js` 不用改。
+
+要在长驻的 `dsh web`（或一直开着的 Desktop）里把收发核心放进宿主进程，任选一种，然后完全重启 DSH：
+
+1. 在 `config.json` 里写上 `"bridge": { "runMode": "embedded" }`。
+2. 安装插件时加上开关：`node tools/install-companion.mjs --run-mode embedded`。这会在 profile 补丁里写 `runMode: embedded`、`projectRoot` 和 `configFile`。插件配置优先于 `config.json`。
+
+嵌入后，插件加载时就会连接 NapCat、收发消息，并用宿主里的会话接口处理管理员对话。不再拉起桥接子进程，也不再把管理员请求绕回 `127.0.0.1` 上的 companion HTTP。普通成员的无工具聊天仍在独立子进程里，管理员工具策略不变。NapCat 断线按原退避重连；配置错误和消息处理异常留在插件内。关掉或重载插件会关掉 WebSocket、定时器和监听器。
+
+宿主进程退出后，进程内的 QQ 桥也会停。需要一直在线时用 `dsh web`，不要依赖会随窗口关闭的 Desktop。本版不改 Compose 的服务组成。
 
 ## 测试
 

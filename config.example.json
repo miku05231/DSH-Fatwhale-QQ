@@ -3,6 +3,9 @@
     "url": "ws://127.0.0.1:3001",
     "accessToken": ""
   },
+  "bridge": {
+    "runMode": "standalone"
+  },
   "dsh": {
     "command": "dsh",
     "profile": "headless",

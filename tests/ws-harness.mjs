@@ -137,6 +137,9 @@ export function createFakeNapCat({ token = null, onCall = null, respondToClose =
 
   return {
     state,
+    liveCount() {
+      return sockets.filter((socket) => !socket.destroyed).length;
+    },
     /** 像 NapCat 那样推一个事件给客户端 */
     sendJson(obj) {
       state.lastSocket?.write(encodeFrame(0x1, JSON.stringify(obj)));

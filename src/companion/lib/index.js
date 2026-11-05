@@ -21,7 +21,10 @@
 //   - 不把聊天正文写日志；日志只记 sessionId、耗时、错误。
 
 import fs from 'node:fs';
-import { mountCompanionConsole } from './console-mount.js';
+import { inferProjectRoot, mountCompanionConsole } from './console-mount.js';
+import { createInProcessAgentRuntime } from './in-process-agent.js';
+import { resolveBridgeRunMode } from '../../bridge-run-mode.js';
+import { loadConfig } from '../../config.js';
 import { selectAgentModel } from '../../dsh-version.js';
 import http from 'node:http';
 import os from 'node:os';
@@ -306,6 +309,40 @@ export async function apply(ctx, rawConfig) {
     warn: (message) => ctx.logger?.warn?.(message),
     error: (message) => ctx.logger?.error?.(message),
   };
+  const projectRoot = path.resolve(String(config.projectRoot || inferProjectRoot()));
+  const requestedConfig = String(config.configFile ?? '').trim();
+  const configPath = requestedConfig || path.join(projectRoot, 'config.json');
+  let fileConfig = null;
+  try {
+    fileConfig = loadConfig(projectRoot, {
+      createIfMissing: false,
+      configFile: configPath,
+    }).config;
+  } catch {
+    // 校验失败也要能看见 runMode，否则坏配置会悄悄退回独立进程。
+    try {
+      const raw = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
+      fileConfig = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
+    } catch {
+      fileConfig = null;
+    }
+  }
+  const runMode = resolveBridgeRunMode(config, fileConfig);
+  let bridgeControl = null;
+  const bridgeStatus = () => {
+    try {
+      if (bridgeControl && typeof bridgeControl.status === 'function') return bridgeControl.status();
+    } catch (error) {
+      return {
+        mode: runMode,
+        running: false,
+        pid: 0,
+        connected: false,
+        lastError: String(error?.message ?? error).slice(0, 300),
+      };
+    }
+    return { mode: runMode, running: false, pid: 0, connected: false, lastError: null };
+  };
   const discoveryPath = path.resolve(
     String(config.discoveryPath ?? '').trim() || path.join(resolveDshHome(), 'qq-bridge-companion.json'),
   );
@@ -553,6 +590,7 @@ export async function apply(ctx, rawConfig) {
         permissionProtocol: 1,
         permissionModes: supportedPermissionModes(ctx),
         modelProtocol: 1,
+        bridge: bridgeStatus(),
       });
       return;
     }
@@ -670,12 +708,22 @@ export async function apply(ctx, rawConfig) {
     }
   });
 
-  mountCompanionConsole(ctx, {
-    projectRoot: config.projectRoot,
-    configFile: config.configFile,
-  }).catch((error) => {
+  const embeddedConfigFile = requestedConfig || path.join(projectRoot, 'config.json');
+  try {
+    const mounted = await mountCompanionConsole(ctx, {
+      projectRoot,
+      configFile: runMode === 'embedded' ? embeddedConfigFile : requestedConfig,
+      runMode,
+      autoStart: runMode === 'embedded',
+      agentRuntime: runMode === 'embedded' ? createInProcessAgentRuntime({ prompt: handlePrompt }) : null,
+      ...(typeof config.spawnImpl === 'function' ? { spawnImpl: config.spawnImpl } : {}),
+      ...(typeof config.startBridgeImpl === 'function' ? { startBridgeImpl: config.startBridgeImpl } : {}),
+      ...(typeof config.serverFactory === 'function' ? { serverFactory: config.serverFactory } : {}),
+    });
+    bridgeControl = mounted?.bridge ?? null;
+  } catch (error) {
     log.warn(`companion: 插件页控制台没有挂上：${String(error?.message ?? error)}`);
-  });
+  }
 
   // 异步补挂历史会话，不阻塞宿主启动。
   const workspace = findWorkspace(ctx.get('workspaceRegistry'), config.workspacePath);

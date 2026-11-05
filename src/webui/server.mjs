@@ -895,11 +895,14 @@ export function createWebUiServer({
     ]);
 
     const { names } = snapshot;
-    const bridgeAlive = snapshot.bridgeRunning === undefined
-      ? (isPidAlive(bridgePid) && statusFresh)
-      : snapshot.bridgeRunning;
+    const embeddedBridge = status?.runMode === 'embedded';
+    const bridgeAlive = embeddedBridge
+      ? Boolean(statusFresh && (Number(status?.pid) || 0) > 0)
+      : snapshot.bridgeRunning === undefined
+        ? (isPidAlive(bridgePid) && statusFresh)
+        : snapshot.bridgeRunning;
     const bridgeConnected = Boolean(bridgeAlive && statusFresh && status?.connected === true
-      && (snapshot.bridgePid === undefined || snapshot.bridgePid === bridgePid));
+      && (embeddedBridge || snapshot.bridgePid === undefined || snapshot.bridgePid === bridgePid));
     const napcatRunning = Boolean(snapshot.napcatRunning || health.reachable);
     // DSH 有两种运行形态：Windows 桌面端常驻进程，或容器里的按需 headless 运行时。
     // 后者本来就不会常驻，不能按进程名判断，否则永远显示“未运行”。
@@ -924,7 +927,8 @@ export function createWebUiServer({
       },
       bridge: {
         running: bridgeAlive,
-        pid: snapshot.bridgePid ?? bridgePid,
+        pid: embeddedBridge ? (Number(status?.pid) || bridgePid) : (snapshot.bridgePid ?? bridgePid),
+        runMode: embeddedBridge ? 'embedded' : 'standalone',
         connected: bridgeConnected,
         statusFresh,
         startedAt: status?.startedAt ?? null,

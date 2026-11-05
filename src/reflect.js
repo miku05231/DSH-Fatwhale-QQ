@@ -460,6 +460,7 @@ export function createReflectScheduler({
   run = runReflect,
 } = {}) {
   let timer = null;
+  let warmTimer = null;
   let busy = false;
   let stopped = false;
 
@@ -517,10 +518,12 @@ export function createReflectScheduler({
     }, Math.max(10000, Number(intervalMs) || 60000));
     timer.unref?.();
     // 启动 3 秒后先看一次：电脑关着错过的那次，开机就能补上
-    const warm = setTimeout(() => {
+    if (warmTimer) clearTimeout(warmTimer);
+    warmTimer = setTimeout(() => {
+      warmTimer = null;
       void tick().catch(() => {});
     }, 3000);
-    warm.unref?.();
+    warmTimer.unref?.();
     if (settings.daily) log?.info?.(`记忆反思定时已就绪：每天 ${settings.time}${settings.catchUp ? '（错过了会在启动后补一次）' : ''}`);
     else log?.info?.('记忆反思定时未开启（memory.reflectDaily=false），只保留手动按钮');
   }
@@ -529,6 +532,8 @@ export function createReflectScheduler({
     stopped = true;
     if (timer) clearInterval(timer);
     timer = null;
+    if (warmTimer) clearTimeout(warmTimer);
+    warmTimer = null;
   }
 
   /** 手动/到点/攒够轮次都走这里，busy 保证同一进程内不并发 */

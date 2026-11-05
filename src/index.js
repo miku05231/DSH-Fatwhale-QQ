@@ -155,7 +155,7 @@ function resolveConfigRoot(args) {
 
 // ---------------------------------------------------------------- 主流程
 
-export async function startBridge({ argv = process.argv.slice(2), embedded = false } = {}) {
+export async function startBridge({ argv = process.argv.slice(2), embedded = false, agentRuntime = null } = {}) {
   const args = parseArgs(argv);
 
   // 先用临时 logger 把配置读出来，拿到真正的 logDir 后重建。
@@ -276,6 +276,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
   let lastDropAt = null;
   let connected = false;
   let shuttingDown = false;
+  const activeAborts = new Set();
   // 正在跑 DSH 的人数（队列里还在排队的另算），托盘要能区分「在跑」和「在排队」。
   let inFlightCount = 0;
 
@@ -435,6 +436,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
       pid: process.pid,
       startedAt,
       updatedAt: new Date().toISOString(),
+      runMode: embedded ? 'embedded' : 'standalone',
       connected,
       onebotUrl: config?.onebot?.url ?? '',
       sessions: Object.keys(sessions.all()).length,
@@ -579,10 +581,18 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
   });
 
   bot.on('message', (msg) => {
-    lastMessageAt = new Date().toISOString();
-    handleMessage(msg).catch((err) => {
+    try {
+      lastMessageAt = new Date().toISOString();
+      Promise.resolve(handleMessage(msg)).catch((err) => {
+        lastErrorRef.value = String(err?.message ?? err).slice(0, 300);
+        log.error('处理消息时未捕获异常：', err?.stack ?? err);
+        writeStatus();
+      });
+    } catch (err) {
+      lastErrorRef.value = String(err?.message ?? err).slice(0, 300);
       log.error('处理消息时未捕获异常：', err?.stack ?? err);
-    });
+      writeStatus();
+    }
   });
 
   // ------------------------------------------------------------ 人格指令
@@ -846,6 +856,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
       let imageContext = null;
       let agentSucceeded = false;
       const abort = new AbortController();
+      activeAborts.add(abort);
       const permissionTimer = canUseComputer ? setInterval(() => {
         if (!grantUnchanged()) abort.abort();
       }, 1000) : null;
@@ -919,7 +930,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
         sessionId = sessions.get(sessionKey, { windowMinutes: sessionWindowMinutes, now: sessionStartedAt });
         const extraPatchPaths = refreshModelPlan();
         requestedModel = modelInfo?.effective ?? null;
-        const result = await runAgent(dshPrompt, {
+        const result = await invokeAgent(dshPrompt, {
           sessionId,
           cfg: executionConfig,
           requesterId: userId,
@@ -971,6 +982,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
         }
         return;
       } finally {
+        activeAborts.delete(abort);
         if (imageContext) await imageService.closeContext(imageContext, agentSucceeded && !abort.signal.aborted ? 'sealed' : 'cancelled').catch(() => {});
         clearInterval(heartbeat);
         if (permissionTimer) clearInterval(permissionTimer);
@@ -1253,23 +1265,36 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
 
   // ------------------------------------------------------------ 关闭
 
+  async function invokeAgent(text, options) {
+    if (agentRuntime && typeof agentRuntime.run === 'function' && isAdministrator(options.requesterId, options.cfg)) {
+      return agentRuntime.run(text, options);
+    }
+    return runAgent(text, options);
+  }
+
   async function shutdown(signal) {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info(`收到 ${signal}，正在退出…`);
+    for (const controller of activeAborts) {
+      try { controller.abort(); } catch { /* 忽略 */ }
+    }
+    activeAborts.clear();
     clearInterval(statusTimer);
-    reflectScheduler.stop();
-    platformScheduler.stop();
-    platformAbort.abort();
+    try { reflectScheduler.stop(); } catch { /* 忽略 */ }
+    try { platformScheduler.stop(); } catch { /* 忽略 */ }
+    try { platformAbort.abort(); } catch { /* 忽略 */ }
     clearInterval(astrbotHeartbeat);
-    await astrbot.stop();
-    await astrbotManager.stop();
+    try { await astrbot.stop(); } catch { /* 忽略 */ }
+    try { await astrbotManager.stop(); } catch { /* 忽略 */ }
     if (stickerTargetTimer) clearInterval(stickerTargetTimer);
     try {
       await stickerCollector?.flush?.();
     } catch { /* 采集队列收尾失败不影响退出 */ }
+    try { bot.close(); } catch { /* 忽略 */ }
+    try { bot.removeAllListeners(); } catch { /* 忽略 */ }
     try {
-      bot.close();
+      if (typeof agentRuntime?.shutdown === 'function') await agentRuntime.shutdown();
     } catch { /* 忽略 */ }
     try {
       shutdownAgentRuntime();
@@ -1280,6 +1305,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
         pid: 0,
         startedAt,
         updatedAt: new Date().toISOString(),
+        runMode: embedded ? 'embedded' : 'standalone',
         connected: false,
         onebotUrl: config?.onebot?.url ?? '',
         sessions: Object.keys(sessions.all()).length,
@@ -1308,7 +1334,20 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
 
   log.info(`正在连接 ${config?.onebot?.url ?? 'ws://127.0.0.1:3001'} …`);
   bot.connect();
-  return { stop: (signal = 'stop') => shutdown(signal) };
+  return {
+    stop: (signal = 'stop') => shutdown(signal),
+    status() {
+      return {
+        running: !shuttingDown,
+        pid: shuttingDown ? 0 : process.pid,
+        mode: embedded ? 'embedded' : 'standalone',
+        connected,
+        lastError: lastErrorRef.value,
+        projectRoot: PROJECT_ROOT,
+        onebotUrl: config?.onebot?.url ?? '',
+      };
+    },
+  };
 }
 
 function invokedAsCli() {

@@ -189,6 +189,13 @@ const SUITE = [
     note: 'discovery/鉴权/HTTP 错误语义、companion 优先路由、安装器安装与卸载、插件源码契约',
   },
   {
+    name: '进程内桥接',
+    file: 'tests/embedded-bridge-test.mjs',
+    expect: ['embedded bridge checks passed'],
+    timeoutMs: 60_000,
+    note: 'embedded 启停与重载、坏配置和断线不拖垮宿主、默认仍是 standalone',
+  },
+  {
     name: 'DSH Web（隔离真实内核）',
     file: 'tests/dsh-web-test.mjs',
     expect: ['通过'],
