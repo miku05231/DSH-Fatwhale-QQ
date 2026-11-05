@@ -5,14 +5,17 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config.js';
+import { OneBot } from '../src/onebot.js';
 import { resolveBridgeRunMode } from '../src/bridge-run-mode.js';
 import { createInProcessAgentRuntime } from '../src/companion/lib/in-process-agent.js';
 import { apply as applyCompanion } from '../src/companion/lib/index.js';
+import { prepareIsolatedHome, useIsolatedEnv } from './helpers/isolated-fixtures.mjs';
 import { createFakeNapCat } from './ws-harness.mjs';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-embedded-bridge-'));
+await prepareIsolatedHome(tmp);
+const restoreEnv = useIsolatedEnv(tmp);
 const adminId = 10001;
 let failed = 0;
 
@@ -55,9 +58,15 @@ function baseConfig(url) {
   return {
     onebot: { url, accessToken: '' },
     bridge: { runMode: 'embedded' },
-    dsh: { mode: 'headless', companion: false, patchPath: '', permissionMode: 'danger-full-access' },
+    dsh: {
+      command: path.join(tmp, 'dsh-missing'),
+      mode: 'headless',
+      companion: false,
+      patchPath: '',
+      permissionMode: 'danger-full-access',
+    },
     security: { allowFrom: [adminId], adminUserIds: [adminId] },
-    memory: { enabled: false },
+    memory: { enabled: false, reflectDaily: false },
     stickers: { enabled: false },
     plugins: { enabled: false },
     persona: { enabled: false },
@@ -160,10 +169,10 @@ async function readHealth(discoveryPath) {
   return response.json();
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-embedded-bridge-'));
 const previousExit = process.exitCode;
 process.exitCode = undefined;
 
+check('runtime home stays inside the temp directory', os.homedir().startsWith(tmp) && String(process.env.DSH_HOME).startsWith(tmp));
 check('switch defaults to standalone', resolveBridgeRunMode({}, {}) === 'standalone');
 check('plugin runMode wins over the config file', resolveBridgeRunMode(
   { runMode: 'standalone' },
@@ -328,8 +337,26 @@ try {
   check('plugin console can read embedded bridge status', bridgeResponse.status === 200
     && bridgeBody.data?.mode === 'embedded' && bridgeBody.data?.running === true);
 
-  napcat.sendPrivateMessage({ userId: adminId, text: 'hello embedded' });
-  await waitFor('error reply', async () => napcat.state.calls.some((call) => call.action === 'send_private_msg' && String(call.params?.message).includes('handler-boom')));
+  const probe = new OneBot({
+    url: `ws://127.0.0.1:${napcatPort}`,
+    reconnect: false,
+    log: { info() {}, warn() {}, error() {}, debug() {} },
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('later OneBot client timed out')), 4000);
+      probe.once('ready', () => { clearTimeout(timer); resolve(); });
+      probe.once('error', (error) => { clearTimeout(timer); reject(error); });
+      probe.connect();
+    });
+    check('a later OneBot client stays connected beside the bridge', napcat.liveCount() === 2);
+    napcat.sendPrivateMessage({ userId: adminId, text: 'hello embedded' });
+    await waitFor('error reply', async () => napcat.state.calls.some((call) => call.action === 'send_private_msg' && String(call.params?.message).includes('handler-boom')));
+    check('inbound injection still reaches the bridge', napcat.state.calls.some((call) => String(call.params?.message).includes('handler-boom')));
+  } finally {
+    probe.close();
+  }
+  await waitFor('probe socket closed', async () => napcat.liveCount() === 1);
   check('a thrown handler is contained and reported', napcat.liveCount() === 1 && process.exitCode !== 1);
   napcat.sendPrivateMessage({ userId: adminId, text: 'hello again', messageId: 2 });
   await waitFor('stub reply', async () => napcat.state.calls.some((call) => call.action === 'send_private_msg' && String(call.params?.message).includes('stub-reply')));
@@ -355,7 +382,8 @@ try {
   await waitFor('reload sockets closed', async () => napcat.liveCount() === 0);
   check('second dispose closes the socket again', napcat.liveCount() === 0);
 } finally {
-  await napcat.close().catch(() => {});
+  await napcat?.close?.().catch(() => {});
+  restoreEnv();
 }
 
 if (previousExit !== undefined) process.exitCode = previousExit;

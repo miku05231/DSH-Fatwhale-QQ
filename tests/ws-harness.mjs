@@ -98,6 +98,11 @@ export function createFakeNapCat({ token = null, onCall = null, respondToClose =
     state.headers.push(req.headers);
     state.lastSocket = socket;
     sockets.push(socket);
+    socket.on('close', () => {
+      const index = sockets.indexOf(socket);
+      if (index >= 0) sockets.splice(index, 1);
+      if (state.lastSocket === socket) state.lastSocket = sockets.at(-1) ?? null;
+    });
 
     const frameState = { buffer: Buffer.alloc(0) };
     socket.on('data', (chunk) => {
@@ -135,14 +140,25 @@ export function createFakeNapCat({ token = null, onCall = null, respondToClose =
     socket.on('error', () => {});
   });
 
+  function liveSockets() {
+    return sockets.filter((socket) => !socket.destroyed);
+  }
+
   return {
     state,
     liveCount() {
-      return sockets.filter((socket) => !socket.destroyed).length;
+      return liveSockets().length;
     },
-    /** 像 NapCat 那样推一个事件给客户端 */
+    /**
+     * 把事件写给当前所有还活着的客户端。
+     * 桥接是长连接；控制台的 NapCat 健康检查会后连上一条短连接，
+     * 如果只写 lastSocket，入站消息会进健康检查而不是桥接。
+     */
     sendJson(obj) {
-      state.lastSocket?.write(encodeFrame(0x1, JSON.stringify(obj)));
+      const frame = encodeFrame(0x1, JSON.stringify(obj));
+      for (const socket of liveSockets()) {
+        try { socket.write(frame); } catch { /* 这条连接已经关了 */ }
+      }
     },
     /** 投递一条私聊消息事件 */
     sendPrivateMessage({ userId, text, selfId = 10000, messageId = 1 }) {
@@ -180,7 +196,8 @@ export function createFakeNapCat({ token = null, onCall = null, respondToClose =
       });
     },
     destroy() {
-      state.lastSocket?.destroy();
+      // 最早那条还活着的连接是桥接；后面连上的是健康检查。
+      liveSockets()[0]?.destroy();
     },
     listen(port = 0) {
       return new Promise((resolve) => {
