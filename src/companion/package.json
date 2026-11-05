@@ -1,11 +1,23 @@
 {
   "name": "qq-bridge-companion",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
-  "description": "QQ-DSH 桥接连伴插件：在 DSH Desktop 宿主内创建会话，让 QQ 会话实时出现在桌面端",
+  "description": "QQ-DSH 桥接连伴插件：在 DSH 宿主内创建会话，并在插件页提供控制台",
   "exports": {
-    ".": "./lib/index.js"
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js"
+  },
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.0-rc.2 <0.2.3"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-plugin-manager"]
+    }
   }
 }

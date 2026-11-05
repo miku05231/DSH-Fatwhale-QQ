@@ -20,6 +20,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
+import { resolvePath } from './config.js';
 import { expandPath, DEFAULT_PERSONA_PATH } from './persona.js';
 
 export const DEFAULT_PERSONA_DIR = path.join('state', 'personas');
@@ -58,7 +59,7 @@ export function sanitizePersonaName(raw) {
 export function personaDir({ configRoot, config, homedir } = {}) {
   const raw = String(config?.persona?.dir ?? '').trim();
   const value = expandPath(raw || DEFAULT_PERSONA_DIR, { homedir });
-  return path.isAbsolute(value) ? path.normalize(value) : path.resolve(configRoot ?? '.', value);
+  return resolvePath(configRoot ?? '.', value);
 }
 
 export function activeFilePath(dir) {

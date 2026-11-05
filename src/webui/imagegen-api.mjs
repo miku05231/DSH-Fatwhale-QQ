@@ -14,7 +14,7 @@ const view = (job) => ({
   delivery: job.delivery ? { state: job.delivery.state, probability: job.delivery.probability } : null,
 });
 
-export function createImagegenApi({ configPath, configRoot, config, readBody, ok, fail, log }) {
+export function createImagegenApi({ configPath, configRoot, config, readBody, ok, fail, log, allow }) {
   let service;
   const token = randomBytes(32).toString('hex');
   const tasks = new Map();
@@ -22,9 +22,10 @@ export function createImagegenApi({ configPath, configRoot, config, readBody, ok
   function authorized(req, res, needToken) {
     const port = req.socket.localPort;
     const authority = String(req.headers.host ?? '').toLowerCase();
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) ||
-        !new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]).has(authority)) {
-      fail(res, 403, '生图接口仅允许本机控制台访问');
+    const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)
+      && new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]).has(authority);
+    if (!local && !allow?.(req)?.ok) {
+      fail(res, 403, '生图接口仅允许本机控制台或经过认证的网关');
       return false;
     }
     const origin = String(req.headers.origin ?? '');

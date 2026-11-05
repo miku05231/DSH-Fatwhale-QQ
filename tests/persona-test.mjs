@@ -97,31 +97,53 @@ async function main() {
     section('1/3 路径解析（~ / %VAR% / 相对 / 绝对）');
     process.env.QQBRIDGE_TEST_HOME = 'D:\\fake-home';
     eq(expandPath('~', { homedir: 'C:\\Users\\u' }), 'C:\\Users\\u', '~ 展开成主目录');
-    eq(expandPath('~\\docs\\a.md', { homedir: 'C:\\Users\\u' }), 'C:\\Users\\u\\docs\\a.md', '~\\ 开头的路径');
-    eq(expandPath('%QQBRIDGE_TEST_HOME%\\x.md'), 'D:\\fake-home\\x.md', '%VAR% 展开');
+    eq(expandPath('~\\docs\\a.md', { homedir: 'C:\\Users\\u' }), path.join('C:\\Users\\u', 'docs', 'a.md'), '~\\ 开头的路径');
+    eq(expandPath('%QQBRIDGE_TEST_HOME%\\x.md'), path.join('D:\\fake-home', 'x.md'), '%VAR% 展开');
     delete process.env.QQBRIDGE_TEST_HOME;
 
     eq(
       resolvePersonaPath({ configRoot: 'C:\\proj', config: {} }),
       path.resolve('C:\\proj', DEFAULT_PERSONA_PATH),
-      '人格默认 qq-workspace\\AGENTS.md',
+      '人格默认 qq-workspace/AGENTS.md',
     );
-    eq(
-      resolvePersonaPath({ configRoot: 'C:\\proj', config: { persona: { path: 'D:\\p\\a.md' } } }),
-      'D:\\p\\a.md',
-      '人格绝对路径原样',
-    );
+    if (process.platform === 'win32') {
+      eq(
+        resolvePersonaPath({ configRoot: 'C:\\proj', config: { persona: { path: 'D:\\p\\a.md' } } }),
+        'D:\\p\\a.md',
+        '人格绝对路径原样',
+      );
+    } else {
+      let rejected = false;
+      try {
+        resolvePersonaPath({ configRoot: 'C:\\proj', config: { persona: { path: 'D:\\p\\a.md' } } });
+      } catch (error) {
+        rejected = /Windows 路径/.test(error.message);
+      }
+      if (rejected) ok('非 Windows 拒绝盘符路径');
+      else bad('非 Windows 应拒绝盘符路径');
+    }
     eq(
       resolvePersonaPath({ configRoot: 'C:\\proj', config: { persona: { path: 'persona\\a.md' } } }),
-      path.resolve('C:\\proj', 'persona\\a.md'),
+      path.resolve(path.resolve('C:\\proj'), process.platform === 'win32' ? 'persona\\a.md' : 'persona/a.md'),
       '人格相对路径按项目根',
     );
     eq(resolveMemoryRoot({ configRoot: 'C:\\proj', config: {} }), path.resolve('C:\\proj', '记忆库'), '记忆库默认 记忆库');
-    eq(
-      resolveMemoryRoot({ configRoot: 'C:\\proj', config: { memory: { root: 'E:\\mem' } } }),
-      'E:\\mem',
-      '记忆库绝对路径',
-    );
+    if (process.platform === 'win32') {
+      eq(
+        resolveMemoryRoot({ configRoot: 'C:\\proj', config: { memory: { root: 'E:\\mem' } } }),
+        'E:\\mem',
+        '记忆库绝对路径',
+      );
+    } else {
+      let rejected = false;
+      try {
+        resolveMemoryRoot({ configRoot: 'C:\\proj', config: { memory: { root: 'E:\\mem' } } });
+      } catch (error) {
+        rejected = /Windows 路径/.test(error.message);
+      }
+      if (rejected) ok('非 Windows 拒绝记忆库盘符路径');
+      else bad('非 Windows 应拒绝记忆库盘符路径');
+    }
     eq(resolveWorkspace({ configRoot: 'C:\\proj', config: {} }), path.resolve('C:\\proj'), '工作区默认项目根');
 
     section('2/3 PersonaLoader 行为');

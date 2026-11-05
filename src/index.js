@@ -155,8 +155,8 @@ function resolveConfigRoot(args) {
 
 // ---------------------------------------------------------------- 主流程
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
+export async function startBridge({ argv = process.argv.slice(2), embedded = false } = {}) {
+  const args = parseArgs(argv);
 
   // 先用临时 logger 把配置读出来，拿到真正的 logDir 后重建。
   const bootLog = createLogger('bridge', { logDir: path.join(PROJECT_ROOT, 'logs'), echo: true });
@@ -166,8 +166,9 @@ async function main() {
     loaded = loadConfig(configRoot, { createIfMissing: !explicitConfig, configFile });
   } catch (err) {
     bootLog.error('配置加载失败：', err?.message ?? err);
+    if (embedded) throw err;
     process.exitCode = 1;
-    return;
+    return null;
   }
 
   const { config, path: configPath } = loaded;
@@ -1290,24 +1291,34 @@ async function main() {
       await fsp.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
       await fsp.rename(tmp, statusPath);
     } catch { /* 忽略 */ }
-    setTimeout(() => process.exit(0), 200).unref?.();
+    if (!embedded) setTimeout(() => process.exit(0), 200).unref?.();
   }
 
-  process.on('SIGINT', () => void shutdown('SIGINT'));
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
-  process.on('uncaughtException', (err) => {
-    log.error('未捕获异常：', err?.stack ?? err);
-    lastErrorRef.value = String(err?.message ?? err).slice(0, 300);
-  });
-  process.on('unhandledRejection', (err) => {
-    log.error('未处理的 Promise 拒绝：', err?.stack ?? err);
-  });
+  if (!embedded) {
+    process.on('SIGINT', () => void shutdown('SIGINT'));
+    process.on('SIGTERM', () => void shutdown('SIGTERM'));
+    process.on('uncaughtException', (err) => {
+      log.error('未捕获异常：', err?.stack ?? err);
+      lastErrorRef.value = String(err?.message ?? err).slice(0, 300);
+    });
+    process.on('unhandledRejection', (err) => {
+      log.error('未处理的 Promise 拒绝：', err?.stack ?? err);
+    });
+  }
 
   log.info(`正在连接 ${config?.onebot?.url ?? 'ws://127.0.0.1:3001'} …`);
   bot.connect();
+  return { stop: (signal = 'stop') => shutdown(signal) };
 }
 
-main().catch((err) => {
-  console.error('致命错误：', err?.stack ?? err);
-  process.exit(1);
-});
+function invokedAsCli() {
+  if (!process.argv[1]) return false;
+  return path.resolve(process.argv[1]).toLowerCase() === path.resolve(fileURLToPath(import.meta.url)).toLowerCase();
+}
+
+if (invokedAsCli()) {
+  startBridge().catch((err) => {
+    console.error('致命错误：', err?.stack ?? err);
+    process.exit(1);
+  });
+}

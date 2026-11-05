@@ -88,8 +88,8 @@ export const DEFAULTS = deepFreeze({
   // 指到别处时由桥接每条消息读出来注入 prompt。
   persona: {
     enabled: true,
-    path: 'qq-workspace\\AGENTS.md',
-    dir: 'state\\personas',
+    path: 'qq-workspace/AGENTS.md',
+    dir: 'state/personas',
     active: '',
     maxChars: 8000,
   },
@@ -138,7 +138,7 @@ export const DEFAULTS = deepFreeze({
   // root 可以指到任意位置（控制台「表情」页能改，也能一键迁移）；相对路径按项目根解析。
   stickers: {
     enabled: true,
-    root: 'state\\stickers',
+    root: 'state/stickers',
     autoCollect: true,
     autoTag: true,
     // 0 关闭表情发送，1 保留原发送频率。
@@ -624,8 +624,17 @@ export function resolvePath(projectRoot, p) {
   const root = resolve(projectRoot ? String(projectRoot) : process.cwd());
   if (p === undefined || p === null) return root;
   if (typeof p !== 'string') throw new TypeError('路径参数必须是字符串');
-  const raw = p.trim();
+  let raw = p.trim();
   if (raw === '') return root;
+  // Windows separators are filename characters on Linux. Normalize relative
+  // paths so a saved `state\personas` does not create that literal directory.
+  // A foreign drive letter is rejected instead of being glued onto the project root.
+  if (process.platform !== 'win32') {
+    if (/^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith('\\\\')) {
+      throw new Error(`当前系统不能使用 Windows 路径：${raw}`);
+    }
+    raw = raw.replace(/\\/g, '/');
+  }
   if (isAbsolute(raw)) return raw;
   return resolve(root, raw);
 }

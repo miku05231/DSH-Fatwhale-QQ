@@ -5,6 +5,8 @@
 
 import { createLogView } from './logs.js';
 
+const BASE = globalThis.__QQ_BRIDGE_BASE__ || '';
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 let imagegenUi;
@@ -26,7 +28,7 @@ const STATE = {
 
 /** 统一请求：返回 data，失败抛错（错误文案已脱敏） */
 async function api(path, options = {}) {
-  const res = await fetch(path, {
+  const res = await fetch(`${BASE}${path}`, {
     headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
     ...options,
   });

@@ -28,6 +28,7 @@ import { createUpdateManager } from '../updates.mjs';
 import { createImagegenApi } from './imagegen-api.mjs';
 import { createPlatformScheduler } from '../platform-scheduler.js';
 import { createBilibiliQrLogin } from '../platforms/bilibili-login.js';
+import { consoleRequestTrusted, isLoopbackAddress } from './console-guard.mjs';
 import { createNapcatHealth, createNapcatHealthJournal, readNapcatSettings } from '../napcat-health.js';
 import { createWebUiLogReader } from './logs.mjs';
 import { createNapcatLogReader } from './napcat-logs.mjs';
@@ -126,7 +127,7 @@ const SECURITY_HEADERS = {
   'X-Frame-Options': 'SAMEORIGIN',
   'Content-Security-Policy':
     "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; " +
-    "script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'",
+    "script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
 };
 
 /** 允许通过 PUT /api/settings 改写的字段白名单（绝不含密钥） */
@@ -604,6 +605,7 @@ export function createWebUiServer({
   config = {}, configRoot, log, port = DEFAULT_PORT, host = '127.0.0.1', updateManager,
   openPath = openLocalPath, openUrl = openExternalUrl, platformControl, platformQrLogin, napcatHealth,
   astrbotManager, astrbotPolicy, astrbotProxySecret = process.env.CONSOLE_PASSWORD_SHA256,
+  publicBase = '', bridgeControl = null,
 } = {}) {
   const root = path.resolve(text(configRoot) || PROJECT_ROOT);
   const basePort = Number.isInteger(Number(port)) && Number(port) > 0 ? Number(port) : DEFAULT_PORT;
@@ -681,7 +683,9 @@ export function createWebUiServer({
   // Only the bridge starts the scheduler; this instance edits configuration and queues work.
   const platforms = platformControl ?? createPlatformScheduler({ configPath, stateDir, log: safeLog });
   const automationToken = randomBytes(32).toString('hex');
-  const imagegen = createImagegenApi({ configPath, configRoot: root, config, readBody, ok, fail, log: safeLog });
+  const imagegen = createImagegenApi({
+    configPath, configRoot: root, config, readBody, ok, fail, log: safeLog, allow: trusted,
+  });
   const astrbotApiState = { promise: null };
   async function getAstrbotApi() {
     if (!astrbotApiState.promise) {
@@ -715,6 +719,36 @@ export function createWebUiServer({
   let actualPort = 0;
   let startedAt = 0;
   let stopping = false;
+  let activated = false;
+  const proxyNonces = new Map();
+  const consoleUser = process.env.CONSOLE_USER || 'console';
+  const basePrefix = String(publicBase || '').replace(/\/+$/, '');
+
+  function trusted(req) {
+    return consoleRequestTrusted(req, {
+      proxySecret: astrbotProxySecret,
+      nonceCache: proxyNonces,
+      username: consoleUser,
+      passwordHash: astrbotProxySecret,
+    });
+  }
+
+  function denyManagement(req, res) {
+    const passwordConfigured = /^[a-f0-9]{64}$/i.test(String(astrbotProxySecret || ''));
+    if (passwordConfigured && !isLoopbackAddress(req.socket?.remoteAddress)) {
+      const body = Buffer.from(JSON.stringify({ ok: false, error: '需要控制台口令' }), 'utf8');
+      res.writeHead(401, {
+        ...SECURITY_HEADERS,
+        'WWW-Authenticate': 'Basic realm="QQ Bridge", charset="UTF-8"',
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': body.length,
+        'cache-control': 'no-store',
+      });
+      res.end(body);
+      return;
+    }
+    fail(res, 403, '管理接口仅允许本机控制台，或经过认证网关 / 控制台口令');
+  }
 
   // 记忆模块是另一个子代理在写，这里懒加载并兜底，绝不让服务起不来。
   const memoryState = { promise: null, instance: null, failedAt: 0 };
@@ -2313,7 +2347,18 @@ export function createWebUiServer({
     const ext = path.extname(abs).toLowerCase();
     const type = MIME_TYPES[ext] ?? 'application/octet-stream';
     try {
-      const buf = await fsp.readFile(abs);
+      let buf = await fsp.readFile(abs);
+      if (basePrefix && abs.endsWith(`${path.sep}index.html`)) {
+        const prefix = JSON.stringify(basePrefix);
+        let html = buf.toString('utf8');
+        html = html.replaceAll('href="/', `href="${basePrefix}/`);
+        html = html.replaceAll('src="/', `src="${basePrefix}/`);
+        html = html.replace(
+          `<script src="${basePrefix}/app.js" type="module"></script>`,
+          `<script>globalThis.__QQ_BRIDGE_BASE__=${prefix}</script>\n  <script src="${basePrefix}/app.js" type="module"></script>`,
+        );
+        buf = Buffer.from(html, 'utf8');
+      }
       return sendBuffer(res, 200, buf, type);
     } catch {
       return sendBuffer(res, 500, Buffer.from('读取文件失败', 'utf8'), 'text/plain; charset=utf-8');
@@ -2387,11 +2432,8 @@ export function createWebUiServer({
   }
 
   async function routeAutomation(req, res, pathname, method) {
+    if (!trusted(req).ok) return denyManagement(req, res);
     const authority = text(req.headers.host).toLowerCase();
-    const port = req.socket.localPort;
-    if (!new Set([`127.0.0.1:${port}`, `localhost:${port}`]).has(authority)) {
-      return fail(res, 403, '自动化接口仅允许本机控制台访问');
-    }
     const origin = text(req.headers.origin);
     if ((origin && origin !== `http://${authority}`) || req.headers['sec-fetch-site'] === 'cross-site') {
       return fail(res, 403, '自动化接口不接受跨站请求');
@@ -2475,11 +2517,10 @@ export function createWebUiServer({
   }
 
   async function routeUpdates(req, res, pathname, method) {
-    // A separate token and strict loopback origin keep websites from triggering an installer.
+    // Token plus a real local socket, gateway assertion, or console password.
+    // Host alone is not evidence: another container can forge it.
+    if (!trusted(req).ok) return denyManagement(req, res);
     const authority = text(req.headers.host).toLowerCase();
-    const port = req.socket.localPort;
-    const allowed = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
-    if (!allowed.has(authority)) return fail(res, 403, '更新接口仅允许本机控制台访问');
     const origin = text(req.headers.origin);
     if ((origin && origin !== `http://${authority}`) ||
         req.headers['sec-fetch-site'] === 'cross-site') {
@@ -2546,12 +2587,29 @@ export function createWebUiServer({
       return fail(res, 400, '路径编码非法');
     }
 
+    const method = req.method === 'HEAD' ? 'GET' : req.method;
+    if (pathname.startsWith('/api/')) {
+      const sensitiveRead = method === 'GET' && (
+        pathname === '/api/settings' || pathname === '/api/model'
+        || pathname.startsWith('/api/updates') || pathname.startsWith('/api/automation')
+        || pathname.startsWith('/api/bridge')
+      );
+      const mutating = req.method !== 'GET' && req.method !== 'HEAD';
+      if ((mutating || sensitiveRead) && !trusted(req).ok) return denyManagement(req, res);
+    }
+
     if (!pathname.startsWith('/api/')) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return fail(res, 405, '只支持 GET');
       return serveStatic(url.pathname, res);
     }
 
-    const method = req.method === 'HEAD' ? 'GET' : req.method;
+    if (pathname === '/api/bridge' || pathname === '/api/bridge/start' || pathname === '/api/bridge/stop') {
+      if (!bridgeControl) return fail(res, 404, '当前控制台没有桥接启停接口');
+      if (pathname === '/api/bridge' && method === 'GET') return ok(res, bridgeControl.status());
+      if (pathname === '/api/bridge/start' && method === 'POST') return ok(res, bridgeControl.start());
+      if (pathname === '/api/bridge/stop' && method === 'POST') return ok(res, await bridgeControl.stop());
+      return fail(res, 405, '桥接启停只支持 GET /api/bridge、POST /api/bridge/start 和 POST /api/bridge/stop');
+    }
 
     if (pathname === '/api/astrbot' || pathname.startsWith('/api/astrbot/')) {
       try {
@@ -2793,9 +2851,26 @@ export function createWebUiServer({
     stopping = false;
   }
 
+  async function activate() {
+    if (activated) return;
+    activated = true;
+    startedAt = Date.now();
+    healthEnabled = true;
+    void sampleNapcatHealth().catch(() => {});
+    healthTimer = setInterval(() => { void sampleNapcatHealth().catch(() => {}); }, 15_000);
+    healthTimer.unref?.();
+    try {
+      await updates.start();
+    } catch (err) {
+      safeLog.warn?.('自动更新检查未启动：', err?.message ?? err);
+    }
+  }
+
   return {
     start,
     stop,
+    activate,
+    handle,
     get url() {
       return actualPort ? `http://127.0.0.1:${actualPort}/` : `http://127.0.0.1:${basePort}/`;
     },

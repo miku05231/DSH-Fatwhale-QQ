@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { buildChatOnlyEntries, installChatOnlyPolicy, isChatOnlySessionId, selectChatOnlyModelConfig } from './chat-only.js';
+import { installChatOnlyModelSelection } from './dsh-version.js';
 import { redactSecrets } from './redact.js';
 
 const rawWrite = process.stdout.write.bind(process.stdout);
@@ -58,7 +59,12 @@ async function main() {
       provider, model, ...(typeof reasoningEffort === 'string' && reasoningEffort ? { reasoningEffort } : {}),
     };
   }
-  const entries = buildChatOnlyEntries({ dataRoot: request.dataRoot, modelConfig });
+  const dshPackage = JSON.parse(await fs.readFile(path.join(request.dshRoot, 'package.json'), 'utf8'));
+  const entries = buildChatOnlyEntries({
+    dataRoot: request.dataRoot,
+    modelConfig,
+    dshVersion: dshPackage.version,
+  });
   // Use absolute, installation-owned entry points. A workspace node_modules
   // directory cannot substitute a plugin for one of the fixed kernel modules.
   for (const entry of entries) entry.name = pathToFileURL(requireDsh.resolve(entry.name)).href;
@@ -87,7 +93,7 @@ async function main() {
   }
   const compose = (agentCtx) => {
     setup(agentCtx);
-    installModelSelection(agentCtx, { current: selection, assembled: undefined });
+    installChatOnlyModelSelection(installModelSelection, agentCtx, selection);
   };
   const agentOptions = { provider: selection.provider, model: selection.model };
   const sessionId = request.sessionId || `qq-chat-${randomUUID()}`;

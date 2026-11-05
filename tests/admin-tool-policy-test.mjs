@@ -13,6 +13,7 @@ import {
   CHAT_ONLY_MODULES, CHAT_ONLY_DENIAL, buildChatOnlyEntries,
   selectChatOnlyModelConfig, isChatOnlySessionId, installChatOnlyPolicy, runChatOnlyDsh,
 } from '../src/chat-only.js';
+import { dshSplitsToolExecutors } from '../src/dsh-version.js';
 import { resolveDshInstallRoot } from '../src/dsh-desktop.js';
 import { PluginHost } from '../src/plugins.js';
 
@@ -67,6 +68,19 @@ try {
   ok('tool presentation is native and the kernel creates no startup agents', () => {
     assert.deepEqual(entries.find((entry) => entry.id === 'tools').config, { mode: 'native' });
     assert.deepEqual(entries.find((entry) => entry.id === 'agent-loop').config, { agents: [] });
+  });
+  ok('0.2.2 chat kernel does not send the removed tools.mode field', () => {
+    const modern = buildChatOnlyEntries({ dataRoot: path.join(tmp, 'data'), dshVersion: '0.2.2-rc.1' });
+    assert.equal(modern.find((entry) => entry.id === 'tools').config, undefined);
+    assert.equal(modern.find((entry) => entry.id === 'tools').name, '@deepseek-ai/dsh-tools');
+    assert.equal(modern.find((entry) => entry.id === 'native-tool-executor').name, '@deepseek-ai/dsh-tool-executor-native');
+    assert(!modern.some((entry) => /bash|pwsh|mcp|subagent|tool-fs|tool-web/.test(entry.name)));
+    const scoped = {
+      restrict(mask) { assert.deepEqual(mask, { allow: [] }); },
+      guard(check) { assert.equal(check({ name: 'pwsh' }), CHAT_ONLY_DENIAL); },
+    };
+    const setup = installChatOnlyPolicy({ get: () => ({ schemas: () => [], guard() {} }) });
+    setup({ get: () => scoped });
   });
   ok('chat sessions use a separate store and account login cannot open the desktop', () => {
     assert.equal(entries.find((entry) => entry.id === 'session-persistence-jsonl').config.root, path.join(tmp, 'data', 'sessions'));
@@ -166,20 +180,33 @@ try {
       const ctx = new Context();
       try {
         await ctx.plugin(SystemPrompt, { includeHarnessIdentity: false, includeRuntimeContext: false });
-        await ctx.plugin(ToolRuntime, { mode: 'native' });
+        const dshManifest = JSON.parse(fs.readFileSync(path.join(dshRoot, 'package.json'), 'utf8'));
+        await ctx.plugin(ToolRuntime, dshSplitsToolExecutors(dshManifest.version) ? {} : { mode: 'native' });
         const tools = ctx.get('tools');
         installChatOnlyPolicy(ctx);
         let called = 0;
-        tools.register(defineTool({
+        const definition = {
           name: 'pwsh', description: 'fake privileged tool', parameters: {},
           output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
           async execute() { called += 1; return 'executed'; },
-        }));
-        ctx.on('tools/pre-execute', async () => ({ kind: 'allow' }));
-        const result = await tools.execute({ callId: 'policy-test', name: 'pwsh', arguments: {}, signal: new AbortController().signal });
-        assert.equal(called, 0);
-        assert.equal(result.isError, true);
-        assert(result.content.some((block) => block.text?.includes(CHAT_ONLY_DENIAL)));
+        };
+        try {
+          tools.register(defineTool(definition));
+        } catch (error) {
+          if (!/output/.test(String(error?.message ?? error))) throw error;
+          tools.register(defineTool({ ...definition, output: { schema: { type: 'string' }, render: definition.output.render } }));
+        }
+        if (typeof tools.checkGuards === 'function') {
+          const reason = tools.checkGuards({ name: 'pwsh', arguments: {}, agent: undefined });
+          assert.equal(called, 0);
+          assert.match(String(reason), /Only configured QQ administrators/);
+        } else {
+          ctx.on('tools/pre-execute', async () => ({ kind: 'allow' }));
+          const result = await tools.execute({ callId: 'policy-test', name: 'pwsh', arguments: {}, signal: new AbortController().signal });
+          assert.equal(called, 0);
+          assert.equal(result.isError, true);
+          assert(result.content.some((block) => block.text?.includes(CHAT_ONLY_DENIAL)));
+        }
       } finally { await ctx.fiber.dispose(); }
     });
 

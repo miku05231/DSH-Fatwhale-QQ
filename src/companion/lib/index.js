@@ -16,11 +16,13 @@
 //     POST /attach。
 //
 // 约束：
-//   - 只 import node: 内置模块；插件随 DSH 桌面端启动，任何异常都不能把宿主
+//   - 不引入第三方 npm 包。插件随 DSH 桌面端启动，任何异常都不能把宿主
 //     带崩，所以 handler 全部 catch。
 //   - 不把聊天正文写日志；日志只记 sessionId、耗时、错误。
 
 import fs from 'node:fs';
+import { mountCompanionConsole } from './console-mount.js';
+import { selectAgentModel } from '../../dsh-version.js';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -471,7 +473,7 @@ export async function apply(ctx, rawConfig) {
         firstSeq = agent.session.seq;
         if (selected) {
           try {
-            await modelSelections.selectForNextRequest(agent, {
+            await selectAgentModel(agent, modelSelections, {
               provider: selected.provider,
               model: selected.model,
               ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }),
@@ -666,6 +668,13 @@ export async function apply(ctx, rawConfig) {
     } catch {
       /* discovery 可能已被替换 */
     }
+  });
+
+  mountCompanionConsole(ctx, {
+    projectRoot: config.projectRoot,
+    configFile: config.configFile,
+  }).catch((error) => {
+    log.warn(`companion: 插件页控制台没有挂上：${String(error?.message ?? error)}`);
   });
 
   // 异步补挂历史会话，不阻塞宿主启动。

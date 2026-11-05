@@ -6,14 +6,14 @@
 #    · NapCat 用另一个容器（见 docker-compose.yml）或宿主机上现成的；
 #    · DSH 是模型执行端，镜像里没有，需要挂载 Linux 兼容的 DSH 并设置 DSH_COMMAND。
 #
-#  构建：docker build -t qq-dsh-bridge:3.2.1 .
+#  构建：docker build -t qq-dsh-bridge:3.3.0 .
 #  运行：docker compose up -d       （先复制 .env.example 成 .env 改 OWNER_QQ）
 # ============================================================
-FROM node:22-alpine
+FROM node:24-alpine
 
 LABEL org.opencontainers.image.title="QQ-DSH Bridge" \
       org.opencontainers.image.description="QQ ↔ DSH 桥接 + 网页控制台（零第三方依赖）" \
-      org.opencontainers.image.version="3.2.1"
+      org.opencontainers.image.version="3.3.0"
 
 ENV NODE_ENV=production \
     NARB_DISABLE_NATIVE_CACHE=1 \

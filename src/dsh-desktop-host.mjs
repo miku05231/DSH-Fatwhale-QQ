@@ -33,6 +33,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { redactSecrets } from './redact.js';
+import { selectAgentModel } from './dsh-version.js';
 
 /* ------------------------------------------------------------------ *
  * stdout 保护：先接管，再动态 import DSH（import 期间也可能有输出）
@@ -186,7 +187,8 @@ async function applyModel(agent, model, signal) {
   const modelId = String(model.model ?? '').trim();
   if (!provider || !modelId) throw new Error('模型选择需要 provider 和 model');
   const modelSelections = controller?.agents?.selectForNextRequest ? controller.agents : agents;
-  if (!llm?.resolveCallConfig || !modelSelections?.selectForNextRequest) {
+  const canSelect = typeof agent?.model?.select === 'function' || typeof modelSelections?.selectForNextRequest === 'function';
+  if (!llm?.resolveCallConfig || !canSelect) {
     throw new Error('当前 profile 没有可用的模型选择服务');
   }
   const resolved = await llm.resolveCallConfig({
@@ -200,7 +202,7 @@ async function applyModel(agent, model, signal) {
     model: resolved.model,
     ...(resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {}),
   };
-  await modelSelections.selectForNextRequest(agent, selected);
+  await selectAgentModel(agent, modelSelections, selected);
   return selected;
 }
 

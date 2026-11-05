@@ -814,10 +814,11 @@ export function pickSticker(index, { tag = '', query = '', seed = Math.random } 
 
 /** 路径安全：只允许库内的图片相对路径（防 ../ 和绝对路径） */
 export function resolveStickerFile(root, rel) {
-  const raw = String(rel ?? '').trim();
+  const raw = String(rel ?? '').trim().replace(/\\/g, '/');
   if (!raw) throw new Error('缺少文件路径');
+  if (raw.split('/').includes('..')) throw new Error('文件路径越界');
   const rootAbs = path.resolve(root);
-  const abs = path.resolve(rootAbs, raw.replace(/^[\\/]+/, ''));
+  const abs = path.resolve(rootAbs, raw.replace(/^\/+/, ''));
   if (abs !== rootAbs && !abs.startsWith(rootAbs + path.sep)) {
     throw new Error('文件路径越界');
   }

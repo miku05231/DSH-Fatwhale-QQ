@@ -59,7 +59,7 @@ Linux：
 mkdir -p data/dsh-runtime
 docker run --rm \
   --mount "type=bind,source=$(pwd)/data/dsh-runtime,target=/opt/dsh" \
-  node:22-alpine npm install --prefix /opt/dsh @deepseek-ai/dsh@0.2.0-rc.2
+  node:24-alpine npm install --prefix /opt/dsh @deepseek-ai/dsh@0.2.0-rc.2
 ```
 
 PowerShell：
@@ -68,7 +68,7 @@ PowerShell：
 New-Item -ItemType Directory -Force data/dsh-runtime | Out-Null
 $runtimePath = (Resolve-Path data/dsh-runtime).Path
 docker run --rm --mount "type=bind,source=$runtimePath,target=/opt/dsh" `
-  node:22-alpine npm install --prefix /opt/dsh @deepseek-ai/dsh@0.2.0-rc.2
+  node:24-alpine npm install --prefix /opt/dsh @deepseek-ai/dsh@0.2.0-rc.2
 ```
 
 新建本机 `compose.dsh.yml`：
