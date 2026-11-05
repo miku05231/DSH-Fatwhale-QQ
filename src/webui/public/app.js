@@ -378,7 +378,7 @@ function renderServiceCards(overview) {
       running: bridge.running,
       badge: bridge.running ? (bridge.connected ? '已连接' : '未连接') : '未运行',
       tone: bridge.running ? (bridge.connected ? 'ok' : 'warn') : 'bad',
-      meta: `PID ${bridge.pid || '—'} · 会话 ${bridge.sessions} · 队列 ${bridge.queueDepth}${bridge.inFlight ? ` · 处理中 ${bridge.inFlight}` : ''}`,
+      meta: `${bridge.runMode === 'embedded' ? '进程内' : `PID ${bridge.pid || '—'}`} · 会话 ${bridge.sessions} · 队列 ${bridge.queueDepth}${bridge.inFlight ? ` · 处理中 ${bridge.inFlight}` : ''}${bridge.lastError ? ` · ${escapeHtml(bridge.lastError)}` : ''}`,
       actions: [
         bridge.running
           ? { label: '停止', action: 'stop' }

@@ -53,10 +53,15 @@ globalThis.window.__ModuleLoader__.load({
       }
 
       const running = status?.running === true;
+      const label = !running
+        ? '桥接未运行'
+        : status.mode === 'embedded'
+          ? `进程内运行中（${status.connected ? '已连接 NapCat' : '正在连接 NapCat'}${status.lastError ? `，最近错误：${status.lastError}` : ''}）`
+          : `桥接运行中（pid ${status.pid}）`;
       return h('section', { 'data-qq-bridge-console': 'page', style: { display: 'flex', flexDirection: 'column', gap: 12, minHeight: 640 } },
         h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
           h('strong', null, 'QQ-DSH 控制台'),
-          h('span', null, running ? `桥接运行中（pid ${status.pid}）` : '桥接未运行'),
+          h('span', null, label),
           h('button', { type: 'button', disabled: busy || running, onClick: () => act('start') }, '启动桥接'),
           h('button', { type: 'button', disabled: busy || !running, onClick: () => act('stop') }, '停止桥接'),
         ),

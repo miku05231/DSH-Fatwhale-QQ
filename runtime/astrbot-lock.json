@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "application": {
-    "version": "3.3.0",
+    "version": "3.4.0-beta.1",
     "featureDefault": "disabled"
   },
   "python": {

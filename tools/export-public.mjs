@@ -42,6 +42,7 @@ const INCLUDE = [
   'docs/automation-and-voice.md',
   'docs/image-generation.md',
   'docs/media-providers.md',
+  'docs/releases/v3.4.0-beta.1.md',
   'docs/releases/v3.3.0.md',
   'docs/releases/v3.2.1.md',
   'docs/releases/v3.2.1-verification.md',
@@ -190,7 +191,9 @@ node src\\webui\\server.mjs   # 然后访问 http://127.0.0.1:5830
 
 见 \`config.example.json\`，每个字段都有注释式说明写在 \`docs/控制台架构.md\` 与 \`README.md\`（本文件由导出脚本生成，更完整的说明在导出的 \`README.md\` 之外的 \`docs/\`）。
 
-关键字段：\`onebot.url\`、\`security.allowFrom\`（主人 QQ）、\`security.allowGroupIds\`、\`behavior.wakeWord\`、\`dsh.command\` = \`dsh\`、\`memory.root\`（Obsidian 库路径）。
+关键字段：\`onebot.url\`、\`security.allowFrom\`（主人 QQ）、\`security.allowGroupIds\`、\`behavior.wakeWord\`、\`dsh.command\` = \`dsh\`、\`memory.root\`（Obsidian 库路径）、\`bridge.runMode\`。
+
+\`bridge.runMode\` 默认 \`standalone\`，消息核心仍是独立进程。在长驻的 \`dsh web\` 里要改成进程内运行时，把该项设为 \`embedded\`，或执行 \`node tools/install-companion.mjs --run-mode embedded\`，然后完全重启 DSH。插件补丁里的 \`runMode\` 优先于 \`config.json\`。普通成员的无工具聊天仍在独立子进程里。宿主退出后，进程内的 QQ 桥也会停。Compose 的服务组成不变。
 
 ## 测试
 
@@ -348,6 +351,7 @@ const EXAMPLE_PATCH = `# patches/example-headless-model.yml
 
 const EXAMPLE_CONFIG = {
   onebot: { url: 'ws://127.0.0.1:3001', accessToken: '' },
+  bridge: { runMode: 'standalone' },
   dsh: {
     command: 'dsh',
     profile: 'headless',

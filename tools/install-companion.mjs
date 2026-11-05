@@ -25,16 +25,20 @@ const MARK_START = '# >>> qq-bridge companion（由 tools/install-companion.mjs 
 const MARK_END = '# <<< qq-bridge companion <<<';
 
 function parseArgs(argv) {
-  const options = { profile: 'desktop', remove: false, dryRun: false };
+  const options = { profile: 'desktop', remove: false, dryRun: false, runMode: '' };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--remove') options.remove = true;
     else if (arg === '--dry-run') options.dryRun = true;
     else if (arg === '--profile') options.profile = String(argv[++i] ?? '').trim();
+    else if (arg === '--run-mode') options.runMode = String(argv[++i] ?? '').trim().toLowerCase();
     else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`未知参数：${arg}`);
   }
   if (!options.profile) throw new Error('--profile 不能为空');
+  if (options.runMode && !['standalone', 'embedded'].includes(options.runMode)) {
+    throw new Error('--run-mode 只能是 standalone 或 embedded');
+  }
   return options;
 }
 
@@ -74,8 +78,8 @@ function yamlPath(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
-function buildBlock(workspace, sessionMap) {
-  return [
+function buildBlock(workspace, sessionMap, runMode) {
+  const lines = [
     MARK_START,
     '- insert:',
     '    - id: qq-bridge-companion',
@@ -83,9 +87,15 @@ function buildBlock(workspace, sessionMap) {
     '      config:',
     `        workspacePath: ${yamlPath(workspace)}`,
     `        sessionMapPath: ${yamlPath(sessionMap)}`,
-    MARK_END,
-    '',
-  ].join('\n');
+  ];
+  // 缺省不写 runMode，已有部署继续走独立桥接进程。
+  if (runMode === 'embedded') {
+    lines.push('        runMode: embedded');
+    lines.push(`        projectRoot: ${yamlPath(PROJECT_ROOT)}`);
+    lines.push(`        configFile: ${yamlPath(path.join(PROJECT_ROOT, 'config.json'))}`);
+  }
+  lines.push(MARK_END, '');
+  return lines.join('\n');
 }
 
 function stripBlock(text) {
@@ -97,10 +107,29 @@ function stripBlock(text) {
   return text.slice(0, start) + (after < 0 ? '' : text.slice(after + 1));
 }
 
+/** 去掉注释、空行和文档分隔后，正文是不是空序列 `[]`。 */
+function isEmptySequenceDocument(text) {
+  const code = String(text ?? '')
+    .replace(/^\uFEFF/, '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#') && line !== '---' && line !== '...');
+  return code.join('').replace(/\s+/g, '') === '[]';
+}
+
+/**
+ * 全新的 dsh web profile 会把 cordis.patch.yml 写成 `[]`。
+ * 直接在它后面接 `- insert:` 不是合法 YAML，要先拿掉这个空序列。
+ * 已经有条目的文件原样保留。
+ */
+function patchBase(text) {
+  return isEmptySequenceDocument(text) ? '' : String(text ?? '');
+}
+
 function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log('用法：node tools/install-companion.mjs [--profile desktop] [--remove] [--dry-run]');
+    console.log('用法：node tools/install-companion.mjs [--profile desktop] [--run-mode standalone|embedded] [--remove] [--dry-run]');
     return;
   }
   const home = dshHome();
@@ -129,8 +158,9 @@ function main() {
 
   const workspace = resolveWorkspace();
   const sessionMap = path.join(PROJECT_ROOT, 'state', 'sessions.json');
-  const block = buildBlock(workspace, sessionMap);
-  const next = `${cleaned}${cleaned.endsWith('\n') || cleaned === '' ? '' : '\n'}${block}`;
+  const block = buildBlock(workspace, sessionMap, options.runMode);
+  const base = patchBase(cleaned);
+  const next = `${base}${base === '' || base.endsWith('\n') || base.endsWith('\r\n') ? '' : '\n'}${block}`;
 
   console.log('DSH_HOME   :', home);
   console.log('profile    :', profileDir);

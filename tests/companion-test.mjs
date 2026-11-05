@@ -8,10 +8,12 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { resolveDshInstallRoot } from '../src/dsh-desktop.js';
 
 import { loadConfig } from '../src/config.js';
 import {
@@ -150,7 +152,7 @@ async function pluginFixture({
   if (historicalSessions !== undefined) {
     fs.writeFileSync(sessionMapPath, JSON.stringify(historicalSessions));
   }
-  let dispose;
+  const disposers = [];
   let started;
   const promptStarted = new Promise((resolve) => { started = resolve; });
   let flushed;
@@ -255,7 +257,7 @@ async function pluginFixture({
       warn: (line) => calls.warnings.push(line),
       info: (line) => { if (line.includes('已把')) historyAttached(); },
     },
-    effect: (register) => { dispose = register(); },
+    effect: (register) => { disposers.push(register()); },
   }, {
     discoveryPath: pluginDiscovery,
     ...(promptTimeoutMs ? { promptTimeoutMs } : {}),
@@ -270,7 +272,12 @@ async function pluginFixture({
     sessionFlushed,
     historyFinished,
     session,
-    dispose,
+    dispose() {
+      while (disposers.length) {
+        const disposeOne = disposers.pop();
+        try { disposeOne(); } catch { /* 夹具清理失败不影响断言 */ }
+      }
+    },
   };
 }
 
@@ -1306,11 +1313,22 @@ ok('安装器：安装后写入标记块，卸载后恢复原内容', () => {
   assert.match(installed, /name: 'file:\/\/\/.*\/src\/companion\/lib\/index\.js'/);
   assert.match(installed, /workspacePath: '/);
   assert.match(installed, /sessionMapPath: '/);
+  assert.doesNotMatch(installed, /runMode/);
   assert.match(installed, /# existing/);
 
   const remove = runInstaller(['--remove']);
   assert.equal(remove.status, 0, remove.stderr);
   assert.equal(fs.readFileSync(patchPath, 'utf8'), '# existing\n');
+});
+
+ok('安装器：--run-mode embedded 才写入进程内开关', () => {
+  assert.equal(runInstaller(['--run-mode', 'embedded']).status, 0);
+  const text = fs.readFileSync(patchPath, 'utf8');
+  assert.match(text, /runMode: embedded/);
+  assert.match(text, /projectRoot: '/);
+  assert.match(text, /configFile: '/);
+  assert.equal(runInstaller(['--run-mode', 'nope']).status, 1);
+  assert.equal(runInstaller(['--remove']).status, 0);
 });
 
 ok('安装器：重复安装不会重复写块', () => {
@@ -1321,6 +1339,128 @@ ok('安装器：重复安装不会重复写块', () => {
   assert.equal(runInstaller(['--remove']).status, 0);
 });
 
+ok('安装器：空序列 [] 变成合法的 companion 列表，重复安装不重复', () => {
+  const webDir = path.join(fakeHome, 'profiles', 'web');
+  fs.mkdirSync(webDir, { recursive: true });
+  const webPatch = path.join(webDir, 'cordis.patch.yml');
+  fs.writeFileSync(webPatch, '[]');
+  const first = runInstaller(['--profile', 'web', '--run-mode', 'embedded']);
+  assert.equal(first.status, 0, first.stderr);
+  const once = fs.readFileSync(webPatch, 'utf8');
+  const parsed = parseCordisPatch(once);
+  assert.ok(Array.isArray(parsed) && parsed.length === 1, JSON.stringify(parsed));
+  const inserted = parsed[0]?.insert;
+  assert.ok(Array.isArray(inserted) && inserted.length === 1);
+  assert.equal(inserted[0].id, 'qq-bridge-companion');
+  assert.equal(inserted[0].config?.runMode, 'embedded');
+  assert.equal(typeof inserted[0].config?.projectRoot, 'string');
+  assert.equal(typeof inserted[0].config?.configFile, 'string');
+  assert.equal(once.match(/id: qq-bridge-companion/g)?.length, 1);
+
+  const again = runInstaller(['--profile', 'web', '--run-mode', 'embedded']);
+  assert.equal(again.status, 0, again.stderr);
+  const twice = fs.readFileSync(webPatch, 'utf8');
+  const reparsed = parseCordisPatch(twice);
+  assert.equal(reparsed.length, 1);
+  assert.equal(twice.match(/id: qq-bridge-companion/g)?.length, 1);
+  assert.equal(reparsed[0].insert[0].id, 'qq-bridge-companion');
+
+  const kept = path.join(fakeHome, 'profiles', 'kept');
+  fs.mkdirSync(kept, { recursive: true });
+  const keptPatch = path.join(kept, 'cordis.patch.yml');
+  fs.writeFileSync(keptPatch, '- id: already-there\n  config:\n    enabled: true\n');
+  const populated = runInstaller(['--profile', 'kept', '--run-mode', 'standalone']);
+  assert.equal(populated.status, 0, populated.stderr);
+  const keptText = fs.readFileSync(keptPatch, 'utf8');
+  const keptParsed = parseCordisPatch(keptText);
+  assert.equal(keptParsed.length, 2);
+  assert.equal(keptParsed[0].id, 'already-there');
+  assert.equal(keptParsed[1].insert[0].id, 'qq-bridge-companion');
+  assert.equal(keptParsed[1].insert[0].config?.runMode, undefined);
+  assert.equal(runInstaller(['--profile', 'kept']).status, 0);
+  assert.equal(parseCordisPatch(fs.readFileSync(keptPatch, 'utf8')).length, 2);
+});
+
+function parseCordisPatch(text) {
+  let yaml = null;
+  try {
+    const command = process.env.QQ_TEST_DSH_COMMAND || 'dsh';
+    const install = resolveDshInstallRoot(command, ROOT);
+    yaml = createRequire(path.join(install, 'package.json'))('js-yaml');
+  } catch {
+    yaml = null;
+  }
+  if (yaml) return yaml.load(text);
+  return parseCordisPatchWithoutDsh(text);
+}
+
+function parseCordisPatchWithoutDsh(text) {
+  const body = String(text ?? '').replace(/^\uFEFF/, '').trim();
+  if (body === '') return undefined;
+  if (/^\[\s*\](?:\s*(?:\r?\n|#.*)*)*-/m.test(body)) {
+    throw new Error('空序列 [] 后面不能再接块列表');
+  }
+  if (/^\[\s*\]$/.test(body)) return [];
+  if (body.startsWith('[')) throw new Error(`无法解析的 YAML：${body.slice(0, 40)}`);
+  const items = [];
+  let current = null;
+  let nested = null;
+  let container = null;
+  for (const rawLine of body.split(/\r?\n/)) {
+    if (/^\s*#/.test(rawLine) || rawLine.trim() === '') continue;
+    const top = rawLine.match(/^- ([^:\n]+):\s*(.*)$/);
+    if (top && !rawLine.startsWith(' ')) {
+      current = { [top[1]]: top[2] === '' ? {} : parseScalar(top[2]) };
+      items.push(current);
+      nested = null;
+      container = current;
+      continue;
+    }
+    const child = rawLine.match(/^    - ([^:\n]+):\s*(.*)$/);
+    if (child && current) {
+      nested = { [child[1]]: child[2] === '' ? {} : parseScalar(child[2]) };
+      current.insert = Array.isArray(current.insert) ? current.insert : [];
+      current.insert.push(nested);
+      container = nested;
+      continue;
+    }
+    const field = rawLine.match(/^( {2,8})([^:\n]+):\s*(.*)$/);
+    if (!field || !container) throw new Error(`无法解析的 YAML 行：${rawLine}`);
+    const indent = field[1].length;
+    const key = field[2];
+    const value = field[3] === '' ? {} : parseScalar(field[3]);
+    if (indent === 2 && current) {
+      current[key] = value;
+      container = value && typeof value === 'object' ? value : current;
+      nested = null;
+      continue;
+    }
+    if (indent === 4 && current?.config && typeof current.config === 'object' && !nested) {
+      current.config[key] = value;
+      continue;
+    }
+    if ((indent === 6 || indent === 4) && nested) {
+      nested[key] = value;
+      if (value && typeof value === 'object') container = value;
+      continue;
+    }
+    if (indent === 8 && nested?.config && typeof nested.config === 'object') {
+      nested.config[key] = value;
+      continue;
+    }
+    throw new Error(`无法解析的 YAML 行：${rawLine}`);
+  }
+  return items;
+}
+
+function parseScalar(value) {
+  const text = String(value ?? '').trim();
+  if (text === 'true') return true;
+  if (text === 'false') return false;
+  if (text.startsWith("'") && text.endsWith("'")) return text.slice(1, -1).replaceAll("''", "'");
+  return text;
+}
+
 // ---------------------------------------------------------------- 源码契约
 const pluginSource = fs.readFileSync(path.join(ROOT, 'src/companion/lib/index.js'), 'utf8');
 const clientSource = fs.readFileSync(path.join(ROOT, 'src/dsh-companion.js'), 'utf8');
@@ -1330,7 +1470,7 @@ ok('插件：只依赖 node: 内置模块，导出 name/inject/apply', () => {
   assert.match(pluginSource, /export const inject = \[/);
   assert.match(pluginSource, /export async function apply\(ctx/);
   assert.doesNotMatch(pluginSource, /from '(?!node:|\.{1,2}\/)[^']+'/);
-  for (const file of ['console-mount.js', 'bridge-supervisor.js', 'client.js']) {
+  for (const file of ['console-mount.js', 'bridge-supervisor.js', 'client.js', 'embedded-bridge.js', 'in-process-agent.js']) {
     const source = fs.readFileSync(path.join(ROOT, 'src/companion/lib', file), 'utf8');
     assert.doesNotMatch(source, /from '(?!node:|\.{1,2}\/)[^']+'/, file);
   }
@@ -1365,6 +1505,9 @@ ok('新文件都能通过 node --check', () => {
     'src/agent-runner.js',
     'src/config.js',
     'src/companion/lib/index.js',
+    'src/companion/lib/embedded-bridge.js',
+    'src/companion/lib/in-process-agent.js',
+    'src/bridge-run-mode.js',
     'tools/install-companion.mjs',
   ]) {
     const result = spawnSync(process.execPath, ['--check', path.join(ROOT, file)], {

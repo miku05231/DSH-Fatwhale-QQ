@@ -5,7 +5,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.nas
-    image: qq-bridge-nas:3.3.0
+    image: qq-bridge-nas:3.4.0-beta.1
     container_name: qq-bridge-nas
     init: true
     restart: unless-stopped
@@ -103,7 +103,7 @@ services:
     networks: [private, qq-net]
 
   console:
-    image: qq-bridge-nas:3.3.0
+    image: qq-bridge-nas:3.4.0-beta.1
     container_name: qq-bridge-nas-console
     entrypoint: [node, /app/docker/nas-gateway.mjs]
     restart: unless-stopped

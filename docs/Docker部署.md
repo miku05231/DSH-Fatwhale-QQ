@@ -186,6 +186,12 @@ DSH home 单独保存在 Docker 命名卷 `dsh-home`，实际卷名通常带 Com
 `docker compose down` 保留命名卷；`docker compose down -v` 会删除 DSH 会话和凭据。
 可用 `docker volume ls --filter label=com.docker.compose.volume=dsh-home` 查找实际卷名。
 
+## 进程内模式还不是容器默认
+
+`bridge.runMode` 默认 `standalone`。本版不改 Compose 的服务、端口或启动命令：`bridge` 容器仍然跑独立的消息核心，`console` 仍然监听 5830。不要为了试用嵌入模式删掉这两个服务。
+
+嵌入模式是给长驻的 `dsh web`（或一直开着的 Desktop）用的。在桥接 `config.json` 写 `"bridge": { "runMode": "embedded" }`，或执行 `node tools/install-companion.mjs --run-mode embedded`，然后重启 DSH。插件配置里的 `runMode` 优先于 `config.json`。NapCat 仍然是旁边的服务。宿主关掉之后，进程内的 QQ 桥也会停。
+
 ## 五、已有配置迁移
 
 升级不会自动重写你的配置。旧容器已生成 `config.json` 时，先备份，
