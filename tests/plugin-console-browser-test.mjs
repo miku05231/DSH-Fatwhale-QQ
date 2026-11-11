@@ -18,6 +18,7 @@ await fs.mkdir(artifacts, { recursive: true });
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-console-fixture-'));
 const browserEnv = browserRuntimeEnv(tmp);
 const savedEnv = { ...process.env };
+const responseDelayMs = Number(savedEnv.QQ_TEST_BROWSER_RESPONSE_DELAY_MS || 0);
 const configFile = path.join(tmp, 'config.json');
 for (const key of Object.keys(process.env)) delete process.env[key];
 Object.assign(process.env, isolatedEnv(tmp, { QQ_CONFIG: configFile }));
@@ -87,7 +88,10 @@ try {
         res.writeHead(404, { 'content-type': 'application/json' });
         return res.end('{"ok":false,"error":"No host API at this path"}');
       }
-      try { await handler(req, res); } catch (error) { res.writeHead(500); res.end(error.message); }
+      try {
+        if (responseDelayMs > 0 && req.url.endsWith('/api/overview')) await new Promise(resolve => setTimeout(resolve, responseDelayMs));
+        await handler(req, res);
+      } catch (error) { res.writeHead(500); res.end(error.message); }
     });
     await new Promise(resolve => host.listen(0, '127.0.0.1', resolve));
     servers.push(host);
@@ -117,8 +121,7 @@ try {
     check(`${label}: no executable inline BASE initializer`, !html.includes('globalThis.__QQ_BRIDGE_BASE__'));
     await cdp.send('Page.navigate', { url: `${origin}${prefix ? '/embed' : '/'}` });
     const context = prefix ? "document.querySelector('iframe')?.contentDocument" : 'document';
-    await until(() => cdp.evaluate(`Boolean(${context}?.querySelector('#serviceCards'))`), `${label} document`);
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await until(() => cdp.evaluate(`${context}?.querySelector('#serviceCards')?.children.length === 3`), `${label} rendered service cards`);
     const view = await cdp.evaluate(`(()=>{const doc=${context};return {base:doc.querySelector('meta[name="qq-bridge-base"]')?.content,text:doc.body.innerText,cards:doc.querySelector('#serviceCards')?.children.length||0}})()`);
     report[label] = view;
     check(`${label}: correct inert base metadata`, view.base === prefix, view);

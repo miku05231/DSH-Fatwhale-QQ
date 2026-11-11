@@ -15,6 +15,7 @@ await fs.mkdir(artifacts, { recursive: true });
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-hud-browser-'));
 const browserEnv = browserRuntimeEnv(tmp);
 const savedEnv = { ...process.env };
+const responseDelayMs = Number(savedEnv.QQ_TEST_BROWSER_RESPONSE_DELAY_MS || 0);
 for (const key of Object.keys(process.env)) delete process.env[key];
 Object.assign(process.env, isolatedEnv(tmp, { QQ_CONFIG: path.join(tmp, 'config.json'), QQ_FIXTURE_API_KEY: 'synthetic-fixture-key' }));
 const report = { checks: [], errors: [], requests: [] };
@@ -91,7 +92,10 @@ try {
       return res.end('{"ok":false,"error":"Fixture persona save rejected"}');
     }
     if (!req.url.startsWith('/qq-bridge')) { res.writeHead(404); return res.end(); }
-    try { await handler(req, res); } catch { res.writeHead(500); res.end(); }
+    try {
+      if (responseDelayMs > 0 && req.url === '/qq-bridge/api/model' && req.method === 'PUT') await delay(responseDelayMs);
+      await handler(req, res);
+    } catch { res.writeHead(500); res.end(); }
   });
   await new Promise(resolve => host.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${host.address().port}`;
@@ -157,9 +161,14 @@ try {
   await set('hudModelProvider', 'test-local');
   await set('hudModelModel', 'test-chat');
   await set('hudModelEffort', 'high');
+  await until(() => inFrame("!doc.querySelector('#hudModelApply').disabled"), 'model apply ready');
   await click('hudModelApply');
-  await until(() => inFrame("/已保存|待|下轮|下一/.test(doc.querySelector('#hudModelStatus').textContent)"), 'model feedback');
-  const savedModel = (await (await fetch(`${origin}/qq-bridge/api/model`)).json()).data;
+  let savedModel;
+  await until(async () => {
+    savedModel = (await (await fetch(`${origin}/qq-bridge/api/model`)).json()).data;
+    return savedModel.mode === 'manual' && savedModel.manual?.provider === 'test-local' && savedModel.manual?.model === 'test-chat' && savedModel.manual?.reasoningEffort === 'high';
+  }, 'manual model persisted');
+  await until(() => inFrame("!doc.querySelector('#hudModelApply').disabled && doc.querySelector('#hudModelStatus').textContent.includes('test-local/test-chat') && !doc.querySelector('#hudModelStatus').textContent.includes('尚未应用')"), 'saved model feedback');
   check('manual model target saves through the existing API', savedModel.mode === 'manual' && JSON.stringify(savedModel).includes('test-chat'));
   check('model feedback distinguishes saved target and actual use', await inFrame("Boolean(doc.querySelector('#hudModelApplied').textContent.trim())"));
   await click('overviewLogClear');
