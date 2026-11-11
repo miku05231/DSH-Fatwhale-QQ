@@ -22,6 +22,7 @@
     "active": ""
   },
   "security": {
+    "adminUserIds": [],
     "allowFrom": [
       1000000002
     ],

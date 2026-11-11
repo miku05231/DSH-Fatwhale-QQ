@@ -1,8 +1,10 @@
 # QQ-DSH · 大肥鱼 QQ 桥接
 
-在 QQ 私聊或群聊中调用本机 DeepSeek Harness（DSH），通过网页控制台管理人格、模型、记忆、表情和插件。
+运行在 DeepSeek Harness（DSH）中的 QQ 桥接插件：连接 NapCat，在 QQ 私聊或群聊中使用宿主 DSH，并从插件面板管理人格、模型、记忆、表情和日志。
 
-**当前源码版本：v3.3.0。** 源码版本与已发布安装包分别维护；请到 [Releases](https://github.com/miku05231/DSH-Fatwhale-QQ/releases) 核对正式版本。改动见 [v3.3.0 发行说明](docs/releases/v3.3.0.md)，本版验证范围见 [验证记录](docs/releases/v3.3.0-verification.md)。
+**当前稳定版：v3.3.0，DSH bundle：qq-bridge-companion 0.3.0。** 从 [最新 Release](https://github.com/miku05231/DSH-Fatwhale-QQ/releases/latest) 下载完整项目，按下文安装 `src/companion`。改动见 [发行说明](docs/releases/v3.3.0.md)，验证范围见 [验证记录](docs/releases/v3.3.0-verification.md)。
+
+> **插件安装入口是完整项目中的 `src/companion`。** Release 中的 exe 是旧独立启动器，插件用户无需下载或运行。安装、启停和打开控制台都从 DSH 插件页完成。
 
 ## 新版控制台
 
@@ -35,7 +37,7 @@ DSH 插件页展示紧凑面板；点击「打开完整控制台」，在系统�
 - 全局与按会话人格、会话管理、模型跟随和手动选择。
 - 表情收集与管理、可选生图和回复语音、B站自动化。
 - JavaScript 插件；默认关闭的可选 AstrBot 运行时。
-- DSH 插件页管理桥接，支持本机浏览器完整控制台；保留 Windows 托盘、自启和正式 Release 更新入口。
+- DSH 插件页管理桥接，支持本机浏览器完整控制台；旧 Windows 托盘与独立入口仅用于兼容旧部署。
 
 电脑工具仅对显式配置的管理员开放；普通成员使用受限聊天通道。DSH 0.2.2 的实现会加载执行器组件，通过权限限制和 guard 禁止普通成员使用工具，不能理解为完全没有加载执行器。相关边界由隔离测试验证。
 
@@ -49,36 +51,75 @@ DSH 插件页展示紧凑面板；点击「打开完整控制台」，在系统�
 | NapCat | OneBot 11 正向 WebSocket；可在 Docker 中运行，需自行准备并登录 QQ |
 | 部署边界 | Docker 仅承载 NapCat；DSH 常驻宿主，由插件承载和管理桥接，见 [部署说明](docs/Docker部署.md) |
 
-桥接本体无需安装 npm 依赖；DSH 与 NapCat 需另外准备。下载便携包后仍需可用的 Node.js 和宿主 DSH。本版完整插件 companion 0.3.0 默认在 DSH 宿主进程内运行桥接核心，无需另起桥接进程。管理员请求直接使用承载插件的宿主；普通成员继续使用隔离聊天子进程。旧版本记录见各自发行说明，不作为本版全量验收。
+桥接本体无需安装 npm 依赖；先准备宿主 DSH 和 NapCat。本版完整 bundle 默认在 DSH 宿主进程内运行桥接核心，管理员请求直接使用该宿主。普通成员的隔离聊天仍需要可用、版本匹配的 DSH CLI，请配置好 `dsh.command`；安装了 Desktop 不代表系统已提供该命令。旧版本记录不作为本版全量验收。
 
-## 插件方式快速开始
+## 安装与使用
 
-先在宿主准备并启动 DSH；NapCat 可单独在 Docker 中运行，按其说明完成 QQ 登录并启用 OneBot 11 正向 WebSocket。在完整桥接目录中准备配置：
+### 1. 准备 DSH 和 NapCat
+
+- 在宿主安装并配置 DSH，先确认其自身对话可用。
+- 启动 NapCat，完成 QQ 登录，并启用 **OneBot 11 正向 WebSocket**。NapCat 可以单独运行在 Docker 中；DSH 和桥接插件运行在宿主。
+- 确认宿主能访问 OneBot 地址，并准备其访问令牌（如已设置）。NapCat 管理页面地址与 OneBot 地址是两个入口。
+
+### 2. 下载完整项目并准备配置
+
+从 [最新 Release](https://github.com/miku05231/DSH-Fatwhale-QQ/releases/latest) 下载 `qq-bridge-3.3.0-source.zip`，解压到打算长期保留的目录。该目录应包含 `config.example.json`、`src/index.js` 和 `src/companion/package.json`。
+
+在这个**完整项目根目录**打开终端，首次安装时创建配置：
 
 ```powershell
 if (-not (Test-Path -LiteralPath config.json)) {
   Copy-Item -LiteralPath config.example.json -Destination config.json
 }
-# 编辑 config.json：宿主可达的 OneBot 地址、聊天准入、管理员、DSH 命令和工作目录
+# 编辑 config.json：OneBot 地址/令牌、聊天准入、管理员、DSH CLI 和工作目录
 ```
 
-以上复制步骤仅供首次安装，不覆盖已有配置。`onebot.url` 填写宿主 DSH 能访问的 NapCat 正向 WebSocket 地址；Docker 内服务名或容器内地址不一定能从宿主访问。不要把 NapCat 的管理页面地址当作 OneBot 地址。
+已有配置会保留。至少核对 `onebot.url`、`onebot.accessToken`（如需）、`security.allowFrom`、`security.adminUserIds` 和 `dsh.command`；需要群聊时再配置 `security.allowGroupIds`。将模板中的演示用户和群号替换为自己授权的账号。空白名单会拒绝聊天消息；管理员列表留空表示无人拥有电脑工具权限。权限含义见下表。
 
-### 安装完整 DSH bundle
+`onebot.url` 使用**宿主可达**的正向 WebSocket 地址；Docker 内部服务名不能直接当作宿主地址。令牌须与 NapCat 对应端点一致。
 
-保留完整桥接目录，不单独复制 `src/companion`。
+### 3. 在 DSH 安装并启用插件
 
-- **Desktop 0.2.2**：在原生插件管理页添加本地目录，选择本项目的 `src/companion`，安装并启用后完全退出再打开 DSH。Desktop profile 由桌面应用管理，不用普通 CLI 直接安装进 desktop profile。
-- **Web 0.2.2**：在桥接根目录执行以下命令，然后重新启动使用该 profile 的 `dsh web`。若插件管理界面提供启用开关，还需启用。
+保留整个解压目录；`src/companion` 需要调用同一项目内的桥接和控制台文件。当前采用本地完整 bundle 安装。
+
+**DSH Desktop 0.2.2：**
+
+1. 打开 DSH 的插件管理页，添加本地目录。
+2. 选择刚解压项目中的 `src/companion`，安装 `qq-bridge-companion`。
+3. 启用插件，然后完全退出并重新打开 DSH。
+4. 回到插件详情页，确认能看到「大肥鱼」控制面板。
+
+Desktop profile 由桌面应用管理，使用上述原生安装入口。
+
+**DSH Web 0.2.2：** 在项目根目录执行以下命令，然后重新启动使用该 profile 的 `dsh web`；在插件管理页确认插件已启用。
 
 ```powershell
 $companionPath = (Resolve-Path src/companion).Path
 dsh plugin --profile web add ("file:" + $companionPath.Replace('\', '/'))
 ```
 
-源码与配置分开放置时，需要设置插件的 `projectRoot`、`configFile`、`workspacePath` 和 `sessionMapPath`，配置片段见 [控制台使用](docs/console.md)。旧的 `tools/install-companion.mjs` 只注册服务端连伴，不能单独安装客户端面板；迁移时先按该说明处理旧标记块，避免重复注册。
+### 4. 从插件面板使用
 
-启用完整插件后自动启动进程内桥接；DSH 常驻期间，从插件面板停止、重新启动或重启桥接，点击「打开完整控制台」进入完整九页界面。不要同时通过托盘、命令行和插件页重复启动同一安装的桥接。已有完整 Windows 安装目录中的启动器与独立控制台仍是可选入口。
+完整 bundle 默认 `runMode: embedded`，启用后自动启动桥接。保持 DSH 运行，在面板确认桥接和 NapCat 已连接，再从白名单 QQ 账号发消息。
+
+- **启动／停止／重启桥接**：只操作当前插件的桥接，停止桥接后 DSH 继续运行。
+- **打开完整控制台**：点击面板按钮，由系统浏览器打开；地址和一次性授权自动生成，无需手填固定端口。
+- **修改人格、模型、表情及其他设置**：使用快捷区或完整控制台。模型新目标在后续请求应用。
+
+插件运行期间，使用 DSH 插件页作为唯一桥接启动入口，避免旧托盘或命令行重复连接同一 NapCat。更新项目文件后重新启动 DSH，使进程内模块加载新版本。
+
+源码与配置分开放置，或从旧 server-only 版本迁移时，按 [控制台安装与迁移](docs/console.md) 设置 `projectRoot`、`configFile`、`workspacePath`、`sessionMapPath` 及 `runMode: embedded`。旧 `tools/install-companion.mjs` 仅注册服务端连伴，完整面板使用上述 bundle 安装流程。
+
+## Release 文件怎么选
+
+| 文件 | 用途 |
+| --- | --- |
+| `qq-bridge-3.3.0-source.zip` | **插件用户推荐**：完整项目文件，解压后在 DSH 安装其中的 `src/companion` |
+| `qq-bridge-3.3.0-portable-win64.zip` | 完整 Windows 便携目录，额外带旧启动器；也可从其中安装 bundle |
+| `qq-bridge-launcher-3.3.0.exe` | **旧部署兼容启动器**：管理托盘和独立服务；依赖完整目录与外部运行环境，插件模式不使用 |
+| `SHA256SUMS.txt` | 核对上述三个文件的 SHA256 |
+
+独立 exe 不是 DSH 插件安装包，也不能单独更新插件。保留旧部署的用户可参考 [历史更新说明](docs/更新发布.md)；新安装使用上面的插件流程。
 
 ## 配置与权限
 
