@@ -74,7 +74,11 @@ if (-not (Test-Path -LiteralPath config.json)) {
 # 编辑 config.json：OneBot 地址/令牌、聊天准入、管理员、DSH CLI 和工作目录
 ```
 
-已有配置会保留。至少核对 `onebot.url`、`onebot.accessToken`（如需）、`security.allowFrom`、`security.adminUserIds` 和 `dsh.command`；需要群聊时再配置 `security.allowGroupIds`。将模板中的演示用户和群号替换为自己授权的账号。空白名单会拒绝聊天消息；管理员列表留空表示无人拥有电脑工具权限。权限含义见下表。
+已有配置会保留。至少核对 `onebot.url`、`onebot.accessToken`（如需）、`security.allowFrom`、`security.adminUserIds` 和 `dsh.command`；需要群聊时再配置 `security.allowGroupIds`。将模板中的演示用户和群号替换为自己授权的账号。
+
+私聊按 `allowFrom` 控制。模板同时开启 `allowGroups` 和 `allowGroupMembers`：允许接入的群内，其他成员也可能通过 @、唤醒词或接话判定触发聊天。若群聊也只允许白名单用户，将 `allowGroupMembers` 设为 `false`。管理员列表留空表示无人拥有电脑工具权限；群成员聊天资格不授予电脑工具权限。
+
+`allowGroupIds` 非空时按名单限群；为空时回退到 `allowGroups`。模板的 `allowGroups: true` 意味着清空群名单会允许所有群（仍受拒绝名单约束）。保留明确的群 ID 名单；禁用群聊时清空群名单并设置 `allowGroups: false`。
 
 `onebot.url` 使用**宿主可达**的正向 WebSocket 地址；Docker 内部服务名不能直接当作宿主地址。令牌须与 NapCat 对应端点一致。
 
@@ -129,9 +133,11 @@ dsh plugin --profile web add ("file:" + $companionPath.Replace('\', '/'))
 | --- | --- |
 | `onebot.url` | NapCat 正向 WebSocket 地址 |
 | 插件 `runMode` | 完整 bundle 默认 `embedded`；旧 server-only 迁移需明确设为 `embedded`，见控制台说明 |
-| `security.allowFrom` | 聊天用户白名单，**不授予电脑工具权限** |
+| `security.allowFrom` | 私聊用户白名单；关闭群成员模式时也约束群聊发言者，**不授予电脑工具权限** |
 | `security.adminUserIds` | 显式授权的电脑工具管理员；管理员也需满足聊天准入规则 |
-| `security.allowGroupIds` | 允许接入的群 |
+| `security.allowGroups` | 群 ID 名单为空时的群聊开关；模板为 `true` |
+| `security.allowGroupIds` | 非空时仅接入名单群；为空时按 `allowGroups` 决定 |
+| `security.allowGroupMembers` | 允许接入群内的其他成员参与聊天；模板为 `true`，只限白名单用户时改为 `false` |
 | `dsh.command` | DSH 命令或单个 CLI 文件路径，不拼接参数 |
 | `dsh.cwd` | QQ 对话工作目录 |
 | `memory.root` | 记忆库目录 |
