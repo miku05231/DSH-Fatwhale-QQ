@@ -30,6 +30,11 @@ const skipNet = argv.includes('--skip-net');
  *  expect：从输出里必须出现的字样（没有就判失败）。
  */
 const SUITE = [
+  { name: 'WebUI 本机完整版授权', file: 'tests/local-console-test.mjs', expect: ['17/17 local console checks passed'], timeoutMs: 60_000, note: '本机随机端口、一次授权、独立会话、来源边界和作用域释放' },
+  { name: 'WebUI 宿主内桥接与运行模式', file: 'tests/embedded-bridge-test.mjs', expect: ['embedded bridge checks passed'], timeoutMs: 60_000, note: 'embedded 自动启动、管理员宿主直调、普通用户隔离、并发启停、故障隔离与卸载清理' },
+  { name: 'WebUI 控制台服务生命周期与配置根', file: 'tests/console-mount-lifecycle-test.mjs', expect: ['26/26 lifecycle checks passed'], timeoutMs: 30_000, note: '双运行模式服务迟到、撤销和恢复、异步取消、独立配置根与自定义文件名' },
+  { name: 'WebUI 插件 CSP 与路径前缀浏览器回归', file: 'tests/plugin-console-browser-test.mjs', expect: ['12/12 checks passed'], timeoutMs: 90_000, note: '真实浏览器单页与 iframe、严格 CSP 和元数据前缀' },
+  { name: 'WebUI 双模式与本机授权浏览器回归', file: 'tests/console-dual-mode-browser-test.mjs', expect: ['26/26 HUD checks passed'], timeoutMs: 90_000, note: '内嵌 HUD、完整版九页、快捷控制、日志工具与本机授权' },
   {
     name: 'WebUI 真实日志与自动刷新', file: 'tests/webui-logs-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
     note: '日期日志追加与轮转、禁止容器旧日志回退、前端轮询与乱序取消',

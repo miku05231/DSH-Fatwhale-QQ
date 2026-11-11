@@ -7,6 +7,7 @@
 
 import fs from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { BRIDGE_RUN_MODES } from './bridge-run-mode.js';
 import { DEFAULT_SESSION_WINDOW_MINUTES, isValidSessionWindowMinutes } from './sessions.js';
 import { IMAGE_PROVIDERS, validMediaBaseUrl, validMediaKey } from './media-api.js';
 
@@ -112,6 +113,11 @@ export const DEFAULTS = deepFreeze({
   },
   logDir: 'logs',
   stateDir: 'state',
+  // standalone：消息核心仍是独立进程（默认，现有部署不变）。
+  // embedded：companion 在 DSH 宿主进程内启动同一套核心。
+  bridge: {
+    runMode: 'standalone',
+  },
   // Disabled until an administrator explicitly enables the isolated plugin lane.
   astrbot: {
     enabled: false,
@@ -308,6 +314,10 @@ export function validateConfig(config) {
   const mode = getField(config, 'dsh.mode');
   if (!['auto', 'desktop', 'headless'].includes(mode)) {
     invalid('dsh.mode', '必须是 auto、desktop 或 headless 之一', mode);
+  }
+  const runMode = getField(config, 'bridge.runMode');
+  if (!BRIDGE_RUN_MODES.includes(runMode)) {
+    invalid('bridge.runMode', '必须是 standalone 或 embedded', runMode);
   }
   const permission = getField(config, 'dsh.permissionMode');
   if (!['', 'read-only', 'workspace-write', 'danger-full-access'].includes(permission)) {

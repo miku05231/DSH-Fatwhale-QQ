@@ -62,9 +62,11 @@ const stopped = await supervisor.stop();
 check('supervisor stops the child', stopped.running === false && stopped.pid === 0);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-plugin-console-'));
+const bridgeActions = [];
+let bridgeStartFails = false;
 const bridge = {
-  start() { return { running: true, pid: 42, projectRoot: root }; },
-  async stop() { return { running: false, pid: 0, projectRoot: root }; },
+  async start() { bridgeActions.push('start'); return { running: !bridgeStartFails, pid: bridgeStartFails ? 0 : 42, projectRoot: root, ...(bridgeStartFails ? { lastError: 'fixture start failed' } : {}) }; },
+  async stop() { bridgeActions.push('stop'); return { running: false, pid: 0, projectRoot: root }; },
   status() { return { running: false, pid: 0, projectRoot: root }; },
 };
 const server = createWebUiServer({
@@ -74,6 +76,9 @@ const server = createWebUiServer({
   port: 0,
   publicBase: CONSOLE_PREFIX,
   bridgeControl: bridge,
+  napcatHealth: { async check() { return { state: 'stopped', loggedIn: false, reachable: false }; }, close() {} },
+  platformQrLogin: { async stop() {} },
+  updateManager: { async start() {}, stop() {}, async status() { return { automatic: false, phase: 'idle' }; } },
 });
 await server.activate();
 const routes = [];
@@ -112,11 +117,58 @@ const openRes = fakeResponse();
 await routes[0].handler(fakeRequest('/qq-bridge/api/bridge', {}), openRes);
 check('an admitted plugin request can read bridge status', openRes.status === 200 && JSON.parse(openRes.body).data.running === false);
 
+const startRes = fakeResponse();
+await routes[0].handler({ ...fakeRequest('/qq-bridge/api/bridge/start', {}), method: 'POST' }, startRes);
+check('bridge start resolves the asynchronous embedded status', startRes.status === 200
+  && JSON.parse(startRes.body).data.running === true && JSON.parse(startRes.body).data.pid === 42);
+
+for (const [action, expected] of [['start', ['start']], ['stop', ['stop']], ['restart', ['stop', 'start']]]) {
+  bridgeActions.length = 0;
+  const response = fakeResponse();
+  await routes[0].handler({ ...fakeRequest(`/qq-bridge/api/service/bridge/${action}`, {}), method: 'POST' }, response);
+  check(`legacy bridge ${action} uses the shared controller without ProcessControl`, response.status === 200
+    && JSON.stringify(bridgeActions) === JSON.stringify(expected)
+    && JSON.parse(response.body).data.running === (action !== 'stop'));
+}
+bridgeStartFails = true;
+const failedLegacyStart = fakeResponse();
+await routes[0].handler({ ...fakeRequest('/qq-bridge/api/service/bridge/start', {}), method: 'POST' }, failedLegacyStart);
+check('legacy bridge start reports embedded startup failure', failedLegacyStart.status === 500
+  && JSON.parse(failedLegacyStart.body).error.includes('fixture start failed'));
+bridgeStartFails = false;
+
 const page = fakeResponse();
 await routes[0].handler(fakeRequest('/qq-bridge/', {}), page);
-check('admitted plugin page injects the console base path', page.status === 200 && page.body.includes('__QQ_BRIDGE_BASE__'));
+check('admitted plugin page exposes inert console base metadata', page.status === 200
+  && page.body.includes('<meta name="qq-bridge-base" content="/qq-bridge" />'));
+check('plugin page needs no inline base initializer', !page.body.includes('__QQ_BRIDGE_BASE__')
+  && /(?:^|;)\s*script-src\s+'self'\s*(?:;|$)/.test(page.headers['content-security-policy']));
 check('plugin page does not widen framing', page.headers['x-frame-options'] === 'SAMEORIGIN'
   && String(page.headers['content-security-policy']).includes("frame-ancestors 'self'"));
+
+const escapedServer = createWebUiServer({ configRoot: tmp, config: {}, publicBase: '/qq&"<>-bridge' });
+const escapedPage = fakeResponse();
+await escapedServer.handle(fakeRequest('/', {}), escapedPage);
+check('base metadata escapes HTML attribute delimiters', escapedPage.body.includes(
+  '<meta name="qq-bridge-base" content="/qq&amp;&quot;&lt;&gt;-bridge" />'));
+check('asset URLs use the same escaped base', escapedPage.body.includes(
+  'src="/qq&amp;&quot;&lt;&gt;-bridge/app.js"'));
+await escapedServer.stop();
+
+for (const [base, escapedBase] of [
+  ['/qq$&-bridge', '/qq$&amp;-bridge'],
+  ["/qq$'-bridge", "/qq$'-bridge"],
+  ['/qq$`-bridge', '/qq$`-bridge'],
+]) {
+  const literalServer = createWebUiServer({ configRoot: tmp, config: {}, publicBase: base });
+  const literalPage = fakeResponse();
+  await literalServer.handle(fakeRequest('/', {}), literalPage);
+  check(`replacement tokens stay literal in base ${base}`, literalPage.body.includes(
+    `<meta name="qq-bridge-base" content="${escapedBase}" />`)
+    && literalPage.body.includes(`src="${escapedBase}/app.js"`)
+    && literalPage.body.includes(`href="${escapedBase}/`));
+  await literalServer.stop();
+}
 
 const forgedWrite = fakeResponse();
 const forgedRequest = fakeRequest('/api/settings', { host: '127.0.0.1:3080' });
@@ -168,6 +220,8 @@ const handle = await startBridge({ argv: ['--config', configFile], embedded: tru
 check('embedded start returns a stop handle', typeof handle?.stop === 'function');
 await handle.stop();
 check('embedded stop does not request process exit', process.exitCode === undefined || process.exitCode === 0);
+assert.equal(path.dirname(configDir), os.tmpdir());
+fs.rmSync(configDir, { recursive: true, force: true });
 
 function fakeRequest(url, headers) {
   return {
@@ -183,6 +237,11 @@ function fakeResponse() {
   response.end = (body) => { response.body = Buffer.isBuffer(body) ? body.toString('utf8') : String(body ?? ''); };
   return response;
 }
+
+await server.stop();
+fs.rmSync(script, { force: true });
+assert.equal(path.dirname(tmp), os.tmpdir());
+fs.rmSync(tmp, { recursive: true, force: true });
 
 if (failed) {
   console.error(`${failed} failed`);

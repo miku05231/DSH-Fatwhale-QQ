@@ -109,30 +109,36 @@ try {
 QQ-DSH $Version 便携版（Windows x64）
 ========================================
 
-第一次跑
-  1. 安装 Node.js 22 或更新版本（https://nodejs.org/），不用 npm install。
-  2. 双击 setup.cmd 完成配置，并运行 install-napcat.cmd 安装 NapCat。
-  3. 双击 qq-bridge.exe：复用一键启动流程，启动 NapCat、桥接、控制台、DSH 和托盘。
-     控制台优先在 Edge 应用窗口打开，没有 Edge 时使用默认浏览器。
-  4. 后台运行时，单击托盘图标打开控制台；右键「退出」让 QQ 机器人下线。
+推荐：由 DSH 完整插件运行桥接
+  1. 准备宿主 DSH 与可用 Node.js。桥接本体要求 Node.js 22 或以上；
+     DSH 0.2.2 CLI 要求 Node.js 24.9.0 或以上，Desktop 使用其自带运行时。
+  2. 按 README.md 准备 config.json，只在首次安装时复制 config.example.json，
+     不覆盖已有配置。设置宿主可达的 OneBot 地址、聊天准入与管理员。
+  3. 单独部署并登录 NapCat（可使用 Docker），启用 OneBot 11 正向 WebSocket。
+     DSH 与桥接不需要放进容器。
+  4. 在 DSH 插件管理中安装本目录 src\companion 的完整 bundle，启用并重启宿主；
+     Desktop 与 Web 的具体安装命令、旧 server-only 迁移见 README.md。
+  5. 从插件面板管理自动启动的进程内桥接，点击“打开完整控制台”进入浏览器。
+     使用插件方式时，不要再运行 qq-bridge.exe 或其他入口启动同一桥接。
 
-这个包里是什么
-  qq-bridge.exe        桌面 / 命令行启动器（不单独包含 Node、NapCat 或 DSH）
-  一键启动.cmd        同一套组件启动流程
-  qq-bridge.cmd        命令行入口
-  src\ tools\ ...      完整工程源码
+包内入口
+  src\companion       推荐的 DSH 完整插件；保留完整解压目录，不单独搬移该子目录
+  src\ tools\ ...      完整工程源码与维护工具
+  qq-bridge.exe        可选旧桌面 / 命令行启动器，不单独包含 Node、NapCat 或 DSH
+  一键启动.cmd        可选旧独立组件启动流程，不与插件方式同时使用
+  qq-bridge.cmd        可选独立命令行入口
 
-常用命令
-  qq-bridge.exe status              看服务状态
-  qq-bridge.exe logs bridge         看桥接日志
-  qq-bridge.exe stop                停止命令行启动的服务
-  qq-bridge.exe start --no-console  只启动桥接
+旧独立启动方式（兼容入口）
+  无参数双击 qq-bridge.exe 会启动托盘及独立组件，不是插件运行方式。
+  仅在明确选择独立方式且已准备本地组件时使用 setup.cmd、install-napcat.cmd。
+  qq-bridge.exe status              查看独立服务状态
+  qq-bridge.exe logs bridge         查看桥接日志
+  qq-bridge.exe stop                停止命令行启动的独立服务
+  qq-bridge.exe start --no-console  按旧配置启动独立服务
 
-说明
-  无参数双击会启动托盘；显式 start / stop / logs 等参数保持原有命令行行为。
-  自己的模型接口和 NapCat / OneBot 地址在控制台中配置。
-  config.json、state\、logs\、qq-workspace\ 都是本机数据，不会被打进包。
-  完整安装步骤与命令说明见 README.md。
+本机数据
+  config.json、state\、logs\、qq-workspace\ 均为本机数据，不会被打进包。
+  升级前备份已有配置与数据；完整安装、迁移、权限及验证范围见 README.md 与 docs\。
 "@
   $utf8Bom = New-Object System.Text.UTF8Encoding($true)
   [IO.File]::WriteAllText((Join-Path $stage '快速开始.txt'), $readme, $utf8Bom)

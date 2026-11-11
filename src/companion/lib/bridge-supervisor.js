@@ -24,6 +24,9 @@ export function createBridgeSupervisor({
       running: Boolean(child && child.exitCode === null && !child.killed),
       pid: child && child.exitCode === null ? child.pid : 0,
       projectRoot: root,
+      mode: 'standalone',
+      connected: false,
+      lastError: null,
     };
   }
 

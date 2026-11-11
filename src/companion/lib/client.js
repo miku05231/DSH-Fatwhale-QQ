@@ -5,66 +5,35 @@ globalThis.window.__ModuleLoader__.load({
   id: 'qq-bridge-companion',
   factory: (require) => {
     const React = require('react');
-    const { createElement: h, useEffect, useState } = React;
+    const { createElement: h, useEffect, useState, useRef } = React;
     const PREFIX = '/qq-bridge';
 
-    async function callBridge(action) {
-      const response = await fetch(`${PREFIX}/api/bridge/${action}`, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
-        body: '{}',
-      });
-      const payload = await response.json();
-      if (!payload?.ok) throw new Error(payload?.error || `HTTP ${response.status}`);
-      return payload.data;
-    }
-
     function ConsolePage({ view }) {
-      const [status, setStatus] = useState(null);
-      const [error, setError] = useState('');
-      const [busy, setBusy] = useState(false);
-
-      async function refresh() {
-        const response = await fetch(`${PREFIX}/api/bridge`, { credentials: 'same-origin' });
-        const payload = await response.json();
-        if (!payload?.ok) throw new Error(payload?.error || `HTTP ${response.status}`);
-        setStatus(payload.data);
-      }
+      const frame = useRef(null);
+      const [height, setHeight] = useState(560);
 
       useEffect(() => {
         if (view === 'summary') return undefined;
-        refresh().catch((cause) => setError(String(cause?.message ?? cause)));
-        return undefined;
+        const resize = (event) => {
+          if (!frame.current || event.source !== frame.current.contentWindow) return;
+          const data = event.data;
+          if (!data || data.type !== 'qq-bridge:resize' || typeof data.height !== 'number' ||
+              !Number.isFinite(data.height) || data.height < 240 || data.height > 12000) return;
+          setHeight(Math.ceil(data.height));
+        };
+        window.addEventListener('message', resize);
+        return () => window.removeEventListener('message', resize);
       }, [view]);
 
-      if (view === 'summary') return '配置、记忆、人格、表情、日志，以及桥接启停';
+      if (view === 'summary') return '链路状态、人格、模型与表情快捷切换；完整配置在浏览器打开';
 
-      async function act(action) {
-        setBusy(true);
-        setError('');
-        try {
-          setStatus(await callBridge(action));
-        } catch (cause) {
-          setError(String(cause?.message ?? cause));
-        } finally {
-          setBusy(false);
-        }
-      }
-
-      const running = status?.running === true;
-      return h('section', { 'data-qq-bridge-console': 'page', style: { display: 'flex', flexDirection: 'column', gap: 12, minHeight: 640 } },
-        h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-          h('strong', null, 'QQ-DSH 控制台'),
-          h('span', null, running ? `桥接运行中（pid ${status.pid}）` : '桥接未运行'),
-          h('button', { type: 'button', disabled: busy || running, onClick: () => act('start') }, '启动桥接'),
-          h('button', { type: 'button', disabled: busy || !running, onClick: () => act('stop') }, '停止桥接'),
-        ),
-        error ? h('p', { role: 'alert' }, error) : null,
+      return h('section', { 'data-qq-bridge-console': 'page', style: { minWidth: 0 } },
         h('iframe', {
+          ref: frame,
           title: 'QQ-DSH 控制台',
-          src: `${PREFIX}/`,
-          style: { flex: 1, width: '100%', minHeight: 560, border: '1px solid rgba(0,0,0,0.12)', borderRadius: 12, background: 'white' },
+          src: `${PREFIX}/?mode=embed`,
+          scrolling: 'no',
+          style: { display: 'block', width: '100%', height, minHeight: 240, border: 0, borderRadius: 12 },
         }),
       );
     }

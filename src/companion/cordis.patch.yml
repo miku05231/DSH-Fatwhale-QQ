@@ -3,3 +3,5 @@
 - insert:
     - id: qq-bridge-companion
       name: qq-bridge-companion
+      config:
+        runMode: embedded

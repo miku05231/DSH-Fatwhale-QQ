@@ -21,6 +21,11 @@ const PROJECT_ROOT = path.resolve(HERE, '..');
 const TOOL = path.join(PROJECT_ROOT, 'tools', 'export-public.mjs');
 const PUBLIC_DOC_FILES = [
   'docs/astrbot.md',
+  'docs/console.md',
+  'docs/releases/v3.3.0-verification.md',
+  'docs/releases/images/console-ui-20261110/embedded-light.png',
+  'docs/releases/images/console-ui-20261110/embedded-dark.png',
+  'docs/releases/images/console-ui-20261110/full-overview.png',
   'docs/控制台架构.md',
   'docs/测试清单.md',
   'docs/Docker部署.md',
@@ -187,6 +192,12 @@ async function main() {
     'src/updates.mjs',
     'src/companion/lib/index.js',
     'src/companion/package.json',
+    'src/bridge-run-mode.js',
+    'src/companion/lib/embedded-bridge.js',
+    'src/companion/lib/in-process-agent.js',
+    'src/companion/lib/local-console.js',
+    'src/companion/lib/browser-opener.js',
+    'src/companion/lib/open-console.ps1',
     'src/webui/public/index.html',
     'launcher/Launcher.ps1',
     'tests/run-all.mjs',
@@ -230,15 +241,16 @@ async function main() {
   console.log('\n[3/5 项目展示完整保留]');
   const readme = await fsp.readFile(path.join(out, 'README.md'), 'utf8');
   const sourceReadme = await fsp.readFile(path.join(PROJECT_ROOT, 'README.md'), 'utf8');
-  const showcasePattern = /<!-- showcase:start -->[\s\S]*?<!-- showcase:end -->/;
-  const sourceShowcase = sourceReadme.match(showcasePattern)?.[0];
-  const exportedShowcase = readme.match(showcasePattern)?.[0];
-  ok(Boolean(sourceShowcase) && exportedShowcase === sourceShowcase, '公开 README 复用源 README 的图标与展示区');
-  ok((readme.match(/<!-- showcase:start -->/g) ?? []).length === 1, '展示区只生成一次');
-  ok(readme.includes('九个页签') && readme.includes('当前 DSH 默认模型'), '公开说明包含新导航和默认模型判定');
-  ok(readme.includes('未实测') && readme.includes('真实 QQ 文字/语音投递') && readme.includes('B站实际评论与 @'), '公开说明明确真实账号未测试范围');
+  ok(readme.trim() === sourceReadme.trim(), '公开 README 保留本轮审阅的完整源码说明');
+  ok((readme.replace(/```[\s\S]*?```/g, '').match(/^# /gm) ?? []).length === 1, '公开 README 只有一个主标题');
+  ok(readme.includes('## 插件方式快速开始') && readme.includes('embedded'), '公开说明保留宿主插件运行方式');
+  ok(readme.includes('v3.3.0-verification.md'), '公开说明链接到本版验证边界');
   const imageRefs = localReadmeImages(readme);
-  ok(imageRefs.length >= 7, '公开 README 含应用图标与界面截图');
+  ok(imageRefs.length >= 3, '公开 README 含双模式界面的三张示例截图');
+  for (const rel of PUBLIC_DOC_FILES.filter((file) => file.endsWith('.png'))) {
+    ok(fs.readFileSync(path.join(PROJECT_ROOT, rel)).equals(fs.readFileSync(path.join(out, rel))),
+      `新版示例图按原始字节导出 ${rel}`);
+  }
   const missingImages = imageRefs.filter((rel) => !fs.existsSync(path.join(out, rel)));
   ok(missingImages.length === 0, '公开 README 的本地图片引用都能打开', missingImages.join('; '));
   const sourceIcon = fs.readFileSync(path.join(PROJECT_ROOT, 'deepseek-waitou.png'));
@@ -300,7 +312,7 @@ async function main() {
     'package.json 保留应用身份与版本（仍为零第三方依赖）');
 
   ok(/QQ-DSH/.test(readme) && /MIT/.test(readme), 'README 有项目名与许可说明');
-  ok(/NapCat/.test(readme) && /封号风险|服务条款/.test(readme), 'README 写清了 NapCat 与风险提示');
+  ok(/NapCat/.test(readme) && /封号风险|服务条款|账号风险/.test(readme), 'README 写清了 NapCat 与风险提示');
 
   await fsp.rm(path.dirname(out), { recursive: true, force: true }).catch(() => {});
 

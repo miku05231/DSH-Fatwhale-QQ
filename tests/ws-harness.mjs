@@ -74,6 +74,7 @@ export function createFakeNapCat({ token = null, onCall = null, respondToClose =
     res.end('upgrade required');
   });
   const sockets = [];
+  const liveSockets = new Set();
   const state = { connections: 0, headers: [], lastSocket: null, calls: [], texts: [] };
 
   server.on('upgrade', (req, socket) => {
@@ -98,6 +99,8 @@ export function createFakeNapCat({ token = null, onCall = null, respondToClose =
     state.headers.push(req.headers);
     state.lastSocket = socket;
     sockets.push(socket);
+    liveSockets.add(socket);
+    socket.once('close', () => liveSockets.delete(socket));
 
     const frameState = { buffer: Buffer.alloc(0) };
     socket.on('data', (chunk) => {
@@ -137,6 +140,9 @@ export function createFakeNapCat({ token = null, onCall = null, respondToClose =
 
   return {
     state,
+    liveCount() {
+      return liveSockets.size;
+    },
     /** 像 NapCat 那样推一个事件给客户端 */
     sendJson(obj) {
       state.lastSocket?.write(encodeFrame(0x1, JSON.stringify(obj)));

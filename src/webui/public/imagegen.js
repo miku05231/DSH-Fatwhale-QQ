@@ -81,7 +81,8 @@ export function initImagegen({ api, notify, confirm }) {
     try {
       let url = previews.get(job.id);
       if (!url) {
-        const response = await fetch(`${globalThis.__QQ_BRIDGE_BASE__ || ''}/api/imagegen/jobs/${job.id}/image`, { headers: { 'X-QQ-Imagegen-Token': token } });
+        const base = document.querySelector('meta[name="qq-bridge-base"]')?.content || '';
+        const response = await fetch(`${base}/api/imagegen/jobs/${job.id}/image`, { headers: { 'X-QQ-Imagegen-Token': token } });
         if (!response.ok) throw new Error('图片预览加载失败');
         url = URL.createObjectURL(await response.blob());
         previews.set(job.id, url);

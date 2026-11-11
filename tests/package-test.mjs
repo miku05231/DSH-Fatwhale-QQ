@@ -24,6 +24,11 @@ const ROOT = path.resolve(HERE, '..');
 const PACKAGER = path.join(ROOT, 'tools', 'package.mjs');
 const PUBLIC_DOC_FILES = [
   'docs/astrbot.md',
+  'docs/console.md',
+  'docs/releases/v3.3.0-verification.md',
+  'docs/releases/images/console-ui-20261110/embedded-light.png',
+  'docs/releases/images/console-ui-20261110/embedded-dark.png',
+  'docs/releases/images/console-ui-20261110/full-overview.png',
   'docs/控制台架构.md',
   'docs/测试清单.md',
   'docs/Docker部署.md',
@@ -101,6 +106,12 @@ const REQUIRED = [
   'src/updates.mjs',
   'src/companion/lib/index.js',
   'src/companion/package.json',
+  'src/bridge-run-mode.js',
+  'src/companion/lib/embedded-bridge.js',
+  'src/companion/lib/in-process-agent.js',
+  'src/companion/lib/local-console.js',
+  'src/companion/lib/browser-opener.js',
+  'src/companion/lib/open-console.ps1',
   'launcher/Launcher.ps1',
   'launcher/bootstrap.ps1',
   'launcher/lib/ProcessControl.ps1',
@@ -312,7 +323,11 @@ async function main() {
     section('3/7 展示图片和原始图标完整');
     const readme = readText(path.join(outDir, 'README.md'));
     const imageRefs = localReadmeImages(readme);
-    check(imageRefs.length >= 7, 'README 含应用图标与界面截图');
+    check(imageRefs.length >= 3, 'README 含双模式界面的三张示例截图');
+    for (const rel of PUBLIC_DOC_FILES.filter((file) => file.endsWith('.png'))) {
+      check(fs.readFileSync(path.join(ROOT, rel)).equals(fs.readFileSync(path.join(outDir, rel))),
+        `新版示例图按原始字节打包 ${rel}`);
+    }
     const missingImages = imageRefs.filter((rel) => !fs.existsSync(path.join(outDir, rel)));
     check(missingImages.length === 0, 'README 的本地图片引用都能在产物中打开', missingImages.join('；'));
     const sourceIcon = fs.readFileSync(path.join(ROOT, 'deepseek-waitou.png'));

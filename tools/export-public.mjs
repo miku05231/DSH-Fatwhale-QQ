@@ -34,6 +34,11 @@ const INCLUDE = [
   'tests',
   'runtime',
   'docs/astrbot.md',
+  'docs/console.md',
+  'docs/releases/v3.3.0-verification.md',
+  'docs/releases/images/console-ui-20261110/embedded-light.png',
+  'docs/releases/images/console-ui-20261110/embedded-dark.png',
+  'docs/releases/images/console-ui-20261110/full-overview.png',
   'docs/控制台架构.md',
   'docs/测试清单.md',
   'docs/Docker部署.md',
@@ -130,135 +135,6 @@ const FORBIDDEN = [
   ['URL 内嵌长凭据', /https?:\/\/[^/\s"'`<>:]+:[^/\s"'`<>@]{16,}@/i],
 ];
 
-const PUBLIC_README = `# QQ-DSH v3.2.0
-
-当前版本：**v3.2.0**。AstrBot 是可选扩展，默认关闭；功能边界见[发行说明](docs/releases/v3.2.0.md)。
-
-> **测试状态：尚未完成全面测试。**真实 QQ 新适配投递、公开天气 API、真实模型供应商、从零安装和全部 AstrBot 插件兼容性未全面验证。请查看[匿名验收摘要](docs/releases/v3.2.0-verification.md)，遇到问题请到 [GitHub Issues](https://github.com/miku05231/DSH-Fatwhale-QQ/issues) 提交。
->
-> **DSH 兼容验证：**0.2.1-rc.5 已在 Windows 与 NAS 的受控场景完成验证；生产 DSH 核心仍为 0.2.0-rc.2，不代表生产已升级或真实模型供应商认证。
-
-<!-- exported-showcase -->
-
-> 非官方项目。QQ 侧通过第三方协议端 [NapCat](https://github.com/NapNeko/NapCatQQ)（OneBot 11）连接，**不符合腾讯服务条款，有封号风险**。请使用小号，并自行评估。
-
-## 它能做什么
-
-- **私聊 / 群聊**：私聊免唤醒；白名单群可由 JEV 或当前默认模型判断是否接话，明确 @ 或唤醒词沿用原规则
-- **JEV 判定**：URL 和 Token 均非空时使用 JEV，否则使用当前 DSH 默认模型；按群使用有限上下文，失败或超时不回复
-- **回复语音**：可选 Edge TTS 插件，文字成功发送后追加 OneBot 语音；失败保留文字，默认关闭
-- **B站自动化**：扫码登录、关键词搜索、UP 动态订阅、本地时间 Cron、QQ 摘要推送和评论审计；可选低频评论与指定 UID @，默认关闭
-- **长期记忆**：对话自动落盘到 Obsidian 笔记库（日志 / 人物页 / 群页 / 反思），回复前按相关度召回
-- **记忆反思**：控制台记忆页「立即反思」手动跑一次；也能每天定时（默认 04:00，关机错过会补跑），重写前自动备份成 \`.bak-时间戳\`
-- **模型跟随**：读 DSH 桌面端的当前模型，QQ 侧下一条消息立刻跟着换，无需重启
-- **人格**：用一份 \`AGENTS.md\` 定义它是谁、怎么说话
-- **Native 能力**：DSH 的 MCP 工具与 skills 原样可用（drawio、duckduckgo、windows…）
-- **控制台**：\`127.0.0.1:5830\`，九个页签（概览 / 记忆 / 表情 / 人格 / 会话 / 模型 / 插件 / 自动化 / 系统），可启停服务、改设置、看日志
-- **表情包库**：自动收集聊天里的表情并打标签（来源 / 群 / 谁发的 / 关键词 / 动图静态 / 尺寸），可筛选、改标签、换存放目录、重建索引
-- **插件**：往 \`src/plugins/\` 扔一个 .js 就能加功能，控制台自动生成开关与配置表单
-- **托盘 / 自启**：一键启动全部、左键直达控制台、开机自启；托盘与窗口图标用 \`assets/app-icon.png\`
-- **应用更新**：系统页检查 GitHub 稳定版 Release；Windows 便携版确认后校验、备份并升级，独立 Git 源码目录可安装对应发布标签（要求无未提交修改且可快进），保留本机数据。Docker 按部署方式更新，发布步骤见 \`docs/更新发布.md\`。
-
-## 环境要求
-
-- Windows 10/11（托盘用 WinForms，测试与 CDP 用 Edge）
-- Node.js ≥ 22（无需 npm install；内置第三方代码保留许可证）
-- DSH（DeepSeek Harness）已安装并可用 \`dsh\` 命令
-- NapCat（同一个发布包里的无头版本即可，无需另装 QQ 客户端）
-
-Docker 部署见[部署说明](docs/Docker部署.md)。
-
-## 快速开始
-
-\`\`\`powershell
-# 1) 复制配置模板并改成你自己的
-Copy-Item config.example.json config.json
-
-# 2) 启动 NapCat（首次要扫码登录）
-cd napcat; .\\node.exe index.js -q <你的机器人QQ号>
-
-# 3) 启动桥接
-node src\\index.js
-
-# 4) 打开控制台
-node src\\webui\\server.mjs   # 然后访问 http://127.0.0.1:5830
-\`\`\`
-
-也可以双击 \`launcher\\一键启动.cmd\`（托盘版，会依次拉起 NapCat → 桥接 → 控制台 → DSH）。
-
-## 配置
-
-见 \`config.example.json\`，每个字段都有注释式说明写在 \`docs/控制台架构.md\` 与 \`README.md\`（本文件由导出脚本生成，更完整的说明在导出的 \`README.md\` 之外的 \`docs/\`）。
-
-关键字段：\`onebot.url\`、\`security.allowFrom\`（主人 QQ）、\`security.allowGroupIds\`、\`behavior.wakeWord\`、\`dsh.command\` = \`dsh\`、\`memory.root\`（Obsidian 库路径）。
-
-## 测试
-
-在未创建 \`config.json\` 的干净源码目录运行。真实内核默认 DSH \`0.2.0-rc.2\`，可显式选择新版，浏览器检查使用 Edge。
-
-\`\`\`powershell
-$env:QQ_TEST_DSH_COMMAND = 'dsh' # 已安装 0.2.0-rc.2 的命令，也可填写 lib\\bin.js 的绝对路径
-$env:QQ_TEST_DSH_VERSION = '0.2.0-rc.2' # 必须与上述入口匹配；受控兼容范围见 docs/releases/v3.2.0-verification.md
-$env:QQ_TEST_BROWSER_EXE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
-node tests\\run-all.mjs
-node tests\\plugins-test.mjs # 单跑插件宿主
-\`\`\`
-
-全量套件使用临时配置与 DSH_HOME、假 NapCat 和本机模型端点，不需要真实 QQ 账号或在线模型密钥。真实 NapCat、Docker 和 Electron 桌面验证按各测试的要求单独执行。
-
-## v3.1.3 安全与运行修复
-
-命令行启停核对本安装的入口脚本；修复自定义配置文件名、命令行与环境变量优先级，以及相对环境路径。私聊黑名单模式不再绕过群成员白名单；过期限流记录定期清理，活跃额度保留。NapCat 健康工作线程不继承测试入口参数。
-
-本版历史修复使用模拟 NapCat、隔离配置与测试进程验证；详见 [v3.1.3 发行说明](docs/releases/v3.1.3.md)。这些历史结果不代表 v3.2.0 的全量验证。
-
-## v3.1.2 修复与验证范围
-
-本版修复原会话的模型与思考档位切换，控制台区分目标、实际、待应用与失败；保存合法目标后下一条 QQ 消息应用并同步已打开页面，选择失败不继续使用旧模型。改进 NapCat 实际登录检测、安装归属、端口冲突恢复与脱敏健康日志。
-
-真实隔离 Electron 24/24、DSH Web + Edge 19/19、companion 55/55、独立宿主 13/13 通过；其他专项结果见验证说明，不把旧版全量结果计为本版全量验证。真实只读检查覆盖 QQ 在线和一次 NapCat 快速登录恢复，不发送真实 QQ 验收消息。
-
-**未完成**：真实 QQ 文字/语音投递、QQ 定时推送、B站实际评论与 @、长期真实群聊判定，以及完整工作日登录稳定性、网络切换、休眠及 Windows 用户注销恢复，本版 Docker 和其他系统。语音与平台功能沿用旧版的未实测边界；不能承诺永久免重新授权，也不自动启用自启。
-
-详见[功能配置](docs/automation-and-voice.md)和 [v3.1.2 发行说明](docs/releases/v3.1.2.md)。历史说明保留于 [v3.1.0](docs/releases/v3.1.0.md) 和 [v3.1.1](docs/releases/v3.1.1.md)；这两个标签未创建正式 Release。
-
-## 插件
-
-\`\`\`js
-export const meta = {
-  name: 'ping',
-  displayName: 'Ping',
-  version: '1.0.0',
-  description: '收到 /ping 时回一句',
-  configSchema: [{ key: 'reply', type: 'string', label: '回复', default: 'pong' }],
-};
-export async function onMessage(ctx) {
-  if (!ctx.text.startsWith('/ping')) return;
-  await ctx.reply(ctx.config.reply);
-  return { handled: true };
-}
-\`\`\`
-
-三个钩子：\`onMessage\` / \`beforeReply\` / \`afterReply\`；插件按文件名排序，异常只记日志。详见 \`docs/控制台架构.md\`。
-
-另有默认关闭的 AstrBot 插件兼容运行时，支持 Windows 专用 Python 与 NAS 可选容器。安装、群授权、模型和调度边界见 [AstrBot 插件说明](docs/astrbot.md)；受控验证范围见 [v3.2.0 匿名验收摘要](docs/releases/v3.2.0-verification.md)，不代表全部插件兼容。
-
-## 目录
-
-\`\`\`
-src/         桥接主体（index / onebot / dsh / security / memory / groupmem / plugins / model-follow）
-src/webui/   控制台（零依赖 HTTP + Material 3 前端）
-src/plugins/ 插件
-launcher/    Windows 托盘（PowerShell 5.1 + WinForms）
-tools/       命令行工具（qq / memory / model / reflect / export-public）
-tests/       自测（假 NapCat、假 dsh、CDP 真渲染）
-docs/        架构与测试清单
-\`\`\`
-
-## 许可
-
-MIT，见 \`LICENSE\`。QQ 协议端是第三方项目，按其自身许可使用。
-`;
 
 const GITIGNORE = `# 私有配置与运行产物
 config.json
@@ -464,16 +340,8 @@ async function safeOutputDirectory(value) {
 }
 
 async function publicReadme() {
-  const source = await fsp.readFile(path.join(ROOT, 'README.md'), 'utf8');
-  const startMarker = '<!-- showcase:start -->';
-  const endMarker = '<!-- showcase:end -->';
-  const start = source.indexOf(startMarker);
-  const end = source.indexOf(endMarker, start);
-  if (start < 0 || end < 0) throw new Error('README.md 缺少完整的 showcase 展示区标记');
-  const showcase = source.slice(start, end + endMarker.length);
-  const marker = '<!-- exported-showcase -->';
-  if (!PUBLIC_README.includes(marker)) throw new Error('PUBLIC_README 缺少导出展示区插入标记');
-  return PUBLIC_README.replace(marker, redact(showcase));
+  // Keep the reviewed source documentation instead of regenerating stale release guidance.
+  return redact(await fsp.readFile(path.join(ROOT, 'README.md'), 'utf8'));
 }
 
 /** 复制一个文件；文本文件顺便脱敏，.ps1 保持 BOM */

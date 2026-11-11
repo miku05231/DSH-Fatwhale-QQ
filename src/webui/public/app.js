@@ -5,7 +5,15 @@
 
 import { createLogView } from './logs.js';
 
-const BASE = globalThis.__QQ_BRIDGE_BASE__ || '';
+const BASE = document.querySelector('meta[name="qq-bridge-base"]')?.content || '';
+
+function consoleMode() {
+  const explicit = /(?:^|[?&])mode=(embed|full)(?:&|$)/.exec(String(globalThis.location?.search || ''))?.[1];
+  if (explicit) return explicit;
+  try { return window.self !== window.top ? 'embed' : 'full'; }
+  catch { return 'embed'; }
+}
+const EMBED = consoleMode() === 'embed';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -255,6 +263,9 @@ const PAGES = {
 };
 
 function setPage(name, { push = true } = {}) {
+  const legacy = name === 'memes';
+  if (legacy) name = 'stickers';
+  if (EMBED) name = 'overview';
   if (!PAGES[name]) return;
   if (STATE.page === 'automation' && name !== 'automation') stopBiliQrLogin({ notify: false });
   STATE.page = name;
@@ -268,11 +279,11 @@ function setPage(name, { push = true } = {}) {
     else el.removeAttribute('aria-current');
   });
 
-  $('#appTitle').textContent = PAGES[name].title;
+  $('#appTitle').textContent = EMBED ? '大肥鱼 · QQ 桥接' : PAGES[name].title;
   $('#appSubtitle').textContent = PAGES[name].subtitle;
   document.title = `${PAGES[name].title} · 大肥鱼控制台`;
 
-  if (push && location.hash !== `#${name}`) {
+  if ((push || legacy) && location.hash !== `#${name}`) {
     history.replaceState(null, '', `#${name}`);
   }
 
@@ -334,7 +345,7 @@ function serviceCard({ key, name, running, badge, tone, meta, actions }) {
     <div class="svc__actions"></div>
   `;
   const box = $('.svc__actions', card);
-  for (const action of actions) {
+  for (const action of EMBED ? [] : actions) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = `btn ripple ${action.kind === 'primary' ? 'btn--tonal' : 'btn--text'}`;
@@ -378,7 +389,7 @@ function renderServiceCards(overview) {
       running: bridge.running,
       badge: bridge.running ? (bridge.connected ? '已连接' : '未连接') : '未运行',
       tone: bridge.running ? (bridge.connected ? 'ok' : 'warn') : 'bad',
-      meta: `PID ${bridge.pid || '—'} · 会话 ${bridge.sessions} · 队列 ${bridge.queueDepth}${bridge.inFlight ? ` · 处理中 ${bridge.inFlight}` : ''}`,
+      meta: `${bridge.runMode === 'embedded' ? '进程内' : `PID ${bridge.pid || '—'}`} · 会话 ${bridge.sessions} · 队列 ${bridge.queueDepth}${bridge.inFlight ? ` · 处理中 ${bridge.inFlight}` : ''}${bridge.lastError ? ` · ${escapeHtml(bridge.lastError)}` : ''}`,
       actions: [
         bridge.running
           ? { label: '停止', action: 'stop' }
@@ -433,7 +444,13 @@ async function runServiceAction(name, action, label) {
 }
 
 function setStatusChip(overview) {
-  const tone = statusTone(overview);
+  const control = EMBED ? HUD.bridgeStatus : null;
+  const bridge = control ? {
+    ...overview?.bridge, running: control.running,
+    ...(control.mode !== 'standalone' && typeof control.connected === 'boolean' ? { connected: control.connected } : {}),
+    ...(!control.running ? { connected: false } : {}),
+  } : overview?.bridge;
+  const tone = statusTone(bridge ? { ...overview, bridge } : overview);
   const dot = $('#statusDot');
   const text = $('#statusText');
   if (dot) dot.dataset.state = tone.state;
@@ -458,6 +475,7 @@ async function loadOverview() {
   stat('#statMessages', String(Number(data.today?.messages) || 0));
   stat('#statSessions', String(Number(data.bridge?.sessions) || 0));
   stat('#overviewTime', clockTime(data.now));
+  updateHudBridgeButtons();
 
   return data;
 }
@@ -2076,6 +2094,7 @@ const logView = createLogView({
   isActive: () => ['overview', 'system'].includes(STATE.page) && document.visibilityState === 'visible',
   getBox: () => STATE.page === 'overview' ? $('#overviewLog') : $('#logBox'),
   getStatus: () => STATE.page === 'system' ? $('#logStatus') : null,
+  getAutoFollow: () => STATE.page === 'overview' ? $('#overviewLogFollow')?.checked !== false : undefined,
 });
 
 function loadLogs() { return logView.refresh(); }
@@ -2676,6 +2695,302 @@ function initPullToRefresh() {
   );
 }
 
+/* --------------------------------------------------------- 内嵌快捷控制 */
+
+const HUD = { model: null, modelDirty: false, modelError: '', modelSaving: false, modelRequest: 0, personas: null, settings: null, stickerPercentInitial: '', bridgeBusy: false, bridgeStatus: null, bridgeRequest: 0 };
+
+function updateHudBridgeButtons() {
+  if (!EMBED) return;
+  const known = typeof HUD.bridgeStatus?.running === 'boolean';
+  const running = HUD.bridgeStatus?.running === true;
+  for (const [id, disabled] of [['#hudBridgeStart', running], ['#hudBridgeStop', !running], ['#hudBridgeRestart', !running]]) {
+    const button = $(id);
+    if (button) button.disabled = !known || HUD.bridgeBusy || disabled;
+  }
+}
+
+async function loadHudBridgeStatus() {
+  if (!EMBED || HUD.bridgeBusy) return;
+  const request = ++HUD.bridgeRequest;
+  try {
+    const status = await api('/api/bridge');
+    if (request !== HUD.bridgeRequest || HUD.bridgeBusy) return;
+    if (typeof status?.running !== 'boolean') throw new Error('宿主未提供控制状态');
+    HUD.bridgeStatus = status;
+    $('#hudBridgeError').hidden = true;
+    if (STATE.overview) setStatusChip(STATE.overview);
+  } catch (err) {
+    if (request !== HUD.bridgeRequest || HUD.bridgeBusy) return;
+    HUD.bridgeStatus = null;
+    $('#hudBridgeError').textContent = `桥接控制暂不可用：${err.message}`;
+    $('#hudBridgeError').hidden = false;
+  }
+  updateHudBridgeButtons();
+}
+
+async function actHudBridge(action) {
+  if (HUD.bridgeBusy) return;
+  HUD.bridgeBusy = true;
+  HUD.bridgeRequest += 1;
+  updateHudBridgeButtons();
+  try {
+    if (action === 'restart') await api('/api/bridge/stop', { method: 'POST', body: '{}' });
+    const status = await api(`/api/bridge/${action === 'restart' ? 'start' : action}`, { method: 'POST', body: '{}' });
+    HUD.bridgeStatus = status;
+    if (status?.running !== (action !== 'stop')) throw new Error(status?.lastError || (action === 'stop' ? '桥接仍在运行' : '桥接未能启动'));
+    snackbar({ start: '桥接已启动', stop: '桥接已停止', restart: '桥接已重启' }[action]);
+  } catch (err) {
+    snackbar(`操作失败：${err.message}`, { duration: 5200 });
+  } finally {
+    HUD.bridgeBusy = false;
+    await Promise.allSettled([loadOverview(), loadHudBridgeStatus()]);
+    updateHudBridgeButtons();
+  }
+}
+
+async function openFullConsole(page, button) {
+  const canonical = page === 'memes' ? 'stickers' : page;
+  if (!PAGES[canonical]) return;
+  if (!EMBED) { setPage(canonical); return; }
+  if (button) button.disabled = true;
+  try {
+    await api('/api/console/open', { method: 'POST', body: JSON.stringify({ page: canonical }) });
+    snackbar('已在默认浏览器打开');
+  } catch (err) {
+    snackbar(`打开失败：${err.message}`, { duration: 5200 });
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function loadHudPersonas() {
+  const select = $('#hudPersona');
+  if (!select) return;
+  try {
+    const data = await api('/api/personas');
+    HUD.personas = data;
+    const names = [...new Set(['', ...(data.items || []).map((item) => item.name), ...(data.active ? [data.active] : [])])];
+    fillSelect(select, names, data.active || '');
+    select.options[0].textContent = '默认文件';
+    select.disabled = !(data.items || []).length;
+    $('#hudPersonaHint').textContent = select.disabled ? '暂无人格库，可在完整版创建' : '会话专属人格仍优先';
+  } catch (err) {
+    select.disabled = true;
+    $('#hudPersonaHint').textContent = `读取失败：${err.message}`;
+  }
+}
+
+async function saveHudPersona() {
+  const select = $('#hudPersona');
+  if (!select || select.disabled) return;
+  const name = select.value;
+  select.disabled = true;
+  try {
+    const data = await api('/api/personas/active', { method: 'PUT', body: JSON.stringify({ name }) });
+    HUD.personas = { ...HUD.personas, active: data.active || '' };
+    $('#hudPersonaHint').textContent = '已切换全局默认，会话专属人格仍优先';
+  } catch (err) {
+    select.value = HUD.personas?.active || '';
+    $('#hudPersonaHint').textContent = `切换失败：${err.message}`;
+    snackbar(`人格切换失败：${err.message}`, { duration: 5200 });
+  } finally {
+    select.disabled = !(HUD.personas?.items || []).length;
+  }
+}
+
+async function loadHudStickerSettings() {
+  try {
+    const data = await api('/api/settings');
+    HUD.settings = data;
+    const enabled = data.stickers?.enabled !== false;
+    const percent = (Number(data.stickers?.sendProbability) || 0) * 100;
+    HUD.stickerPercentInitial = String(Number(percent.toPrecision(15)));
+    $('#hudStickerProbability').value = HUD.stickerPercentInitial;
+    $('#hudStickerProbability').disabled = !enabled;
+    $('#hudStickerApply').disabled = !enabled;
+    $('#hudStickerHint').textContent = enabled ? '0% 暂停自动发送，保留收集设置' : '表情库已停用，可在完整版启用';
+  } catch (err) {
+    $('#hudStickerApply').disabled = true;
+    $('#hudStickerHint').textContent = `读取失败：${err.message}`;
+  }
+}
+
+async function saveHudStickerProbability() {
+  const input = $('#hudStickerProbability');
+  const percent = Number(input?.value);
+  if (!input || input.value.trim() === '' || !Number.isFinite(percent) || percent < 0 || percent > 100) {
+    $('#hudStickerHint').textContent = '请输入 0–100 的百分比';
+    input?.focus();
+    return;
+  }
+  const button = $('#hudStickerApply');
+  const submittedPercent = input.value;
+  const probability = input.value === HUD.stickerPercentInitial && Number.isFinite(HUD.settings?.stickers?.sendProbability)
+    ? HUD.settings.stickers.sendProbability : percent / 100;
+  button.disabled = true;
+  try {
+    await api('/api/settings', { method: 'PUT', body: JSON.stringify({ stickers: { sendProbability: probability } }) });
+    HUD.settings = { ...HUD.settings, stickers: { ...HUD.settings?.stickers, sendProbability: probability } };
+    HUD.stickerPercentInitial = submittedPercent;
+    $('#hudStickerHint').textContent = percent === 0 ? '已暂停自动发送，收集设置保留' : `自动发送概率已设为 ${percent}%，约 15 秒内生效`;
+  } catch (err) {
+    $('#hudStickerHint').textContent = `保存失败：${err.message}`;
+  } finally {
+    button.disabled = HUD.settings?.stickers?.enabled === false;
+  }
+}
+
+function showHudModelStatus() {
+  const node = $('#hudModelStatus');
+  if (!node) return;
+  const data = HUD.model;
+  const error = HUD.modelError || data?.applicationError?.message || (data?.validation?.status === 'invalid' ? data.validation.message : '');
+  node.dataset.state = error ? 'error' : data?.application || 'pending';
+  if (error) node.textContent = `${HUD.modelError ? '未保存' : '应用失败'}：${error}`;
+  else if (HUD.modelDirty) node.textContent = '尚未应用 · 当前请求保持原模型，下一次出队应用';
+  else if (data) {
+    const target = data.effective;
+    const saved = target ? `${target.provider}/${target.model}` : '跟随 DSH';
+    node.textContent = `${data.application === 'applied' ? '已生效' : '已保存 · 待下一次出队生效'}：${saved}`;
+  }
+  const applied = data?.applied;
+  $('#hudModelApplied').textContent = applied
+    ? `最近实际使用：${applied.provider}/${applied.model} · ${applied.reasoningEffort || '默认强度'} · ${relTime(applied.at)}`
+    : '最近实际使用：尚无宿主回执';
+  node.title = node.textContent;
+  $('#hudModelApplied').title = $('#hudModelApplied').textContent;
+}
+
+function updateHudModelFields({ preserveInvalid = false } = {}) {
+  const mode = $('#hudModelMode')?.value;
+  const provider = $('#hudModelProvider')?.value;
+  const model = $('#hudModelModel')?.value;
+  const effort = $('#hudModelEffort');
+  if (!effort) return;
+  const reasoning = HUD.model?.modelCapabilities?.find((item) => item.provider === provider && item.model === model)?.reasoning || { status: 'unknown', efforts: [] };
+  const efforts = reasoning.status === 'none' ? [] : reasoning.status === 'known' ? reasoning.efforts : HUD.model?.efforts || [];
+  const selected = effort.value;
+  const invalid = Boolean(selected && !efforts.includes(selected));
+  fillSelect(effort, ['', ...efforts, ...(invalid && preserveInvalid ? [selected] : [])], invalid && !preserveInvalid ? '' : selected);
+  effort.options[0].textContent = reasoning.status === 'none' ? '不适用' : reasoning.status === 'unknown' ? '默认（待验证）' : '模型默认';
+  if (invalid && preserveInvalid) effort.options[effort.options.length - 1].textContent = `${selected}（无效）`;
+  const manual = mode === 'manual';
+  $('#hudModelMode').disabled = HUD.modelSaving || !HUD.model;
+  $('#hudModelProvider').disabled = HUD.modelSaving || !manual;
+  $('#hudModelModel').disabled = HUD.modelSaving || !manual;
+  effort.disabled = HUD.modelSaving || !manual || (reasoning.status === 'none' && !(invalid && preserveInvalid));
+  $('#hudModelApply').disabled = HUD.modelSaving || !HUD.model || (manual && (!provider || !model || (invalid && preserveInvalid)));
+  showHudModelStatus();
+}
+
+function renderHudModel(data, preserveDraft) {
+  HUD.model = data;
+  if (!preserveDraft) {
+    const manual = data.manual || data.desktop || data.effective || {};
+    const providers = data.providers || [];
+    $('#hudModelMode').value = data.mode === 'manual' ? 'manual' : 'follow';
+    fillSelect($('#hudModelProvider'), [...new Set([...providers.map((item) => item.id), ...(manual.provider ? [manual.provider] : [])])], manual.provider);
+    const current = providers.find((item) => item.id === manual.provider);
+    fillSelect($('#hudModelModel'), [...new Set([...(current?.models || []), ...(manual.model ? [manual.model] : [])])], manual.model);
+    fillSelect($('#hudModelEffort'), [manual.reasoningEffort || ''], manual.reasoningEffort || '');
+  }
+  updateHudModelFields({ preserveInvalid: true });
+}
+
+async function loadHudModel({ preserveDraft = false } = {}) {
+  if (HUD.modelSaving) return;
+  const request = ++HUD.modelRequest;
+  try {
+    const data = await api('/api/model');
+    if (request !== HUD.modelRequest || HUD.modelSaving) return;
+    if (data?.error) throw new Error(data.error);
+    renderHudModel(data, preserveDraft && (HUD.modelDirty || HUD.modelSaving));
+  } catch (err) {
+    if (request !== HUD.modelRequest || HUD.modelSaving) return;
+    const node = $('#hudModelStatus');
+    if (node) { node.textContent = `模型读取失败：${err.message}`; node.dataset.state = 'error'; }
+  }
+}
+
+async function saveHudModel(event) {
+  event?.preventDefault();
+  if (HUD.modelSaving || $('#hudModelApply')?.disabled) return;
+  const mode = $('#hudModelMode').value;
+  const body = { mode };
+  if (mode === 'manual') {
+    body.manual = { provider: $('#hudModelProvider').value, model: $('#hudModelModel').value };
+    const effort = $('#hudModelEffort').value;
+    if (effort) body.manual.reasoningEffort = effort;
+  }
+  HUD.modelSaving = true;
+  HUD.modelRequest += 1;
+  HUD.modelError = '';
+  updateHudModelFields({ preserveInvalid: true });
+  try {
+    const data = await api('/api/model', { method: 'PUT', body: JSON.stringify(body) });
+    HUD.modelDirty = false;
+    renderHudModel(data, false);
+  } catch (err) {
+    HUD.modelError = err.message;
+    showHudModelStatus();
+  } finally {
+    HUD.modelSaving = false;
+    updateHudModelFields({ preserveInvalid: true });
+  }
+}
+
+function loadHudControls() {
+  updateHudBridgeButtons();
+  return Promise.allSettled([loadHudBridgeStatus(), loadHudPersonas(), loadHudModel(), loadHudStickerSettings()]);
+}
+
+function observeEmbeddedHeight() {
+  if (!EMBED || typeof ResizeObserver !== 'function' || !window.parent) return;
+  let lastHeight = 0;
+  const publish = () => {
+    const height = Math.ceil(document.body?.scrollHeight || 0);
+    if (height === lastHeight || height < 1) return;
+    lastHeight = height;
+    window.parent.postMessage({ type: 'qq-bridge:resize', height }, '*');
+  };
+  const observer = new ResizeObserver(publish);
+  observer.observe(document.body);
+  window.addEventListener('pagehide', () => observer.disconnect(), { once: true });
+  publish();
+}
+
+function initConsoleControls() {
+  for (const action of ['start', 'stop', 'restart']) $(`#hudBridge${action[0].toUpperCase()}${action.slice(1)}`)?.addEventListener('click', () => actHudBridge(action));
+  $$('[data-open-page]').forEach((button) => button.addEventListener('click', () => openFullConsole(button.dataset.openPage, button)));
+  $('#hudPersona')?.addEventListener('change', saveHudPersona);
+  $('#hudStickerApply')?.addEventListener('click', saveHudStickerProbability);
+  $('#hudModelForm')?.addEventListener('submit', saveHudModel);
+  for (const id of ['#hudModelMode', '#hudModelProvider', '#hudModelModel', '#hudModelEffort']) {
+    $(id)?.addEventListener('change', () => {
+      HUD.modelDirty = true;
+      HUD.modelError = '';
+      if (id === '#hudModelProvider') {
+        const provider = HUD.model?.providers?.find((item) => item.id === $('#hudModelProvider').value);
+        fillSelect($('#hudModelModel'), provider?.models || [], provider?.models?.[0]);
+      }
+      updateHudModelFields();
+    });
+  }
+  const follow = $('#overviewLogFollow');
+  const box = $('#overviewLog');
+  box?.addEventListener('wheel', (event) => { if (event.deltaY < 0 && follow) follow.checked = false; }, { passive: true });
+  box?.addEventListener('scroll', () => {
+    if (follow && box.scrollHeight - box.scrollTop - box.clientHeight > 36) follow.checked = false;
+  }, { passive: true });
+  follow?.addEventListener('change', () => { if (follow.checked && box) box.scrollTop = box.scrollHeight; });
+  $('#overviewLogRefresh')?.addEventListener('click', () => logView.refresh());
+  $('#overviewLogClear')?.addEventListener('click', () => logView.clearDisplay().catch((err) => snackbar(err.message)));
+  $('#overviewLogCopy')?.addEventListener('click', async () => {
+    try { await logView.copy((text) => navigator.clipboard.writeText(text)); snackbar('已复制当前日志'); }
+    catch (err) { snackbar(`复制失败：${err.message}`, { duration: 5200 }); }
+  });
+}
+
 /* -------------------------------------------------------------- 初始化 */
 
 function initEvents() {
@@ -2925,11 +3240,12 @@ function initEvents() {
   // 前后跳转
   window.addEventListener('hashchange', () => {
     const name = location.hash.replace(/^#/, '');
-    if (PAGES[name] && name !== STATE.page) setPage(name, { push: false });
+    if ((PAGES[name] || name === 'memes') && name !== STATE.page) setPage(name, { push: false });
   });
 }
 
 function init() {
+  document.body?.classList?.add(EMBED ? 'mode-embed' : 'mode-full');
   void import('./imagegen.js').then(({ initImagegen }) => {
     imagegenUi = initImagegen({ api, notify: snackbar, confirm: confirmDialog });
   }).catch((err) => snackbar(err.message));
@@ -2938,12 +3254,17 @@ function init() {
     if (STATE.page === 'plugins') astrbotUi.load();
   }).catch((err) => snackbar(err.message));
   initEvents();
+  initConsoleControls();
   initRipples();
-  initPullToRefresh();
+  if (!EMBED) initPullToRefresh();
 
   const initial = location.hash.replace(/^#/, '');
-  setPage(PAGES[initial] ? initial : 'overview', { push: false });
-  loadUpdates();
+  setPage(PAGES[initial] || initial === 'memes' ? initial : 'overview', { push: false });
+  if (!EMBED) loadUpdates();
+  else {
+    void loadHudControls();
+    observeEmbeddedHeight();
+  }
 
   document.addEventListener('visibilitychange', () => {
     if (STATE.page === 'system' && document.visibilityState === 'visible') void loadLogs();
@@ -2956,6 +3277,8 @@ function init() {
   window.setInterval(() => {
     if (STATE.page === 'overview' && document.visibilityState === 'visible') {
       loadOverview().catch(() => {});
+      if (EMBED) void loadHudModel({ preserveDraft: true });
+      if (EMBED) void loadHudBridgeStatus();
     }
   }, 8000);
 }

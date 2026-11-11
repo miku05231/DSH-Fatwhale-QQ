@@ -54,6 +54,11 @@ const INCLUDE_FILES = [
 const PUBLIC_DOC_DIRS = ['docs/screenshots'];
 const PUBLIC_DOC_FILES = [
   'docs/astrbot.md',
+  'docs/console.md',
+  'docs/releases/v3.3.0-verification.md',
+  'docs/releases/images/console-ui-20261110/embedded-light.png',
+  'docs/releases/images/console-ui-20261110/embedded-dark.png',
+  'docs/releases/images/console-ui-20261110/full-overview.png',
   'docs/控制台架构.md',
   'docs/测试清单.md',
   'docs/Docker部署.md',
@@ -261,15 +266,16 @@ if exist "config.json" (
 ) else (
   copy /y "config.example.json" "config.json" >nul
   echo [i] Created config.json from config.example.json.
-  echo [i] Edit it first: security.allowFrom / allowGroupIds / denyFrom / denyGroupIds
+  echo [i] Edit onebot.url, security.allowFrom, security.adminUserIds and group access first.
 )
 
 echo.
 echo [i] Next steps:
-echo     1^) Install NapCat 4.x Shell package into the napcat\\ folder
-echo        ^(see README.md - https://github.com/NapNeko/NapCatQQ^)
-echo     2^) Double-click 一键启动.cmd
-echo     3^) The console opens at http://127.0.0.1:5830
+echo     1^) Prepare NapCat with a host-reachable OneBot WebSocket. Docker is optional.
+echo     2^) Install src\\companion as a full bundle in host DSH, enable it and restart DSH.
+echo     3^) Open the plugin panel, then the full console. See README.md for profile setup.
+echo [i] Do not start a standalone launcher alongside the plugin bridge.
+echo [i] Legacy standalone setup is optional; use README.md when choosing that mode.
 echo.
 pause
 exit /b 0

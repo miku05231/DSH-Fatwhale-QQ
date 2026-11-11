@@ -16,6 +16,7 @@
 // 单独调试：node src\webui\server.mjs
 
 import http from 'node:http';
+import { CONSOLE_PAGES } from '../companion/lib/local-console.js';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -591,28 +592,29 @@ export function normalizeNapcatWebUi(raw) {
   }
 }
 /**
- * 配置文件路径：优先环境变量 QQ_CONFIG（容器里配置单独挂一个目录），
+ * 配置文件路径：优先显式参数，再环境变量 QQ_CONFIG（容器里配置单独挂一个目录），
  * 否则用 <项目根>/config.json。
  * @param {string} root 项目根目录
  * @returns {string}
  */
-function configFileOf(root) {
+function configFileOf(root, explicit = '') {
+  if (typeof explicit === 'string' && explicit.trim()) return path.resolve(root, explicit.trim());
   const raw = typeof process.env.QQ_CONFIG === 'string' ? process.env.QQ_CONFIG.trim() : '';
   return raw === '' ? path.join(root, 'config.json') : path.resolve(raw);
 }
 
 export function createWebUiServer({
-  config = {}, configRoot, log, port = DEFAULT_PORT, host = '127.0.0.1', updateManager,
+  config = {}, configRoot, configFile = '', log, port = DEFAULT_PORT, host = '127.0.0.1', updateManager,
   openPath = openLocalPath, openUrl = openExternalUrl, platformControl, platformQrLogin, napcatHealth,
   astrbotManager, astrbotPolicy, astrbotProxySecret = process.env.CONSOLE_PASSWORD_SHA256,
-  publicBase = '', bridgeControl = null,
+  publicBase = '', bridgeControl = null, openConsole = null,
 } = {}) {
   const root = path.resolve(text(configRoot) || PROJECT_ROOT);
   const basePort = Number.isInteger(Number(port)) && Number(port) > 0 ? Number(port) : DEFAULT_PORT;
 
   const stateDir = resolveFrom(root, config?.stateDir ?? 'state');
   const logDir = resolveFrom(root, config?.logDir ?? 'logs');
-  const configPath = configFileOf(root);
+  const configPath = configFileOf(root, configFile);
   // 人格 / 记忆 / 工作区都支持自定义路径：每次按当前配置解析，改完不用重启控制台
   const personaFilePath = () => resolvePersonaPath({ configRoot: root, config });
   const memoryRootDir = () => resolveMemoryRoot({ configRoot: root, config });
@@ -895,11 +897,14 @@ export function createWebUiServer({
     ]);
 
     const { names } = snapshot;
-    const bridgeAlive = snapshot.bridgeRunning === undefined
-      ? (isPidAlive(bridgePid) && statusFresh)
-      : snapshot.bridgeRunning;
+    const embeddedBridge = status?.runMode === 'embedded';
+    const bridgeAlive = embeddedBridge
+      ? Boolean(statusFresh && (Number(status?.pid) || 0) > 0)
+      : snapshot.bridgeRunning === undefined
+        ? (isPidAlive(bridgePid) && statusFresh)
+        : snapshot.bridgeRunning;
     const bridgeConnected = Boolean(bridgeAlive && statusFresh && status?.connected === true
-      && (snapshot.bridgePid === undefined || snapshot.bridgePid === bridgePid));
+      && (embeddedBridge || snapshot.bridgePid === undefined || snapshot.bridgePid === bridgePid));
     const napcatRunning = Boolean(snapshot.napcatRunning || health.reachable);
     // DSH 有两种运行形态：Windows 桌面端常驻进程，或容器里的按需 headless 运行时。
     // 后者本来就不会常驻，不能按进程名判断，否则永远显示“未运行”。
@@ -924,7 +929,8 @@ export function createWebUiServer({
       },
       bridge: {
         running: bridgeAlive,
-        pid: snapshot.bridgePid ?? bridgePid,
+        pid: embeddedBridge ? (Number(status?.pid) || bridgePid) : (snapshot.bridgePid ?? bridgePid),
+        runMode: embeddedBridge ? 'embedded' : 'standalone',
         connected: bridgeConnected,
         statusFresh,
         startedAt: status?.startedAt ?? null,
@@ -2266,6 +2272,22 @@ export function createWebUiServer({
     if (!SERVICE_NAMES.includes(name)) return fail(res, 404, `未知服务：${name}`);
     if (!SERVICE_ACTIONS.includes(action)) return fail(res, 400, `未知操作：${action}`);
 
+    // All plugin bridge controls share its controller, including legacy full-UI
+    // buttons. ProcessControl must never stop the embedded DSH host by its PID.
+    if (name === 'bridge' && bridgeControl) {
+      try {
+        let state;
+        if (action !== 'start') state = await bridgeControl.stop();
+        if (action !== 'stop') state = await bridgeControl.start();
+        if (action !== 'stop' && state?.running !== true) {
+          return fail(res, 500, state?.lastError || '桥接没有启动');
+        }
+        return ok(res, { ...state, message: `桥接${{ start: '已启动', stop: '已停止', restart: '已重启' }[action]}` });
+      } catch (error) {
+        return fail(res, 500, error?.message || '桥接操作失败');
+      }
+    }
+
     const id = `svc-${stamp()}-${randomUUID().slice(0, 8)}`;
     const ps1Path = path.join(webuiTmpDir, `${id}.ps1`);
     const resultPath = path.join(webuiTmpDir, `${id}.json`);
@@ -2349,13 +2371,14 @@ export function createWebUiServer({
     try {
       let buf = await fsp.readFile(abs);
       if (basePrefix && abs.endsWith(`${path.sep}index.html`)) {
-        const prefix = JSON.stringify(basePrefix);
+        const prefix = basePrefix.replaceAll('&', '&amp;').replaceAll('"', '&quot;')
+          .replaceAll('<', '&lt;').replaceAll('>', '&gt;');
         let html = buf.toString('utf8');
-        html = html.replaceAll('href="/', `href="${basePrefix}/`);
-        html = html.replaceAll('src="/', `src="${basePrefix}/`);
+        html = html.replaceAll('href="/', () => `href="${prefix}/`);
+        html = html.replaceAll('src="/', () => `src="${prefix}/`);
         html = html.replace(
-          `<script src="${basePrefix}/app.js" type="module"></script>`,
-          `<script>globalThis.__QQ_BRIDGE_BASE__=${prefix}</script>\n  <script src="${basePrefix}/app.js" type="module"></script>`,
+          '<meta name="qq-bridge-base" content="" />',
+          () => `<meta name="qq-bridge-base" content="${prefix}" />`,
         );
         buf = Buffer.from(html, 'utf8');
       }
@@ -2603,10 +2626,20 @@ export function createWebUiServer({
       return serveStatic(url.pathname, res);
     }
 
+    if (pathname === '/api/console/open') {
+      if (method !== 'POST') return fail(res, 405, '只支持 POST');
+      if (!openConsole) return fail(res, 503, '请从 DSH 插件面板打开完整版控制台');
+      const body = await readJsonBody(req);
+      if (Object.keys(body).length !== 1 || !CONSOLE_PAGES.includes(body.page)) {
+        return fail(res, 400, '只允许指定控制台页面');
+      }
+      return ok(res, await openConsole(body.page));
+    }
+
     if (pathname === '/api/bridge' || pathname === '/api/bridge/start' || pathname === '/api/bridge/stop') {
       if (!bridgeControl) return fail(res, 404, '当前控制台没有桥接启停接口');
       if (pathname === '/api/bridge' && method === 'GET') return ok(res, bridgeControl.status());
-      if (pathname === '/api/bridge/start' && method === 'POST') return ok(res, bridgeControl.start());
+      if (pathname === '/api/bridge/start' && method === 'POST') return ok(res, await bridgeControl.start());
       if (pathname === '/api/bridge/stop' && method === 'POST') return ok(res, await bridgeControl.stop());
       return fail(res, 405, '桥接启停只支持 GET /api/bridge、POST /api/bridge/start 和 POST /api/bridge/stop');
     }

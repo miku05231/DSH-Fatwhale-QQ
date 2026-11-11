@@ -150,7 +150,7 @@ async function pluginFixture({
   if (historicalSessions !== undefined) {
     fs.writeFileSync(sessionMapPath, JSON.stringify(historicalSessions));
   }
-  let dispose;
+  const disposers = [];
   let started;
   const promptStarted = new Promise((resolve) => { started = resolve; });
   let flushed;
@@ -255,9 +255,11 @@ async function pluginFixture({
       warn: (line) => calls.warnings.push(line),
       info: (line) => { if (line.includes('已把')) historyAttached(); },
     },
-    effect: (register) => { dispose = register(); },
+    effect: (register) => { disposers.push(register()); },
   }, {
     discoveryPath: pluginDiscovery,
+    projectRoot: ROOT,
+    runMode: 'standalone',
     ...(promptTimeoutMs ? { promptTimeoutMs } : {}),
     ...(historicalSessions === undefined ? {} : { workspacePath: tmp, sessionMapPath }),
   });
@@ -270,7 +272,14 @@ async function pluginFixture({
     sessionFlushed,
     historyFinished,
     session,
-    dispose,
+    dispose() {
+      const pending = [];
+      while (disposers.length) {
+        const disposeOne = disposers.pop();
+        if (typeof disposeOne === 'function') pending.push(Promise.resolve(disposeOne()));
+      }
+      return Promise.allSettled(pending);
+    },
   };
 }
 
@@ -733,7 +742,7 @@ await okAsync('真实插件：历史挂载仅包含已存在的桌面会话，�
     assert.equal(fixture.calls.created, 0);
     assert.equal(fixture.calls.prompted, 0);
   } finally {
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 
@@ -747,7 +756,7 @@ await okAsync('真实插件：正常完成返回最终文本且不执行取消',
     assert.equal(fixture.calls.flushed, 1);
     assert.deepEqual(fixture.calls.permissions, ['workspace-write']);
   } finally {
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 
@@ -783,7 +792,7 @@ await okAsync('真实插件：非法模型组合不得继续用旧模型回答�
     assert.deepEqual(result.model, { provider: 'fixture', model: 'new-model', reasoningEffort: 'high' });
     assert.equal(fixture.calls.admissions, 2);
   } finally {
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 
@@ -807,7 +816,7 @@ await okAsync('真实插件：切换 provider/model/effort 持久选择且保留
     assert.deepEqual(fixture.calls.selections, models);
     const logged = Array.from({ length: fixture.session.seq }, (_, seq) => fixture.session.eventAt(seq));
     assert.deepEqual(logged.filter((event) => event.type === 'model/selection').map((event) => event.data), models);
-  } finally { fixture.dispose(); }
+  } finally { await fixture.dispose(); }
 });
 
 await okAsync('真实插件：返回本轮实际路由及去重列表，不照抄目标或前一轮', async () => {
@@ -822,7 +831,7 @@ await okAsync('真实插件：返回本轮实际路由及去重列表，不照�
     });
     assert.deepEqual(result.model, actual[0]);
     assert.deepEqual(result.modelsUsed, actual);
-  } finally { fixture.dispose(); }
+  } finally { await fixture.dispose(); }
 });
 
 await okAsync('真实插件：省略重复请求头时继承实际 effort，不照抄本轮请求目标', async () => {
@@ -846,7 +855,7 @@ await okAsync('真实插件：省略重复请求头时继承实际 effort，不�
     assert.deepEqual(fixture.calls.selections, [actual, target]);
     assert.deepEqual(continued.model, actual, 'the effective actual header remains authoritative instead of requested max');
     assert.deepEqual(continued.modelsUsed, [actual]);
-  } finally { fixture.dispose(); }
+  } finally { await fixture.dispose(); }
 });
 
 await okAsync('真实插件：省略请求头时不同路由或模型不能继承前轮 effort', async () => {
@@ -870,7 +879,7 @@ await okAsync('真实插件：省略请求头时不同路由或模型不能继�
       assert.equal(continued.sessionId, first.sessionId);
       assert.deepEqual(continued.model, source);
       assert.deepEqual(continued.modelsUsed, [source]);
-    } finally { fixture.dispose(); }
+    } finally { await fixture.dispose(); }
   }
 });
 
@@ -893,7 +902,7 @@ await okAsync('真实插件：本轮新请求头无 effort 时清除同模型前
     assert.equal(continued.sessionId, first.sessionId);
     assert.deepEqual(continued.model, source);
     assert.deepEqual(continued.modelsUsed, [source]);
-  } finally { fixture.dispose(); }
+  } finally { await fixture.dispose(); }
 });
 
 await okAsync('真实插件：模型目录只包含公开能力，旧宿主返回 null', async () => {
@@ -915,7 +924,7 @@ await okAsync('真实插件：模型目录只包含公开能力，旧宿主返�
     assert.equal(await fetchCompanionModelCatalog(legacy.cfg), null);
     assert.equal(fixture.calls.created, 0);
     assert.equal(fixture.calls.prompted, 0);
-  } finally { fixture.dispose(); legacy.dispose(); }
+  } finally { await fixture.dispose(); await legacy.dispose(); }
 });
 
 await okAsync('真实插件：已有对话通过宿主恢复，不再调用 create 换 ID', async () => {
@@ -932,7 +941,7 @@ await okAsync('真实插件：已有对话通过宿主恢复，不再调用 crea
       assert.deepEqual(fixture.calls.permissions, ['workspace-write', 'workspace-write']);
       assert.equal(fixture.calls.prompted, 2);
     } finally {
-      fixture.dispose();
+      await fixture.dispose();
     }
   }
 });
@@ -954,7 +963,7 @@ await okAsync('真实插件：恢复失败保留宿主错误，不偷偷创建�
       assert.equal(fixture.calls.created, 0);
       assert.equal(fixture.calls.prompted, 0);
     } finally {
-      fixture.dispose();
+      await fixture.dispose();
     }
   }
 });
@@ -974,7 +983,7 @@ await okAsync('真实插件：逐请求应用三种权限，不沿用旧会话�
     }
     assert.deepEqual(fixture.calls.permissions, ['workspace-write', 'danger-full-access', 'read-only']);
   } finally {
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 
@@ -991,7 +1000,7 @@ await okAsync('真实插件：缺少权限服务在创建或执行会话前拒�
     assert.equal(fixture.calls.created, 0);
     assert.equal(fixture.calls.prompted, 0);
   } finally {
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 
@@ -1006,7 +1015,7 @@ await okAsync('真实插件：缺失或无效权限参数不会继承宿主权�
     assert.equal(fixture.calls.created, 0);
     assert.equal(fixture.calls.prompted, 0);
   } finally {
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 
@@ -1030,7 +1039,7 @@ await okAsync('真实插件：同名预设有高权限时不误信名称，选�
     assert.deepEqual(selected, ['safe-workspace']);
     assert.equal(fixture.calls.prompted, 1);
   } finally {
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 
@@ -1055,7 +1064,7 @@ await okAsync('真实插件：权限应用无效或抛错时不调用 prompt', a
       assert.equal(fixture.calls.prompted, 0);
       assert.equal(fixture.calls.flushed, 1);
     } finally {
-      fixture.dispose();
+      await fixture.dispose();
     }
   }
 });
@@ -1086,7 +1095,7 @@ await okAsync('真实插件：权限应用期间断线不提交或取消其它�
     assert.equal(fixture.calls.cancelled, 0);
   } finally {
     release();
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 
@@ -1117,7 +1126,7 @@ await okAsync('真实插件：模型查询挂起时断线及时清理，同一�
     assert.equal(next.finalText, 'test reply');
     assert.equal(fixture.calls.prompted, 1);
   } finally {
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 
@@ -1141,7 +1150,7 @@ await okAsync('真实插件：模型查询挂起受请求超时限制，后续�
     assert.equal(next.status, 200);
     assert.equal(fixture.calls.prompted, 1);
   } finally {
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 
@@ -1186,7 +1195,7 @@ for (const [name, cancel] of [
       assert.equal(fixture.calls.flushed, 1);
       assert.equal((await probeCompanion(fixture.cfg)).available, true);
     } finally {
-      fixture.dispose();
+      await fixture.dispose();
     }
   });
 }
@@ -1205,7 +1214,7 @@ await okAsync('真实插件：客户端断开会取消宿主任务并落盘', as
     assert.equal(fixture.calls.flushed, 1);
     assert.equal((await probeCompanion(fixture.cfg)).available, true);
   } finally {
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 
@@ -1218,7 +1227,7 @@ await okAsync('真实插件：超时会取消同步宿主控制器且返回明�
     assert.equal(fixture.calls.cancelled, 1);
     assert.equal(fixture.calls.flushed, 1);
   } finally {
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 
@@ -1233,7 +1242,7 @@ await okAsync('真实插件：等待 Agent 空闲时也能取消', async () => {
     assert.equal(fixture.calls.cancelled, 1);
     assert.equal(fixture.calls.flushed, 1);
   } finally {
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 
@@ -1242,12 +1251,12 @@ await okAsync('真实插件：卸载取消活动任务，不会抛出取消回�
   try {
     const pending = callPlugin(fixture.info, '/prompt', { text: 'dispose' });
     await bounded(fixture.promptStarted);
-    fixture.dispose();
+    await fixture.dispose();
     assert.equal((await bounded(pending)).status, 500);
     assert.equal(fixture.calls.cancelled, 1);
     assert.equal(fixture.calls.flushed, 1);
   } finally {
-    fixture.dispose();
+    await fixture.dispose();
   }
 });
 

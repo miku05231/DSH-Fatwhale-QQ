@@ -1,12 +1,12 @@
 # SPEC-2 —— 记忆、控制台、能力扩展
 
-> 本文件是 `D:\code\qq-bridge\SPEC.md` 的增补契约（SPEC.md 仍然有效，冲突时以本文件为准）。
+> 本文件保留早期记忆与控制台设计背景，是 [SPEC.md](SPEC.md) 的历史补充。当前安装、行为及验收以 [README](README.md) 和 [v3.3.0 验证记录](docs/releases/v3.3.0-verification.md) 为准。
 > 目标来自用户原话：「给它接入记忆系统（如果可以请使用本机已有 Obsidian 构建），优化托盘应用程序能够打开 UI 为原生安卓风格。赋予它所有 DSH 自带的原生能力（包括 MCP 和 skills），赋予它自启动、自学习的权限与能力。」
 
 ## 0. 铁律（违反即返工）
 
 1. **零第三方 npm 依赖**。只用 Node 24 内置模块（`node:fs`、`node:http`、`node:path`、`node:zlib` 等）。ESM，`import` 必须带 `node:` 前缀。
-2. **不碰** `C:\Users\you\Desktop\学习` 这个 Obsidian 库（那是用户的学习笔记）。
+2. **不得读写未明确授权的已有知识库**；使用独立专用目录，不覆盖个人笔记。
 3. Windows 上写的 `.ps1` 必须是 **UTF-8 with BOM**；`.js/.mjs/.json/.md/.html/.css` 必须 **UTF-8 无 BOM**。
 4. 所有新增函数必须容错：记忆/控制台挂了绝不能让 QQ 收发消息失败。
 5. 中文界面、中文注释。不要用 `subagent` 之类的英文词当 UI 文案。
@@ -14,16 +14,18 @@
 7. 测试要用可重复的假数据，不许往真实群/真实 QQ 里发东西（除 lead 明确说明的验收步骤）。
 8. 做完必须能通过：`node --check <每个 js 文件>`。PowerShell 用 `[System.Management.Automation.PSParser]::Tokenize` 校验。
 
-## 1. 环境事实（已实测，别猜）
+## 1. 历史参考环境
+
+以下版本与路径仅说明早期设计背景，不代表当前机器的安装状态或本次发行的验证结果。
 
 | 项 | 值 |
 |---|---|
 | 项目根 | `D:\code\qq-bridge` |
 | Node | v24.20.0（`node`），全局 `WebSocket`、`fetch` 可用 |
 | DSH | 0.2.0-rc.2，命令 `dsh`（`C:\Program Files\nodejs\dsh.cmd`） |
-| Obsidian | 1.13.7 已安装，当前**未运行** |
-| 用户库1 | `C:\Users\you\Documents\Obsidian Vault`（几乎空的，只有 `欢迎.md`）← **我们用这个** |
-| 用户库2 | `C:\Users\you\Desktop\学习`（174 个 md，**禁止写入**） |
+| Obsidian | 可选；运行时按当前安装与配置确认 |
+| 专用记忆库 | 由当前配置指定的独立目录；不依赖个人库的内容或数量 |
+| 其他已有库 | 未明确授权时不得读写、迁移或覆盖 |
 | 图片浏览器 | `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`（支持 `--app=` 无边框窗口） |
 | NapCat | `D:\code\qq-bridge\napcat\node.exe index.js -q 1000000001`，OneBot 端口 **3001**，WebUI 6099 |
 | 桥接 | `node src\index.js`，状态文件 `state\status.json` |
