@@ -65,6 +65,12 @@ export const DEFAULTS = deepFreeze({
     // 从首次对话开始的固定窗口，0 持续复用；控制台保存后下一条消息生效。
     sessionWindowMinutes: DEFAULT_SESSION_WINDOW_MINUTES,
   },
+  // 内置安全指令 /帮助 /状态 /排行：不调模型、不碰电脑，群友也能用。
+  commands: {
+    enabled: true,
+    rank: true,
+    rankSize: 10,
+  },
   // JEV URL 和 token 齐全时用于群聊判断，否则沿用当前默认模型。
   jev: {
     baseUrl: '',

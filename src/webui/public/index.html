@@ -54,7 +54,7 @@
         </div>
         <div class="stat-row">
           <button class="stat" type="button" data-open-page="memory" aria-label="打开记忆管理"><span class="stat__value" id="statMemory">—</span><span class="stat__label">记忆条目 ↗</span></button>
-          <div class="stat"><span class="stat__value" id="statMessages">—</span><span class="stat__label">今日消息</span></div>
+          <div class="stat" title="今天通过准入、交给模型处理的请求数"><span class="stat__value" id="statMessages">—</span><span class="stat__label" id="statMessagesLabel">今日请求</span></div>
           <button class="stat" type="button" data-open-page="sessions" aria-label="打开会话管理"><span class="stat__value" id="statSessions">—</span><span class="stat__label">活跃会话 ↗</span></button>
         </div>
       </section>
@@ -82,10 +82,44 @@
         <p class="hud-note" id="hudModelApplied">最近实际使用：—</p>
       </section>
       </div>
+      <section class="card card--pad full-only stats-card" id="statsCard" aria-labelledby="statsTitle">
+        <div class="row-between">
+          <div class="card__head card__head--flush">
+            <h2 class="card__title" id="statsTitle">运行统计</h2>
+            <p class="card__sub" id="statsSub">桥接实际经手的请求，按本地日期统计</p>
+          </div>
+          <div class="segmented segmented--sm" id="statsRange" role="group" aria-label="统计范围">
+            <button class="segmented__item is-active ripple" type="button" data-days="7">7 天</button>
+            <button class="segmented__item ripple" type="button" data-days="30">30 天</button>
+          </div>
+        </div>
+        <div class="stats-kpis" id="statsKpis">
+          <div class="stats-kpi"><span class="stats-kpi__label">今日成功率</span><span class="stats-kpi__value" id="kpiRate">—</span></div>
+          <div class="stats-kpi"><span class="stats-kpi__label">平均耗时</span><span class="stats-kpi__value" id="kpiLatency">—</span></div>
+          <div class="stats-kpi"><span class="stats-kpi__label">今日失败</span><span class="stats-kpi__value" id="kpiFailed">—</span></div>
+          <div class="stats-kpi"><span class="stats-kpi__label">活跃群 / 用户</span><span class="stats-kpi__value" id="kpiActive">—</span></div>
+        </div>
+        <div class="stats-chart" id="statsChart" role="img" aria-label="每日请求与回复数量">
+          <p class="empty">加载中…</p>
+        </div>
+        <div class="stats-legend" aria-hidden="true">
+          <span><i class="stats-swatch stats-swatch--in"></i>收到</span>
+          <span><i class="stats-swatch stats-swatch--ok"></i>已回复</span>
+          <span><i class="stats-swatch stats-swatch--fail"></i>失败</span>
+        </div>
+        <div class="stats-tops">
+          <div><h3 class="stats-tops__title">今日最活跃的群</h3><ol class="stats-top" id="statsTopGroups"></ol></div>
+          <div><h3 class="stats-tops__title">今日最活跃的用户</h3><ol class="stats-top" id="statsTopUsers"></ol></div>
+        </div>
+        <p class="card__hint">群友可在 QQ 里发 /状态、/排行 查看同一份数据。</p>
+      </section>
       <section class="card overview-logs">
         <div class="logs-toolbar" id="overviewLogToolbar">
           <h2 class="card__title">实时日志</h2>
           <div class="logs-toolbar__actions">
+            <select class="log-level" id="overviewLogLevel" aria-label="日志级别">
+              <option value="">全部级别</option><option value="INFO">INFO 及以上</option><option value="WARN">仅警告/错误</option><option value="ERROR">仅错误</option>
+            </select>
             <label class="logs-follow"><input id="overviewLogFollow" type="checkbox" checked /> 自动滚动</label>
             <button class="hud-link" id="overviewLogRefresh" type="button">刷新</button>
             <button class="hud-link" id="overviewLogCopy" type="button">复制</button>
@@ -442,6 +476,12 @@
             <button class="segmented__item is-active ripple" type="button" data-log="napcat">NapCat</button>
             <button class="segmented__item ripple" type="button" data-log="bridge">桥接</button>
           </div>
+        </div>
+        <div class="log-filter">
+          <select class="log-level" id="logLevel" aria-label="日志级别">
+            <option value="">全部级别</option><option value="INFO">INFO 及以上</option><option value="WARN">仅警告/错误</option><option value="ERROR">仅错误</option>
+          </select>
+          <input class="text-field log-search" id="logSearch" type="search" placeholder="搜索关键词，如 群号、失败、模型" aria-label="搜索日志" />
         </div>
         <p class="card__hint" id="logStatus" role="status">日志在此页打开时自动刷新</p>
         <pre class="log-box" id="logBox">加载中…</pre>

@@ -37,6 +37,7 @@ import { DEFAULT_SESSION_WINDOW_MINUTES, isValidSessionWindowMinutes } from '../
 import { openLocalPath, openExternalUrl } from '../open-path.js';
 import { describeModelState, writeModelState, validateModelSelection, MODEL_MODES, REASONING_EFFORTS } from '../model-follow.js';
 import { inspectDshRuntime } from '../dsh.js';
+import { readStatsFile, summarizeStats } from '../stats.js';
 import { fetchCompanionModelCatalog } from '../dsh-companion.js';
 import { PluginHost, PLUGIN_HOOKS, SCHEMA_TYPES, coerceValue } from '../plugins.js';
 import { validateTtsConfig } from '../plugins/reply-tts.js';
@@ -625,6 +626,7 @@ export function createWebUiServer({
   const statusFile = path.join(stateDir, 'status.json');
   const sessionsFile = path.join(stateDir, 'sessions.json');
   const groupMemDir = path.join(stateDir, 'groupmem');
+  const statsFile = path.join(stateDir, 'stats.json');
   const chatSessionsFile = text(config?.chatSessionsPath).trim()
     ? resolveFrom(root, config.chatSessionsPath)
     : path.join(os.homedir(), '.dsh', 'media', 'onebot', 'chat-sessions.json');
@@ -954,7 +956,8 @@ export function createWebUiServer({
       },
       model: { label: text(status?.model) || null, mode: text(status?.modelMode) || 'follow' },
       memory: memStats,
-      today: { messages: todayMessages },
+      // messages：桥接实际经手的请求（stats.json）；没有统计文件时退回旧的群记忆计数。
+      today: buildTodayBlock(todayMessages),
       runtime: {
         node: process.version,
         platform: process.platform,
@@ -963,6 +966,26 @@ export function createWebUiServer({
         configPath,
       },
     };
+  }
+
+  function buildTodayBlock(legacyMessages) {
+    if (!fs.existsSync(statsFile)) return { messages: legacyMessages, source: 'groupmem' };
+    const t = summarizeStats(readStatsFile(statsFile), { days: 1 }).today;
+    return {
+      messages: t.received,
+      source: 'stats',
+      replied: t.replied,
+      failed: t.failed,
+      successRate: t.successRate,
+      avgLatencyMs: t.avgLatencyMs,
+      groupMessages: legacyMessages,
+    };
+  }
+
+  function getStats(url, res) {
+    const days = Number(url.searchParams.get('days')) || 7;
+    const summary = summarizeStats(readStatsFile(statsFile), { days });
+    return ok(res, { ...summary, available: fs.existsSync(statsFile) });
   }
 
   function readPackageVersion() {
@@ -2666,6 +2689,7 @@ export function createWebUiServer({
     }
     if (pathname === '/api/overview' && method === 'GET') return ok(res, await buildOverview());
     if (pathname === '/api/logs' && method === 'GET') return getLogs(url, res);
+    if (pathname === '/api/stats' && method === 'GET') return getStats(url, res);
     if (pathname === '/api/memory/stats' && method === 'GET') return getMemoryStats(res);
     if (pathname === '/api/memory/search' && method === 'GET') return searchMemory(url, res);
     if (pathname === '/api/memory/note') {
