@@ -145,7 +145,7 @@ dsh plugin --profile web add ("file:" + $companionPath.Replace('\', '/'))
 | `security.allowGroups` | 群 ID 名单为空时的群聊开关；模板为 `true` |
 | `security.allowGroupIds` | 非空时仅接入名单群；为空时按 `allowGroups` 决定 |
 | `security.allowGroupMembers` | 允许接入群内的其他成员参与聊天；模板为 `true`，只限白名单用户时改为 `false` |
-| `dsh.command` | DSH 命令或单个 CLI 文件路径，不拼接参数 |
+| `dsh.command` | DSH 命令或单个 CLI 文件路径，不拼接参数。作为 DSH 插件运行时，留默认值 `dsh`（或 `auto`）就跟随宿主：在 Desktop 里用 Desktop 内置的 DSH，在 `dsh web` 里用启动它的那份安装；写具体路径则固定用那份 |
 | `dsh.cwd` | QQ 对话工作目录 |
 | `memory.root` | 记忆库目录 |
 | `commands.enabled` / `commands.rank` | 内置指令总开关／群发言排行开关，默认开启 |

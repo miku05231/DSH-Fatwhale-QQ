@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 import { resolveCommandPlan, killProcessTree } from './dsh.js';
 import { redactSecrets } from './redact.js';
+import { hostDshRootFor } from './dsh-host.js';
 
 const HOST_SCRIPT = fileURLToPath(new URL('./dsh-desktop-host.mjs', import.meta.url));
 const DEFAULT_TIMEOUT_MS = 300_000;
@@ -46,6 +47,9 @@ const installRootCache = new Map();
  * @returns {string} 形如 C:\...\node_modules\@deepseek-ai\dsh
  */
 export function resolveDshInstallRoot(command, cwd) {
+  // 插件模式且没指定具体路径：跟随宿主自己的内核（Desktop 内置 / dsh web 那份）
+  const hostRoot = hostDshRootFor(command);
+  if (hostRoot) return hostRoot;
   const cacheKey = `${command}\u0000${cwd}`;
   const cached = installRootCache.get(cacheKey);
   if (cached) return cached;

@@ -84,6 +84,10 @@ const SUITE = [
     note: '设置收敛、到点与补跑、提示词边界与截断、发送文本清洗、失败隔离、手动 /今日总结',
   },
   {
+    name: '插件跟随宿主 DSH', file: 'tests/dsh-host-test.mjs', expect: ['fail 0'], timeoutMs: 30_000,
+    note: 'Desktop／dsh web 两种宿主识别、dsh.command 默认值才跟随、环境变量传给独立桥接、内核模块改名兼容',
+  },
+  {
     name: '安全准入与限流', file: 'tests/security-rate-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
     note: '私聊策略不放宽群成员准入、过期用户清理与活跃用户额度保留',
   },

@@ -16,6 +16,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { getHostDsh, hostDshRootFor } from './dsh-host.js';
 
 const WINDOWS = process.platform === 'win32';
 
@@ -179,6 +180,13 @@ export function resolveCommandPlan(command, cwd) {
  */
 export function inspectDshRuntime(command, cwd) {
   const label = typeof command === 'string' && command.trim() ? command.trim() : 'dsh';
+  if (hostDshRootFor(label)) {
+    const host = getHostDsh();
+    return {
+      ready: true, command: label, executable: host.root, mode: 'host', version: host.version,
+      detail: `跟随宿主 DSH${host.version ? ` ${host.version}` : ''}（插件模式，dsh.command 写具体路径可改用别的安装）`,
+    };
+  }
   const plan = resolveCommandPlan(label, cwd);
   if (plan.error) return { ready: false, command: label, mode: 'unavailable', detail: plan.error };
   let productVersion = '';

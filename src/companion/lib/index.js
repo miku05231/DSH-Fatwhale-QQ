@@ -26,6 +26,7 @@ import { createInProcessAgentRuntime } from './in-process-agent.js';
 import { resolveBridgeRunMode } from '../../bridge-run-mode.js';
 import { loadConfig } from '../../config.js';
 import { selectAgentModel } from '../../dsh-version.js';
+import { detectHostDsh, setHostDsh } from '../../dsh-host.js';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -309,6 +310,11 @@ export async function apply(ctx, rawConfig) {
     warn: (message) => ctx.logger?.warn?.(message),
     error: (message) => ctx.logger?.error?.(message),
   };
+  // 跟随宿主 DSH：Desktop 里用 Desktop 内置的内核，dsh web 里用启动它的那份安装。
+  const hostDsh = detectHostDsh();
+  setHostDsh(hostDsh);
+  if (hostDsh) log.info(`companion: 跟随宿主 DSH ${hostDsh.version || ''}（${hostDsh.root}）`);
+  else log.warn('companion: 没找到宿主 DSH 内核，普通聊天按 dsh.command 查找');
   const projectRoot = path.resolve(String(config.projectRoot || inferProjectRoot()));
   const requestedConfig = String(config.configFile ?? '').trim();
   const configPath = requestedConfig ? path.resolve(projectRoot, requestedConfig) : path.join(projectRoot, 'config.json');
