@@ -28,6 +28,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createUpdateManager } from '../updates.mjs';
 import { createImagegenApi } from './imagegen-api.mjs';
 import { createKeywordsApi } from './keywords-api.mjs';
+import { createChatsApi } from './chats-api.mjs';
 import { createPlatformScheduler } from '../platform-scheduler.js';
 import { createBilibiliQrLogin } from '../platforms/bilibili-login.js';
 import { consoleRequestTrusted, isLoopbackAddress } from './console-guard.mjs';
@@ -692,6 +693,12 @@ export function createWebUiServer({
     configPath, configRoot: root, config, readBody, ok, fail, log: safeLog, allow: trusted,
   });
   const keywordsApi = createKeywordsApi({ stateDir, readJsonBody, ok, fail, log: safeLog });
+  const chatsApi = createChatsApi({
+    statsFile, sessionsFile, chatSessionsFile, readJson, writeAtomic, ok, fail, log: safeLog,
+    personaDir: () => personaDir({ configRoot: root, config }),
+    readStats: readStatsFile, readPersonaState: readState,
+    listPersonaNames: async (dir) => (await listPersonas(dir)).map((p) => p.name),
+  });
   const astrbotApiState = { promise: null };
   async function getAstrbotApi() {
     if (!astrbotApiState.promise) {
@@ -2684,6 +2691,7 @@ export function createWebUiServer({
     }
 
     if (pathname === '/api/keywords') return keywordsApi.route(req, res, pathname, method);
+    if (pathname === '/api/chats' || pathname.startsWith('/api/chats/')) return chatsApi.route(req, res, pathname, method);
     if (pathname === '/api/updates' || pathname.startsWith('/api/updates/')) {
       return routeUpdates(req, res, pathname, method);
     }

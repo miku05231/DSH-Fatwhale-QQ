@@ -76,6 +76,10 @@ const SUITE = [
     note: '规则校验、三种匹配方式、范围与指定群、冷却、热加载、坏文件容错、控制台接口',
   },
   {
+    name: '会话管理页', file: 'tests/chats-test.mjs', expect: ['fail 0'], timeoutMs: 30_000,
+    note: '会话最后活跃时间、合并会话映射与人格覆盖、按会话重置、相对时间与筛选、控制台接口',
+  },
+  {
     name: '安全准入与限流', file: 'tests/security-rate-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
     note: '私聊策略不放宽群成员准入、过期用户清理与活跃用户额度保留',
   },

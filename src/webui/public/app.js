@@ -20,6 +20,7 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 let imagegenUi;
 let astrbotUi;
 let keywordUi;
+let chatUi;
 
 const STATE = {
   page: 'overview',
@@ -270,7 +271,7 @@ const PAGES = {
   memory: { title: '记忆', subtitle: 'Obsidian 风格 Markdown 记忆库' },
   stickers: { title: '表情包', subtitle: '自动收集、自动打标签，随时能找到想发的那张' },
   persona: { title: '人格', subtitle: '存多套人格，随时切换；每个群还能单独指定' },
-  sessions: { title: '会话', subtitle: '群聊与私聊的 DSH 会话' },
+  sessions: { title: '会话', subtitle: '每个群和私聊的活跃情况、人格与上下文' },
   model: { title: '模型', subtitle: '跟随 DSH 桌面端，或在这里手动指定' },
   plugins: { title: '插件', subtitle: '开关与配置，扩展点不用改主流程' },
   automation: { title: '自动化', subtitle: '关键词自动回复，定时浏览平台内容并按规则处理' },
@@ -316,7 +317,7 @@ async function refreshPage(name = currentPage()) {
   if (name === 'memory') return loadMemory();
   if (name === 'stickers') { await loadStickers(); return imagegenUi?.load(); }
   if (name === 'persona') return loadPersonas();
-  if (name === 'sessions') return loadSessions();
+  if (name === 'sessions') { await Promise.all([chatUi?.load(), loadSessions()]); return undefined; }
   if (name === 'model') return loadModel();
   if (name === 'plugins') { await loadPlugins(); return astrbotUi?.load(); }
   if (name === 'automation') { await Promise.all([keywordUi?.load(), loadAutomation()]); return undefined; }
@@ -1492,7 +1493,7 @@ async function removeSession(key) {
   try {
     await api(`/api/sessions/${encodeURIComponent(key)}`, { method: 'DELETE' });
     snackbar(`已清除 ${key} 的会话`);
-    await loadSessions();
+    await Promise.all([loadSessions(), chatUi?.load()]);
     await loadOverview().catch(() => {});
   } catch (err) {
     snackbar(`清除失败：${err.message}`, { duration: 5200 });
@@ -3386,6 +3387,10 @@ function init() {
   document.body?.classList?.add(EMBED ? 'mode-embed' : 'mode-full');
   void import('./imagegen.js').then(({ initImagegen }) => {
     imagegenUi = initImagegen({ api, notify: snackbar, confirm: confirmDialog });
+  }).catch((err) => snackbar(err.message));
+  void import('./chat-manager.js').then(({ initChatManager }) => {
+    chatUi = initChatManager({ api, notify: snackbar, confirm: confirmDialog, onReset: () => loadSessions() });
+    if (STATE.page === 'sessions') chatUi.load();
   }).catch((err) => snackbar(err.message));
   void import('./keyword-rules.js').then(({ initKeywordRules }) => {
     keywordUi = initKeywordRules({ api, notify: snackbar, confirm: confirmDialog });

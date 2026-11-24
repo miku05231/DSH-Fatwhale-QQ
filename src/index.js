@@ -95,6 +95,12 @@ function chunkText(text, maxLen) {
 }
 
 /** 取发言人的显示名：群名片 > 昵称 > QQ 号。 */
+/** NapCat 的群消息事件带 group_name；没有就留空 */
+function groupNameOf(msg) {
+  const name = msg?.raw?.group_name;
+  return typeof name === 'string' ? name.trim() : '';
+}
+
 function senderName(msg) {
   const sender = msg?.raw?.sender ?? {};
   for (const value of [sender.card, sender.nickname]) {
@@ -721,7 +727,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
         return;
       }
       rememberGroupMessage(msg);
-      stats.recordSpeaker({ groupId: msg.groupId, userId, nickname: senderName(msg) });
+      stats.recordSpeaker({ groupId: msg.groupId, userId, nickname: senderName(msg), groupName: groupNameOf(msg) });
     } else if (isUserBlocked(userId, config)) {
       noteDrop(`用户 ${userId} 在 denyFrom 黑名单里`);
       log.warn(`按黑名单拒绝用户 ${userId} 的消息`);
@@ -870,7 +876,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
 
     if (shuttingDown) return;
     log.info(`收到 ${isGroup ? '群' : '私聊'} 消息 user=${userId} len=${text.length}`);
-    stats.recordIncoming({ isGroup, groupId: isGroup ? msg.groupId : null, userId, nickname: senderName(msg) });
+    stats.recordIncoming({ isGroup, groupId: isGroup ? msg.groupId : null, userId, nickname: senderName(msg), groupName: groupNameOf(msg) });
 
     const queueKey = chatKey;
     const waitCount = queue.size(queueKey);

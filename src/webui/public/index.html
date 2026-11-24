@@ -353,11 +353,29 @@
 
     <!-- ---------------------------- 会话 ---------------------------- -->
     <section class="page" id="page-sessions" data-page="sessions" aria-label="会话">
+      <section class="card card--pad" id="chatCard" aria-labelledby="chatTitle">
+        <div class="row-between">
+          <div class="card__head card__head--flush">
+            <h2 class="card__title" id="chatTitle">会话管理</h2>
+            <p class="card__sub" id="chatSummary">每个群和私聊一行：看最后活跃时间、单独换人格、重置上下文</p>
+          </div>
+          <button class="btn btn--tonal ripple" type="button" id="chatRefresh">刷新</button>
+        </div>
+        <div class="chat-filter">
+          <div class="chips" role="group" aria-label="会话类型">
+            <button class="chip is-active" type="button" data-chat-kind="all" aria-pressed="true">全部</button>
+            <button class="chip" type="button" data-chat-kind="group" aria-pressed="false">群聊</button>
+            <button class="chip" type="button" data-chat-kind="private" aria-pressed="false">私聊</button>
+          </div>
+          <input class="text-field chat-search" id="chatSearch" type="search" placeholder="搜群号、QQ 号或名字" aria-label="搜索会话" />
+        </div>
+        <div class="stack" id="chatList"><p class="empty">加载中…</p></div>
+      </section>
       <section class="card card--pad">
         <div class="row-between">
           <div class="card__head card__head--flush">
-            <h2 class="card__title">会话映射</h2>
-            <p class="card__sub">清掉后，下一次对话会重新开一个会话</p>
+            <h2 class="card__title">原始会话映射</h2>
+            <p class="card__sub">桥接和 DSH 里每一条会话绑定。清掉后，下一次对话会重新开一个会话</p>
           </div>
           <button class="btn btn--tonal ripple" type="button" id="sessionsRefresh">刷新</button>
         </div>

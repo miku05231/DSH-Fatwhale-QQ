@@ -2108,3 +2108,17 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   .keyword-rule__grid > :first-child { grid-column: 1 / -1; }
   .keyword-rule__grid--2 { grid-template-columns: 1fr; }
 }
+
+/* ------------------------------------------------------------ 会话管理 */
+.chat-filter { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); margin: var(--sp-3) 0; }
+.chat-search { flex: 1 1 200px; min-height: 40px; padding: 6px 12px; }
+.chat-row .session__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.chat-row .session__sub { font-family: inherit; white-space: normal; }
+.chat-row__actions { display: flex; align-items: center; gap: var(--sp-2); flex: 0 0 auto; }
+.chat-row__actions .btn { white-space: nowrap; }
+.chat-row__persona { min-width: 150px; max-width: 220px; }
+@media (max-width: 640px) {
+  .chat-row { flex-wrap: wrap; }
+  .chat-row__actions { width: 100%; justify-content: space-between; }
+  .chat-row__persona { flex: 1 1 auto; max-width: none; }
+}
