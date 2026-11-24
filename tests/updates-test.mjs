@@ -940,5 +940,80 @@ throw new Error('Installer did not launch within 60 seconds: ' + JSON.stringify(
   });
 });
 
+async function pluginSourceFixture(action, { gitDir = true } = {}) {
+  await fixture({ http: { data: release(VERSION, { assets: [] }) } }, async (f) => {
+    const outside = await mkdtemp(path.join(await realpath(os.tmpdir()), 'qq plugin data-'));
+    try {
+      if (gitDir) await mkdir(path.join(f.root, '.git'));
+      for (const relative of ['launcher/bootstrap.ps1', 'launcher/Launcher.ps1', 'src/index.js', 'src/webui/server.mjs']) {
+        await mkdir(path.dirname(path.join(f.root, relative)), { recursive: true });
+        await writeFile(path.join(f.root, relative), '// source fixture');
+      }
+      const runGit = async (args) => {
+        if (args[0] === 'status') return '';
+        if (args[0] === 'symbolic-ref') return 'refs/heads/main';
+        if (args[0] === 'show') return JSON.stringify({ name: 'qq-bridge', version: VERSION });
+        if (args[0] === 'rev-parse') {
+          if (args.includes('--show-toplevel')) return f.root;
+          return args.at(-1) === 'HEAD' ? 'a'.repeat(40) : 'b'.repeat(40);
+        }
+        return '';
+      };
+      const manager = f.factory({
+        runGit, pluginHost: true,
+        stateDir: path.join(outside, 'state'), configFile: path.join(outside, 'config.json'),
+      });
+      await action({ ...f, manager, outside });
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+}
+
+await test('plugin host: a git checkout with external config and data installs from the program folder', async () => {
+  await pluginSourceFixture(async ({ manager, jobs, root, outside }) => {
+    const state = await manager.check();
+    equal(state.pluginHost, true);
+    equal(state.installMode, 'source');
+    equal(state.canInstall, true);
+    await manager.install({ version: VERSION });
+    await until(() => jobs.length === 1);
+    const { job } = jobs[0];
+    equal(job.pluginHost, true);
+    equal(job.mode, 'source');
+    equal(job.resultPath, path.join(root, 'state', 'updates', 'result.json'));
+    equal(path.dirname(jobs[0].jobPath), path.join(root, 'state', 'updates', job.jobId));
+    equal((await readdir(outside)).includes('state'), false, 'Nothing is written into the external data folder.');
+  });
+});
+
+await test('plugin host: without a git checkout the plugin page points to a manual update', async () => {
+  await pluginSourceFixture(async ({ manager }) => {
+    const state = await manager.check();
+    equal(state.canInstall, false);
+    equal(state.installMode, 'plugin');
+    truthy(state.installReason.includes('git 检出'));
+  }, { gitDir: false });
+});
+
+await test('plugin host: a finished install waits for a DSH restart instead of offering the update again', async () => {
+  await pluginSourceFixture(async ({ manager, jobs, root }) => {
+    await manager.check();
+    await manager.install({ version: VERSION });
+    await until(() => jobs.length === 1);
+    const { job } = jobs[0];
+    await writeFile(path.join(root, 'state', 'updates', 'result.json'), JSON.stringify({
+      schemaVersion: 1, jobId: job.jobId, version: VERSION, phase: 'complete', pluginHost: true,
+      message: 'Source update installed. Restart DSH to load the new version.', at: new Date().toISOString(),
+    }));
+    const waiting = await manager.status();
+    equal(waiting.phase, 'restart');
+    equal(waiting.restartVersion, VERSION);
+    equal(waiting.canInstall, false);
+    truthy(waiting.installReason.includes('重启 DSH'));
+    await rejectsCode(() => manager.install({ version: VERSION }), 'UPDATE_RESTART_REQUIRED');
+  });
+});
+
 console.log(`\n通过 ${assertions} 项断言，失败 ${failures} 项。`);
 if (failures) process.exitCode = 1;

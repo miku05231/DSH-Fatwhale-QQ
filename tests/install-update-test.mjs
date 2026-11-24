@@ -20,7 +20,7 @@ const GROUPS = {
   '1': { start: 1, end: 15 },
   '2': { start: 16, end: 30 },
   '3': { start: 31, end: 45 },
-  '4': { start: 46, end: 61 },
+  '4': { start: 46, end: 62 },
 };
 if (group && !Object.hasOwn(GROUPS, group)) {
   console.error(`Unknown installer test group: ${group}`);
@@ -912,6 +912,26 @@ if (process.platform !== 'win32') {
         assert.ok(!fs.existsSync(path.join(f.jobDir, 'backup')));
       }
     });
+    test('plugin host source update changes files only and asks for a DSH restart', () => {
+      const f = sourceFixture('source-plugin-host');
+      f.job = { ...f.job, pluginHost: true };
+      fs.writeFileSync(f.jobPath, JSON.stringify(f.job));
+      // No isolated-test switches: the job flag alone must skip process actions and the legacy bootstrap.
+      const result = run(f, [], { skipProcesses: false, skipRestart: false });
+      assert.equal(result.code, 0, result.output);
+      assert.equal(result.state.phase, 'complete');
+      assert.equal(result.state.pluginHost, true);
+      assert.match(result.state.message, /Restart DSH/);
+      assert.equal(sourceGit(f, 'rev-parse', 'HEAD'), f.job.targetCommit);
+      assert.equal(fs.readFileSync(path.join(f.root, 'src/index.js'), 'utf8'), application['src/index.js']);
+      assert.ok(!fs.existsSync(path.join(f.root, 'state/updates/install.lock')));
+
+      const portable = fixture('portable-plugin-host', { patchJob: { pluginHost: true } });
+      const refused = run(portable);
+      assert.equal(refused.code, 1, refused.output);
+      assert.match(refused.output, /Plugin hosts only support source updates/);
+      unchanged(portable);
+    });
   } finally {
     cleanupTempDirectory(TEMP, TEMP_PARENT);
   }
@@ -921,8 +941,8 @@ if (group && selected !== GROUPS[group].end - GROUPS[group].start + 1) {
   console.error(`Installer test group ${group} selected ${selected} cases, expected ${GROUPS[group].end - GROUPS[group].start + 1}.`);
   failed += 1;
 }
-if (!group && !only && registered !== 61) {
-  console.error(`Installer suite registered ${registered} cases, expected 61.`);
+if (!group && !only && registered !== 62) {
+  console.error(`Installer suite registered ${registered} cases, expected 62.`);
   failed += 1;
 }
 console.log(`\nPortable installer: ${passed} passed, ${failed} failed.`);

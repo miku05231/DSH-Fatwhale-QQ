@@ -23,6 +23,9 @@ $script:RestartAttempted = $false
 $script:SourceAttempted = $false
 $script:SourceApplied = $false
 $script:SourceMode = $false
+# A DSH plugin host keeps running the bridge in-process: update files only, never stop
+# processes or start the legacy tray/standalone bridge; the result asks for a DSH restart.
+$script:PluginHost = $false
 $script:VersionPattern = '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$'
 $script:Utf8 = New-Object System.Text.UTF8Encoding($false, $true)
 
@@ -195,6 +198,7 @@ function Write-Result([string]$Phase, [string]$Message) {
         completedAt = $at
     }
     if ($Phase -eq 'error') { $result.error = $Message }
+    if ($script:PluginHost) { $result.pluginHost = $true }
     $temporary = $script:ResultPath + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
     try {
         [IO.File]::WriteAllText($temporary, ($result | ConvertTo-Json -Depth 4), $script:Utf8)
@@ -427,7 +431,7 @@ function Test-ConsoleVersion([string]$ExpectedVersion) {
 
 function Restart-App {
     param([switch]$VerifyVersion)
-    if ($SkipRestart) { return }
+    if ($SkipRestart -or $script:PluginHost) { return }
     $bootstrap = Join-Path $script:ProjectRoot 'launcher\bootstrap.ps1'
     Assert-NoReparse $bootstrap
     if (-not [IO.File]::Exists($bootstrap)) { throw 'Cannot find the application bootstrap.' }
@@ -592,7 +596,7 @@ function Install-SourceUpdate {
     }
     [IO.File]::WriteAllText((Join-Path ([IO.Path]::GetDirectoryName($JobPath)) 'source-backup.json'),
         (@{ branch = $branch; commit = $original; target = $target } | ConvertTo-Json), $script:Utf8)
-    if (-not $SkipProcessActions) { Stop-AppProcesses }
+    if (-not ($SkipProcessActions -or $script:PluginHost)) { Stop-AppProcesses }
     Assert-SourceState $original
     $script:SourceAttempted = $true
     try {
@@ -602,7 +606,11 @@ function Install-SourceUpdate {
     }
     if ($TestFailAfterFiles -eq 0) { throw 'Isolated test: injected source update failure.' }
     Restart-App -VerifyVersion
-    Write-Result 'complete' 'Source update installed. Local configuration, personas and memory were preserved.'
+    if ($script:PluginHost) {
+        Write-Result 'complete' 'Source update installed. Restart DSH to load the new version.'
+    } else {
+        Write-Result 'complete' 'Source update installed. Local configuration, personas and memory were preserved.'
+    }
     try { Clear-JobLock } catch { }
 }
 
@@ -627,6 +635,10 @@ try {
     $mode = Get-Field $script:Job 'mode'
     if ($null -ne $mode -and $mode -cne 'source') { throw 'Unsupported update installation mode.' }
     $script:SourceMode = $mode -ceq 'source'
+    $pluginHost = Get-Field $script:Job 'pluginHost'
+    if ($null -ne $pluginHost -and $pluginHost -isnot [bool]) { throw 'Invalid plugin host flag.' }
+    $script:PluginHost = $pluginHost -eq $true
+    if ($script:PluginHost -and -not $script:SourceMode) { throw 'Plugin hosts only support source updates.' }
     if (-not $script:SourceMode) { Assert-NotGitCheckout $script:ProjectRoot }
     $updates = Join-Path $script:ProjectRoot 'state\updates'
     $jobDirectory = Join-Path $updates $jobId

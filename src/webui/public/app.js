@@ -1945,7 +1945,9 @@ function renderUpdates() {
   else if (status?.phase === 'downloading') message = status.installMode === 'source'
     ? '正在拉取发布版本代码…'
     : `正在下载更新${Number.isFinite(status.progress) ? ` · ${Math.round(status.progress)}%` : ''}…`;
-  else if (status?.phase === 'installing' || (installing && status?.phase === 'complete')) message = '正在安装并重启，请稍候…';
+  else if (status?.phase === 'installing' || (installing && status?.phase === 'complete')) {
+    message = status?.pluginHost ? '正在安装插件更新，请稍候…' : '正在安装并重启，请稍候…';
+  } else if (status?.phase === 'restart') message = `已更新到 ${status.restartVersion || status.latestVersion || '新版'}，重启 DSH 后生效`;
   else if (status?.phase === 'available') message = `发现新版本 ${status.latestVersion || ''}`;
   else if (status?.phase === 'current') message = status.latestVersion ? '已是最新版本' : 'GitHub 上暂时没有正式发布版本';
   else if (status?.phase === 'error') message = `更新失败：${status.error || '请稍后重试'}`;
@@ -1961,12 +1963,16 @@ function renderUpdates() {
   } else progress.removeAttribute('value');
 
   const hint = $('#updatesHint');
-  if (installing) hint.textContent = '配置、人格和记忆会保留。桥接与托盘重启期间暂时离线，DSH 保持运行。';
+  if (status?.pluginHost && status.phase === 'restart') hint.textContent = '新版文件已经就位。完全退出并重新打开 DSH（或在插件管理里重新加载本插件）后生效。';
+  else if (installing && status?.pluginHost) hint.textContent = '只更新插件文件，不会重启桥接或 DSH；配置、人格和记忆会保留。';
+  else if (installing) hint.textContent = '配置、人格和记忆会保留。桥接与托盘重启期间暂时离线，DSH 保持运行。';
   else if (!status || unavailable) hint.textContent = '可先下载 GitHub Release，按原运行方式手动更新。';
   else {
     const checked = status.checkedAt ? `上次检查：${relTime(status.checkedAt)}` : '开启后会在后台定期检查，有新版时提醒。';
     const manual = status.canInstall === false && /手动|源码|git pull|Docker|容器|便携包/.test(status.installReason || '');
-    hint.textContent = status.installMode === 'source'
+    hint.textContent = status.pluginHost && status.installMode === 'source'
+      ? `${manual ? status.installReason : '插件版（git 检出）可点击安装：拉取正式发布的代码，装好后重启 DSH 生效。'} ${checked}`
+      : status.installMode === 'source'
       ? `${manual ? status.installReason : '源码版可点击安装并重启，配置、人格和记忆会保留。'} ${checked}`
       : manual
       ? `${status.installReason || '当前运行方式需手动更新。'} 源码版拉取代码；Docker 版更新镜像后重建容器，沿用原配置和数据卷。${status.checkedAt ? ` ${checked}` : ''}`
@@ -1982,8 +1988,11 @@ function renderUpdates() {
   install.hidden = !(status?.latestVersion && (installing || ((status.canInstall || status.installMode === 'source')
     && ['available', 'error'].includes(status.phase) && status.latestVersion !== status.currentVersion)));
   install.disabled = busy || unavailable || !status?.updateToken || !status?.canInstall;
-  install.title = status?.canInstall ? '安装更新并重启控制台、桥接与托盘' : status?.installReason || '暂时无法安装更新';
-  $('#updatesInstallLabel').textContent = installing ? '更新中…' : status?.phase === 'error' ? '重试安装并重启' : '安装并重启';
+  const installWord = status?.pluginHost ? '安装更新' : '安装并重启';
+  install.title = status?.canInstall
+    ? (status?.pluginHost ? '拉取新版插件代码，装好后重启 DSH 生效' : '安装更新并重启控制台、桥接与托盘')
+    : status?.installReason || '暂时无法安装更新';
+  $('#updatesInstallLabel').textContent = installing ? '更新中…' : status?.phase === 'error' ? `重试${installWord}` : installWord;
 
   const url = updateReleaseUrl(status?.releaseUrl);
   const release = $('#updatesRelease');
@@ -1993,6 +2002,29 @@ function renderUpdates() {
   const notes = typeof status?.releaseNotes === 'string' ? status.releaseNotes : '';
   $('#updatesReleaseNotes').textContent = notes;
   $('#updatesNotes').hidden = !notes;
+  renderHudUpdate(message, { installing, busy, unavailable });
+}
+
+/** 插件页（内嵌面板）里的一行：当前版本、检查更新、安装更新 */
+function renderHudUpdate(message, { installing, busy, unavailable }) {
+  const text = $('#hudUpdateText');
+  if (!text) return;
+  const status = UPDATE_UI.status;
+  const version = status?.currentVersion ? `当前 ${status.currentVersion}` : '';
+  const idle = !status || ['idle', 'current'].includes(status.phase);
+  text.textContent = idle && !UPDATE_UI.pending
+    ? `${version}${status?.latestVersion ? ` · ${message}` : status?.checkedAt ? ' · 已是最新' : ''}` || message
+    : `${version ? `${version} · ` : ''}${message}`;
+  text.dataset.error = String(!installing && (unavailable || status?.phase === 'error'));
+  const check = $('#hudUpdateCheck');
+  check.disabled = busy;
+  check.textContent = UPDATE_UI.pending === 'checking' || status?.phase === 'checking' ? '检查中…' : '检查更新';
+  const install = $('#hudUpdateInstall');
+  install.hidden = !(status?.latestVersion && status.phase !== 'restart' && (installing
+    || (status.canInstall && ['available', 'error'].includes(status.phase) && status.latestVersion !== status.currentVersion)));
+  install.disabled = busy || unavailable || !status?.updateToken || !status?.canInstall;
+  install.textContent = installing ? '更新中…' : `安装 ${status?.latestVersion || ''}`.trim();
+  install.title = status?.installReason || '';
 }
 
 function acceptUpdateStatus(status) {
@@ -2005,7 +2037,7 @@ function acceptUpdateStatus(status) {
     window.location.reload();
     return;
   }
-  if (status.phase === 'error' || (UPDATE_UI.disconnected
+  if (status.phase === 'error' || status.phase === 'restart' || (UPDATE_UI.disconnected
     && ['idle', 'available', 'current'].includes(status.phase))) {
     UPDATE_UI.waitingVersion = '';
     UPDATE_UI.disconnected = false;
@@ -2015,7 +2047,7 @@ function acceptUpdateStatus(status) {
   }
   renderUpdates();
 
-  if (status.phase === 'available' && status.latestVersion && !UPDATE_UI.notified.has(status.latestVersion)) {
+  if (!EMBED && status.phase === 'available' && status.latestVersion && !UPDATE_UI.notified.has(status.latestVersion)) {
     UPDATE_UI.notified.add(status.latestVersion);
     try {
       localStorage.setItem('qq-update-notified', JSON.stringify([...UPDATE_UI.notified].slice(-20)));
@@ -2108,11 +2140,13 @@ async function installUpdate() {
   UPDATE_UI.pending = 'confirm';
   renderUpdates();
   const answer = confirmDialog(
-    `安装 ${version} 并重启？`,
-    status.installMode === 'source'
+    status.pluginHost ? `安装 ${version}？` : `安装 ${version} 并重启？`,
+    status.pluginHost
+      ? '将拉取正式发布版本的代码，保留配置、人格和记忆。只更新插件文件，不会重启桥接或 DSH；本地代码有未提交修改或分支无法快进时会停止。装好后重启 DSH 生效。'
+      : status.installMode === 'source'
       ? '将拉取正式发布版本的代码，保留配置、人格和记忆。本地代码有未提交修改或分支无法快进时会停止更新。更新会重启桥接与托盘，期间暂时离线；DSH 保持运行。'
       : '配置、人格和记忆会保留。更新会重启桥接与托盘，期间暂时离线；DSH 保持运行。确认后开始下载并安装。',
-    { okText: '安装并重启', danger: false },
+    { okText: status.pluginHost ? '安装更新' : '安装并重启', danger: false },
   );
   $('#dialogCancel')?.focus();
   const sure = await answer;
@@ -3300,6 +3334,8 @@ function initEvents() {
   $('#updatesCheck')?.addEventListener('click', checkUpdates);
   $('#updatesAutomatic')?.addEventListener('change', (event) => setUpdateAutomatic(Boolean(event.target.checked)));
   $('#updatesInstall')?.addEventListener('click', installUpdate);
+  $('#hudUpdateCheck')?.addEventListener('click', checkUpdates);
+  $('#hudUpdateInstall')?.addEventListener('click', installUpdate);
 
   // 路径（人格 / 记忆库 / 工作区）
   $('#pathsRefresh')?.addEventListener('click', () => loadPaths());
@@ -3412,8 +3448,8 @@ function init() {
 
   const initial = location.hash.replace(/^#/, '');
   setPage(PAGES[initial] || initial === 'memes' ? initial : 'overview', { push: false });
-  if (!EMBED) loadUpdates();
-  else {
+  loadUpdates();
+  if (EMBED) {
     void loadHudControls();
     observeEmbeddedHeight();
   }

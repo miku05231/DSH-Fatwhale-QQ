@@ -620,6 +620,8 @@ export function createWebUiServer({
   openPath = openLocalPath, openUrl = openExternalUrl, platformControl, platformQrLogin, napcatHealth,
   astrbotManager, astrbotPolicy, astrbotProxySecret = process.env.CONSOLE_PASSWORD_SHA256,
   publicBase = '', bridgeControl = null, openConsole = null,
+  // DSH 插件页里的控制台：更新的是插件代码所在目录（不是配置目录），装完提示重启 DSH。
+  pluginHost = false,
 } = {}) {
   const root = path.resolve(text(configRoot) || PROJECT_ROOT);
   const basePort = Number.isInteger(Number(port)) && Number(port) > 0 ? Number(port) : DEFAULT_PORT;
@@ -689,10 +691,11 @@ export function createWebUiServer({
   let healthSampling = null;
 
   const updates = updateManager ?? createUpdateManager({
-    projectRoot: root,
+    projectRoot: pluginHost ? PROJECT_ROOT : root,
     stateDir,
     configFile: configPath,
     log: safeLog,
+    pluginHost: Boolean(pluginHost),
   });
   const updateToken = randomBytes(32).toString('hex');
   // Only the bridge starts the scheduler; this instance edits configuration and queues work.

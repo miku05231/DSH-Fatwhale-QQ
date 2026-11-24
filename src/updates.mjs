@@ -133,12 +133,17 @@ export function createUpdateManager({
   maxPackageBytes = MAX_PACKAGE_BYTES,
   setTimeoutImpl = setTimeout,
   clearTimeoutImpl = clearTimeout,
+  // 作为 DSH 插件运行：只支持 git 检出安装；配置和数据可以在程序目录外；
+  // 安装器只更新文件，不停进程、不拉起旧的托盘／独立桥接，装完提示重启 DSH。
+  pluginHost = false,
 } = {}) {
   if (typeof projectRoot !== 'string' || !projectRoot) throw new TypeError('projectRoot is required.');
   let root = path.resolve(projectRoot);
   let dataRoot = path.resolve(stateDir);
   let configurationPath = path.resolve(configFile);
-  let updatesRoot = path.join(dataRoot, 'updates');
+  // 安装器只接受 <程序目录>/state/updates；插件模式的数据目录可能在别处，任务文件仍放程序目录下。
+  const updatesBase = () => (pluginHost ? path.join(root, 'state') : dataRoot);
+  let updatesRoot = path.join(updatesBase(), 'updates');
   let settingsFile = path.join(updatesRoot, 'settings.json');
   let resultFile = path.join(updatesRoot, 'result.json');
   let lockFile = path.join(updatesRoot, 'install.lock');
@@ -158,6 +163,7 @@ export function createUpdateManager({
   let installationStartedAt = null;
   let lockPresent = false;
   let lastResultKey = null;
+  let restartVersion = null;
   const controllers = new Set();
   const state = {
     latestVersion: null,
@@ -225,12 +231,15 @@ export function createUpdateManager({
       else if (!available) reason = '尚未发现可安装的新版。';
       else reason = eligibility.mode === 'source' ? null : latestRelease.installReason;
     }
+    if (restartVersion && compareVersions(restartVersion, currentVersion) > 0) reason = `已更新到 ${restartVersion}，重启 DSH 后生效。`;
     return {
       currentVersion,
       ...state,
+      pluginHost,
+      restartVersion: restartVersion && compareVersions(restartVersion, currentVersion) > 0 ? restartVersion : null,
       installMode: eligibility.mode || null,
       canInstall: Boolean(eligibility.allowed && available && (eligibility.mode === 'source' || latestRelease.installable)
-        && !lockPresent && !ACTIVE_PHASES.has(state.phase)),
+        && !lockPresent && !ACTIVE_PHASES.has(state.phase) && state.phase !== 'restart'),
       installReason: reason || null,
     };
   }
@@ -262,9 +271,23 @@ export function createUpdateManager({
     }
   }
 
+  /** 插件模式：只认程序目录本身就是 git 检出（配置、数据在外面没关系，git 不会碰它们） */
+  async function inspectPluginHost() {
+    try {
+      await lstat(path.join(root, '.git'));
+      return inspectSource();
+    } catch {
+      return {
+        allowed: false, mode: 'plugin',
+        reason: '插件模式下只有 git 检出的安装能在插件页更新；其他安装方式请到 GitHub 发布页下载新版后替换程序文件。',
+      };
+    }
+  }
+
   async function inspectEnvironment() {
     if (platform !== 'win32' || isDocker) return { allowed: false, reason: '此环境请前往 GitHub 发布页手动更新。' };
     if (!parseVersion(currentVersion)) return { allowed: false, reason: '当前版本号无效，请手动安装完整便携包。' };
+    if (pluginHost) return inspectPluginHost();
     try {
       if (await pathIdentity(dataRoot) !== await pathIdentity(path.join(root, 'state'))) {
         return { allowed: false, reason: '自定义状态目录请手动更新，保留现有配置和数据。' };
@@ -316,6 +339,17 @@ export function createUpdateManager({
         || (expectedJobId && result.jobId !== expectedJobId)
         || (!initial && !expectedJobId)
         || (pendingRestartJob && result.version !== pendingRestartJob.version)) return;
+      if (result.phase === 'complete' && result.pluginHost === true && compareVersions(result.version, currentVersion) > 0) {
+        const key = `${result.jobId}:restart`;
+        if (key === lastResultKey) return;
+        lastResultKey = key;
+        pendingRestartJob = null;
+        restartVersion = result.version;
+        state.phase = 'restart';
+        state.progress = 100;
+        state.error = null;
+        return;
+      }
       if (result.phase === 'complete' && result.version !== currentVersion) return;
       if (result.phase === 'error' && compareVersions(result.version, currentVersion) < 0) return;
       if (!initial && ['checking', 'available', 'downloading'].includes(state.phase)) return;
@@ -408,7 +442,7 @@ export function createUpdateManager({
         try {
           const paths = await Promise.all([canonicalPath(root), canonicalPath(dataRoot), canonicalPath(configurationPath)]);
           [root, dataRoot, configurationPath] = paths;
-          updatesRoot = path.join(dataRoot, 'updates');
+          updatesRoot = path.join(updatesBase(), 'updates');
           settingsFile = path.join(updatesRoot, 'settings.json');
           resultFile = path.join(updatesRoot, 'result.json');
           lockFile = path.join(updatesRoot, 'install.lock');
@@ -593,6 +627,9 @@ export function createUpdateManager({
           state.releaseNotes = candidate.notes;
           state.publishedAt = candidate.publishedAt;
           state.phase = compareVersions(candidate.version, currentVersion) > 0 ? 'available' : 'current';
+          // 插件模式装好了但 DSH 还没重启：保持「等待重启」，别又提示可以安装
+          if (restartVersion && compareVersions(restartVersion, currentVersion) > 0
+            && compareVersions(candidate.version, restartVersion) <= 0) state.phase = 'restart';
         }
       } catch (error) {
         state.phase = 'error';
@@ -610,7 +647,7 @@ export function createUpdateManager({
   async function ensureUpdatesDirectory() {
     await assertUnlinkedPath(updatesRoot);
     await mkdir(updatesRoot, { recursive: true, mode: 0o700 });
-    for (const dir of [dataRoot, updatesRoot]) {
+    for (const dir of [path.dirname(updatesRoot), updatesRoot]) {
       const info = await lstat(dir);
       if (!info.isDirectory()) throw failure('UPDATE_UNSAFE_PATH', '更新路径不是目录，请手动更新。');
       await assertUnlinkedPath(dir);
@@ -704,7 +741,7 @@ export function createUpdateManager({
       const jobPath = path.join(jobDir, 'job.json');
       const job = {
         schemaVersion: 1, jobId, projectRoot: root, packagePath,
-        expectedSha256, version: release.version, ...source,
+        expectedSha256, version: release.version, ...source, ...(pluginHost ? { pluginHost: true } : {}),
         consolePid: process.pid, resultPath: resultFile,
       };
       await copyFile(path.join(root, 'scripts', 'install-update.ps1'), scriptPath);
@@ -736,6 +773,7 @@ export function createUpdateManager({
       throw failure('UPDATE_NOT_AVAILABLE', '请先检查更新，并确认安装当前检测到的新版。', 409);
     }
     if (ACTIVE_PHASES.has(state.phase) || installPromise) return snapshot();
+    if (state.phase === 'restart') throw failure('UPDATE_RESTART_REQUIRED', '新版已经装好，请先重启 DSH 再检查更新。', 409);
     if (!eligibility.allowed || (eligibility.mode !== 'source' && !latestRelease.installable)) {
       throw failure('UPDATE_MANUAL_ONLY', eligibility.reason || latestRelease.installReason, 409);
     }

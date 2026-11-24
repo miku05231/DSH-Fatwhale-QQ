@@ -80,6 +80,11 @@
         </form>
         <p class="hud-model__status" id="hudModelStatus" role="status">正在读取模型…</p>
         <p class="hud-note" id="hudModelApplied">最近实际使用：—</p>
+        <div class="hud-update" id="hudUpdate" aria-label="插件更新">
+          <span class="hud-update__text" id="hudUpdateText" role="status">版本信息读取中…</span>
+          <button class="btn btn--text" type="button" id="hudUpdateCheck">检查更新</button>
+          <button class="btn btn--tonal" type="button" id="hudUpdateInstall" hidden>安装更新</button>
+        </div>
       </section>
       </div>
       <section class="card card--pad full-only stats-card" id="statsCard" aria-labelledby="statsTitle">
