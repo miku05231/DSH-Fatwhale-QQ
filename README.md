@@ -2,7 +2,7 @@
 
 运行在 DeepSeek Harness（DSH）中的 QQ 桥接插件：连接 NapCat，在 QQ 私聊或群聊中使用宿主 DSH，并从插件面板管理人格、模型、记忆、表情和日志。
 
-**当前稳定版：v3.3.0，DSH bundle：qq-bridge-companion 0.3.0。** 从 [最新 Release](https://github.com/miku05231/DSH-Fatwhale-QQ/releases/latest) 下载完整项目，按下文安装 `src/companion`。改动见 [发行说明](docs/releases/v3.3.0.md)，验证范围见 [验证记录](docs/releases/v3.3.0-verification.md)。
+**当前稳定版：v3.4.0，DSH bundle：qq-bridge-companion 0.4.0。** 推荐用 git 检出完整项目并安装 `src/companion`，以后在插件页一键更新；也可以从 [最新 Release](https://github.com/miku05231/DSH-Fatwhale-QQ/releases/latest) 下载。改动见 [发行说明](docs/releases/v3.4.0.md)，上一次完整验证范围见 [v3.3.0 验证记录](docs/releases/v3.3.0-verification.md)。
 
 > **插件安装入口是完整项目中的 `src/companion`。** Release 中的 exe 是旧独立启动器，插件用户无需下载或运行。安装、启停和打开控制台都从 DSH 插件页完成。
 
@@ -70,7 +70,7 @@ DSH 插件页展示紧凑面板；点击「打开完整控制台」，在系统�
 
 ### 2. 下载完整项目并准备配置
 
-从 [最新 Release](https://github.com/miku05231/DSH-Fatwhale-QQ/releases/latest) 下载 `qq-bridge-3.3.0-source.zip`，解压到打算长期保留的目录。该目录应包含 `config.example.json`、`src/index.js` 和 `src/companion/package.json`。
+从 [最新 Release](https://github.com/miku05231/DSH-Fatwhale-QQ/releases/latest) 下载 `qq-bridge-3.4.0-source.zip`，解压到打算长期保留的目录（或者 `git clone https://github.com/miku05231/DSH-Fatwhale-QQ.git`，这样以后能在插件页直接更新）。该目录应包含 `config.example.json`、`src/index.js` 和 `src/companion/package.json`。
 
 在这个**完整项目根目录**打开终端，首次安装时创建配置：
 
@@ -125,9 +125,9 @@ dsh plugin --profile web add ("file:" + $companionPath.Replace('\', '/'))
 
 | 文件 | 用途 |
 | --- | --- |
-| `qq-bridge-3.3.0-source.zip` | **插件用户推荐**：完整项目文件，解压后在 DSH 安装其中的 `src/companion` |
-| `qq-bridge-3.3.0-portable-win64.zip` | 完整 Windows 便携目录，额外带旧启动器；也可从其中安装 bundle |
-| `qq-bridge-launcher-3.3.0.exe` | **旧部署兼容启动器**：管理托盘和独立服务；依赖完整目录与外部运行环境，插件模式不使用 |
+| `qq-bridge-3.4.0-source.zip` | **插件用户推荐**：完整项目文件，解压后在 DSH 安装其中的 `src/companion` |
+| `qq-bridge-3.4.0-portable-win64.zip` | 完整 Windows 便携目录，额外带旧启动器；也可从其中安装 bundle |
+| `qq-bridge-launcher-3.4.0.exe` | **旧部署兼容启动器**：管理托盘和独立服务；依赖完整目录与外部运行环境，插件模式不使用 |
 | `SHA256SUMS.txt` | 核对上述三个文件的 SHA256 |
 
 独立 exe 不是 DSH 插件安装包，也不能单独更新插件。保留旧部署的用户可参考 [历史更新说明](docs/更新发布.md)；新安装使用上面的插件流程。

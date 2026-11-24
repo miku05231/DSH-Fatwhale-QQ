@@ -34,6 +34,7 @@ const PUBLIC_DOC_FILES = [
   'docs/image-generation.md',
   'docs/media-providers.md',
   'docs/releases/v3.3.0.md',
+  'docs/releases/v3.4.0.md',
   'docs/releases/v3.2.1.md',
   'docs/releases/v3.2.1-verification.md',
   'docs/releases/v3.2.0.md',
@@ -243,7 +244,7 @@ async function main() {
   const sourceReadme = await fsp.readFile(path.join(PROJECT_ROOT, 'README.md'), 'utf8');
   ok(readme.trim() === sourceReadme.trim(), '公开 README 保留本轮审阅的完整源码说明');
   ok((readme.replace(/```[\s\S]*?```/g, '').match(/^# /gm) ?? []).length === 1, '公开 README 只有一个主标题');
-  ok(readme.includes('## 插件方式快速开始') && readme.includes('embedded'), '公开说明保留宿主插件运行方式');
+  ok(readme.includes('## 安装与使用') && readme.includes('src/companion') && readme.includes('embedded'), '公开说明保留宿主插件运行方式');
   ok(readme.includes('v3.3.0-verification.md'), '公开说明链接到本版验证边界');
   const imageRefs = localReadmeImages(readme);
   ok(imageRefs.length >= 3, '公开 README 含双模式界面的三张示例截图');
