@@ -441,7 +441,8 @@ test('isolated real browser platform settings and responsive navigation', { skip
         const boxes = fields.map(node => ({ id: node.id, left: node.getBoundingClientRect().left, right: node.getBoundingClientRect().right }));
         const pills = [...document.querySelectorAll('#navBar .nav-item__pill')].map(node => node.getBoundingClientRect());
         return { width: innerWidth, pageWidth: document.documentElement.scrollWidth, navWidth: nav.clientWidth, navScrollWidth: nav.scrollWidth,
-          fieldOverflow: boxes.filter(box => box.left < -1 || box.right > innerWidth + 1), navOverlap: pills.some((box, index) => index > 0 && box.left < pills[index - 1].right - 1) };
+          fieldOverflow: boxes.filter(box => box.left < -1 || box.right > innerWidth + 1), navOverlap: pills.some((box, index) => pills.slice(0, index).some(other =>
+            box.left < other.right - 1 && other.left < box.right - 1 && box.top < other.bottom - 1 && other.top < box.bottom - 1)) };
       })()`);
       report.layouts.push(layout);
       check(`page and fields fit ${width}px`, layout.pageWidth <= width && !layout.fieldOverflow.length);
