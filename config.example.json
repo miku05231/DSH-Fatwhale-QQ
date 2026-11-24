@@ -43,6 +43,11 @@
     "wakeWordMatch": "contains",
     "groupContextCount": 40
   },
+  "commands": {
+    "enabled": true,
+    "rank": true,
+    "rankSize": 10
+  },
   "groupMemory": {
     "limit": 300
   },

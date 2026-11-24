@@ -11,6 +11,7 @@ export const meta = {
   version: '1.0.0',
   description: '收到 /ping 时立刻回一句，不经过 dsh（演示指令类插件）',
   defaultEnabled: true,
+  commands: [{ cmd: '/ping', desc: '测试机器人是否在线' }],
   configSchema: [
     { key: 'reply', type: 'string', label: '回复内容', default: 'pong 🐟' },
   ],

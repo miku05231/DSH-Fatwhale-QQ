@@ -21,6 +21,8 @@ import { SessionStore, readSessionWindowMinutes } from './sessions.js';
 import { GroupMemory } from './groupmem.js';
 import { resolveModelPlan } from './model-follow.js';
 import { PluginHost } from './plugins.js';
+import { StatsStore } from './stats.js';
+import { commandSettings, formatHelp, formatRanking, formatStatus, parseBuiltinCommand } from './commands.js';
 import { createAstrbotPolicy } from './astrbot-policy.mjs';
 import { createAstrbotBridge } from './astrbot-bridge.mjs';
 import { createAstrbotManager } from './astrbot-manager.mjs';
@@ -269,6 +271,8 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
 
   const startedAt = new Date().toISOString();
   const lastErrorRef = { value: null };
+  // 运行统计：只记桥接真正经手的请求，控制台概览和 /状态 /排行 都读它。
+  const stats = new StatsStore({ file: path.join(stateDir, 'stats.json'), log });
   let lastMessageAt = null;
   // 最后一条「收到了但故意不理」的原因。QQ 那头看不出区别，全都表现为「没回」，
   // 所以把原因落到 status.json 里，排查时不用去翻 debug 日志。
@@ -714,6 +718,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
         return;
       }
       rememberGroupMessage(msg);
+      stats.recordSpeaker({ groupId: msg.groupId, userId, nickname: senderName(msg) });
     } else if (isUserBlocked(userId, config)) {
       noteDrop(`用户 ${userId} 在 denyFrom 黑名单里`);
       log.warn(`按黑名单拒绝用户 ${userId} 的消息`);
@@ -737,6 +742,23 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
       const reply = await handlePersonaCommand(personaCmd, { isGroup, userId, chatKey });
       if (reply) await safeSend(msg, reply);
       return;
+    }
+
+    // 内置安全指令（/帮助 /状态 /排行）：不调模型、不碰电脑，群友也能用。
+    const builtin = commandSettings(config).enabled ? parseBuiltinCommand(text) : null;
+    if (builtin) {
+      const memberOk = !isGroup || config?.security?.allowGroupMembers || isAllowed(userId, config, { isGroup: true });
+      if (memberOk) {
+        if (!limiter.take(String(userId))) {
+          noteDrop(`用户 ${userId} 触发限流（内置指令）`);
+          return;
+        }
+        const reply = handleBuiltinCommand(builtin, { isGroup, groupId: msg.groupId });
+        if (reply) {
+          await safeSend(msg, reply);
+          return;
+        }
+      }
     }
 
     // This separate lane cannot grant access to the existing JS/DSH computer lane.
@@ -833,6 +855,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
 
     if (shuttingDown) return;
     log.info(`收到 ${isGroup ? '群' : '私聊'} 消息 user=${userId} len=${text.length}`);
+    stats.recordIncoming({ isGroup, groupId: isGroup ? msg.groupId : null, userId, nickname: senderName(msg) });
 
     const queueKey = chatKey;
     const waitCount = queue.size(queueKey);
@@ -970,6 +993,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
             at: new Date().toISOString() };
         }
         lastErrorRef.value = reason.slice(0, 300);
+        if (!abort.signal.aborted) stats.recordResult({ ok: false });
         log.error(`DSH 调用失败（${sessionKey}）：`, reason);
         if (!modelRejected && await maybeResetSession(sessionKey, reason)) {
           await sendReply(msg, '上一次会话好像失效了，我已经重置。再发一次试试？');
@@ -1058,6 +1082,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
         signal: abort.signal, log,
       });
       if (!delivery.textSent) return;
+      stats.recordResult({ ok: true, latencyMs: Date.now() - startedAtMs });
       // 记进长期记忆。不 await，慢一点也没关系，失败更不能影响回话。
       void captureToMemory({
         userId,
@@ -1127,6 +1152,43 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
         if (result && !result.ok) log.debug('自动反思没跑成：', result.message);
       })
       .catch((err) => log.debug('触发反思失败：', err?.message ?? err));
+  }
+
+  /** 内置指令的回复文本；返回空串表示不处理、继续走正常流程 */
+  function handleBuiltinCommand(cmd, { isGroup, groupId }) {
+    try {
+      const settings = commandSettings(config);
+      if (cmd.name === 'help') {
+        const pluginCommands = plugins
+          ? plugins.list().filter((p) => p.enabled && Array.isArray(p.commands)).flatMap((p) => p.commands)
+          : [];
+        return formatHelp({
+          botName: String(config?.behavior?.wakeWord || '').trim() || '我',
+          isGroup,
+          rankEnabled: settings.rank,
+          pluginCommands,
+        });
+      }
+      if (cmd.name === 'status') {
+        const uptimeSeconds = (Date.now() - Date.parse(startedAt)) / 1000;
+        return formatStatus({
+          uptimeSeconds,
+          connected,
+          today: stats.summary({ days: 1 }).today,
+          model: modelLabel || '',
+          queueDepth: Math.max(0, queue.total - inFlightCount),
+        });
+      }
+      if (cmd.name === 'rank' || cmd.name === 'rankYesterday') {
+        if (!settings.rank) return '';
+        if (!isGroup) return '排行只在群里能看。';
+        const yesterday = cmd.name === 'rankYesterday';
+        return formatRanking(stats.ranking(groupId, { yesterday, limit: settings.rankSize }), { yesterday });
+      }
+    } catch (err) {
+      log.debug('内置指令处理失败：', err?.message ?? err);
+    }
+    return '';
   }
 
   /**
@@ -1292,6 +1354,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
       try { await astrbot.stop(); } catch { /* 忽略 */ }
       try { await astrbotManager.stop(); } catch { /* 忽略 */ }
       if (stickerTargetTimer) clearInterval(stickerTargetTimer);
+      try { stats.close(); } catch { /* 统计收尾失败不影响退出 */ }
       try {
         await stickerCollector?.flush?.();
       } catch { /* 采集队列收尾失败不影响退出 */ }

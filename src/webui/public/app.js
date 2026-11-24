@@ -30,6 +30,20 @@ const STATE = {
   stickerTag: '',
   stickerItems: new Map(),
   personas: null,
+  statsDays: 7,
+};
+
+/** 本机偏好（自动滚动、日志级别）。存不进去也无所谓，只是刷新后不记得。 */
+const PREFS = {
+  get(key, fallback) {
+    try {
+      const raw = localStorage.getItem(`qq-console:${key}`);
+      return raw === null ? fallback : JSON.parse(raw);
+    } catch { return fallback; }
+  },
+  set(key, value) {
+    try { localStorage.setItem(`qq-console:${key}`, JSON.stringify(value)); } catch { /* 忽略 */ }
+  },
 };
 
 /* ------------------------------------------------------------------ 工具 */
@@ -473,10 +487,101 @@ async function loadOverview() {
   };
   stat('#statMemory', String(memFiles));
   stat('#statMessages', String(Number(data.today?.messages) || 0));
+  if ($('#statMessagesLabel')) {
+    const rate = data.today?.source === 'stats' && data.today.successRate != null
+      ? ` · 成功 ${Math.round(data.today.successRate * 100)}%` : '';
+    $('#statMessagesLabel').textContent = data.today?.source === 'stats' ? `今日请求${rate}` : '今日群消息';
+  }
   stat('#statSessions', String(Number(data.bridge?.sessions) || 0));
   stat('#overviewTime', clockTime(data.now));
   updateHudBridgeButtons();
+  if (!EMBED) void loadStats().catch(() => {});
 
+  return data;
+}
+
+/* ------------------------------------------------------------ 运行统计 */
+
+function formatLatency(ms) {
+  const n = Number(ms) || 0;
+  if (n <= 0) return '—';
+  return n >= 10_000 ? `${Math.round(n / 1000)} 秒` : `${(n / 1000).toFixed(1)} 秒`;
+}
+
+/** 每日柱状图：浅色底柱 = 收到，深色 = 已回复，叠在上面的红色 = 失败。纯 SVG，无依赖。 */
+function renderStatsChart(days) {
+  const box = $('#statsChart');
+  if (!box) return;
+  const list = Array.isArray(days) ? days : [];
+  const max = Math.max(1, ...list.map((d) => Math.max(d.received, d.replied + d.failed)));
+  const nice = max <= 5 ? 5 : max <= 10 ? 10 : Math.ceil(max / 10) * 10;
+  const W = 640; const H = 170; const left = 28; const bottom = 20; const top = 6;
+  const plotW = W - left; const plotH = H - bottom - top;
+  const slot = plotW / Math.max(1, list.length);
+  const barW = Math.max(3, Math.min(36, slot * 0.62));
+  const inner = Math.max(2, barW * 0.55);
+  const y = (v) => top + plotH - (v / nice) * plotH;
+  const labelEvery = list.length > 14 ? Math.ceil(list.length / 8) : 1;
+  const parts = [];
+  for (const v of [0, nice / 2, nice]) {
+    parts.push(`<line class="grid-line" x1="${left}" x2="${W}" y1="${y(v)}" y2="${y(v)}"></line>`);
+    parts.push(`<text class="axis" x="${left - 4}" y="${y(v) + 3}" text-anchor="end">${Math.round(v)}</text>`);
+  }
+  list.forEach((d, i) => {
+    const cx = left + slot * i + slot / 2;
+    const tip = `${d.date}：收到 ${d.received}，回复 ${d.replied}，失败 ${d.failed}${d.avgLatencyMs ? `，平均 ${formatLatency(d.avgLatencyMs)}` : ''}`;
+    parts.push(`<g><title>${escapeHtml(tip)}</title>`);
+    parts.push(`<rect class="col-hit" x="${cx - slot / 2}" y="${top}" width="${slot}" height="${plotH}"></rect>`);
+    if (d.received) parts.push(`<rect class="bar-in" rx="3" x="${cx - barW / 2}" y="${y(d.received)}" width="${barW}" height="${y(0) - y(d.received)}"></rect>`);
+    if (d.replied) parts.push(`<rect class="bar-ok" rx="2" x="${cx - inner / 2}" y="${y(d.replied)}" width="${inner}" height="${y(0) - y(d.replied)}"></rect>`);
+    if (d.failed) parts.push(`<rect class="bar-fail" rx="2" x="${cx - inner / 2}" y="${y(d.replied + d.failed)}" width="${inner}" height="${y(d.replied) - y(d.replied + d.failed)}"></rect>`);
+    parts.push('</g>');
+    if (i % labelEvery === 0 || i === list.length - 1) {
+      parts.push(`<text class="axis" x="${cx}" y="${H - 5}" text-anchor="middle">${escapeHtml(String(d.date).slice(5))}</text>`);
+    }
+  });
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${parts.join('')}</svg>`;
+}
+
+function renderStatsTop(selector, rows, label) {
+  const list = $(selector);
+  if (!list) return;
+  if (!rows?.length) {
+    list.innerHTML = '<li class="empty">今天还没有记录</li>';
+    return;
+  }
+  const max = Math.max(...rows.map((r) => r.count), 1);
+  list.innerHTML = rows.map((r) => {
+    const name = label(r);
+    return `<li style="--share:${Math.round((r.count / max) * 100)}%"><span class="stats-top__name" title="${escapeHtml(name)}">${escapeHtml(name)}</span><span class="stats-top__count">${r.count}</span></li>`;
+  }).join('');
+}
+
+async function loadStats(days = STATE.statsDays) {
+  if (!$('#statsCard')) return null;
+  const data = await api(`/api/stats?days=${encodeURIComponent(days)}`);
+  const t = data.today || {};
+  const set = (id, value, cls) => {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = value;
+    el.classList.toggle('is-bad', cls === 'bad');
+    el.classList.toggle('is-good', cls === 'good');
+  };
+  const rate = t.successRate == null ? null : Math.round(t.successRate * 100);
+  set('#kpiRate', rate == null ? '—' : `${rate}%`, rate == null ? '' : rate >= 95 ? 'good' : rate < 80 ? 'bad' : '');
+  set('#kpiLatency', formatLatency(t.avgLatencyMs));
+  set('#kpiFailed', String(t.failed ?? 0), t.failed ? 'bad' : '');
+  set('#kpiActive', `${t.activeGroups ?? 0} / ${t.activeUsers ?? 0}`);
+  if ($('#statsSub')) {
+    const total = data.totals || {};
+    $('#statsSub').textContent = data.available
+      ? `近 ${days} 天收到 ${total.received ?? 0} · 回复 ${total.replied ?? 0}${total.successRate == null ? '' : ` · 成功率 ${Math.round(total.successRate * 100)}%`}`
+      : '还没有统计数据：桥接收到第一条消息后开始记录';
+  }
+  renderStatsChart(data.days);
+  renderStatsTop('#statsTopGroups', t.topGroups, (r) => `群 ${r.id}`);
+  renderStatsTop('#statsTopUsers', t.topUsers, (r) => (r.name ? `${r.name}（${r.id}）` : String(r.id)));
   return data;
 }
 
@@ -2095,6 +2200,9 @@ const logView = createLogView({
   getBox: () => STATE.page === 'overview' ? $('#overviewLog') : $('#logBox'),
   getStatus: () => STATE.page === 'system' ? $('#logStatus') : null,
   getAutoFollow: () => STATE.page === 'overview' ? $('#overviewLogFollow')?.checked !== false : undefined,
+  getFilter: () => (STATE.page === 'overview'
+    ? { level: $('#overviewLogLevel')?.value || '', keyword: '' }
+    : { level: $('#logLevel')?.value || '', keyword: $('#logSearch')?.value || '' }),
 });
 
 function loadLogs() { return logView.refresh(); }
@@ -2982,7 +3090,11 @@ function initConsoleControls() {
   box?.addEventListener('scroll', () => {
     if (follow && box.scrollHeight - box.scrollTop - box.clientHeight > 36) follow.checked = false;
   }, { passive: true });
-  follow?.addEventListener('change', () => { if (follow.checked && box) box.scrollTop = box.scrollHeight; });
+  if (follow) follow.checked = PREFS.get('logFollow', true) !== false;
+  follow?.addEventListener('change', () => {
+    PREFS.set('logFollow', follow.checked);
+    if (follow.checked && box) box.scrollTop = box.scrollHeight;
+  });
   $('#overviewLogRefresh')?.addEventListener('click', () => logView.refresh());
   $('#overviewLogClear')?.addEventListener('click', () => logView.clearDisplay().catch((err) => snackbar(err.message)));
   $('#overviewLogCopy')?.addEventListener('click', async () => {
@@ -3115,6 +3227,31 @@ function initEvents() {
   $('#pluginsReload')?.addEventListener('click', () => loadPlugins());
 
   // 日志切换
+  // 日志筛选：级别记在本机，关键词输入停顿 250ms 再刷新
+  for (const id of ['#logLevel', '#overviewLogLevel']) {
+    const select = $(id);
+    if (!select) continue;
+    select.value = PREFS.get(`logLevel${id === '#logLevel' ? '' : ':overview'}`, '') || '';
+    select.addEventListener('change', () => {
+      PREFS.set(`logLevel${id === '#logLevel' ? '' : ':overview'}`, select.value);
+      void logView.refresh();
+    });
+  }
+  let logSearchTimer;
+  $('#logSearch')?.addEventListener('input', () => {
+    clearTimeout(logSearchTimer);
+    logSearchTimer = setTimeout(() => { void logView.refresh(); }, 250);
+  });
+
+  // 运行统计范围切换
+  $$('#statsRange .segmented__item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      STATE.statsDays = Number(btn.dataset.days) || 7;
+      $$('#statsRange .segmented__item').forEach((b) => b.classList.toggle('is-active', b === btn));
+      loadStats().catch((err) => snackbar(`读取统计失败：${err.message}`));
+    });
+  });
+
   $$('#logSwitch .segmented__item').forEach((btn) => {
     btn.addEventListener('click', async () => {
       $$('#logSwitch .segmented__item').forEach((b) => b.classList.toggle('is-active', b === btn));

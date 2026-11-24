@@ -420,6 +420,13 @@ try {
   await waitFor('stub reply', async () => napcat.state.calls.some((call) => call.action === 'send_private_msg' && String(call.params?.message).includes('stub-reply')));
   check('inbound message reaches the in-process DSH stub and is sent back', smokeCalls.prompted === 2 && smokeCalls.created >= 1);
   check('embedded smoke never spawned the standalone bridge', spawns.length === 0);
+  napcat.sendPrivateMessage({ userId: adminId, text: '/状态', messageId: 3 });
+  await waitFor('status command reply', async () => napcat.state.calls.some((call) => call.action === 'send_private_msg' && String(call.params?.message).includes('今日：收到')));
+  check('built-in /状态 answers without calling DSH and reflects stats', smokeCalls.prompted === 2
+    && napcat.state.calls.some((call) => /回复 1 条/.test(String(call.params?.message))));
+  napcat.sendPrivateMessage({ userId: adminId, text: '/帮助', messageId: 4 });
+  await waitFor('help command reply', async () => napcat.state.calls.some((call) => String(call.params?.message).includes('能听懂这些指令')));
+  check('built-in /帮助 answers without calling DSH', smokeCalls.prompted === 2);
 
   await smoke.dispose();
   await waitFor('sockets closed', async () => napcat.liveCount() === 0);

@@ -1,6 +1,28 @@
+const LEVEL_RANK = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
+
+/**
+ * 按级别 / 关键词过滤日志行。只认桥接日志「时间 LEVEL [名字] 正文」格式里的级别；
+ * 认不出级别的行（多行堆栈、NapCat 原始输出）在只按级别筛时保留，免得把上下文切碎。
+ * @param {string[]} lines
+ * @param {{level?: string, keyword?: string}} [filter]
+ */
+export function filterLogLines(lines, { level = '', keyword = '' } = {}) {
+  const min = LEVEL_RANK[String(level).toUpperCase()] ?? 0;
+  const needle = String(keyword).trim().toLowerCase();
+  if (!min && !needle) return lines;
+  return lines.filter((line) => {
+    const text = String(line);
+    if (min) {
+      const m = /^\S+(?:\s\S+)?\s(DEBUG|INFO|WARN|ERROR)\s/.exec(text);
+      if (m && LEVEL_RANK[m[1]] < min) return false;
+    }
+    return !needle || text.toLowerCase().includes(needle);
+  });
+}
+
 /** A single cancellable poll loop, shared by entry, tab changes and refresh. */
 export function createLogView({ api, getName, isActive, getBox, getStatus,
-  getAutoFollow, setTimer = setTimeout, clearTimer = clearTimeout, now = () => new Date() }) {
+  getAutoFollow, getFilter, setTimer = setTimeout, clearTimer = clearTimeout, now = () => new Date() }) {
   let timer;
   let controller;
   let sequence = 0;
@@ -66,10 +88,16 @@ export function createLogView({ api, getName, isActive, getBox, getStatus,
         state.visible = [...state.visible, ...added].slice(-240);
       }
       state.snapshot = { ...data, lines: [...(data.lines || [])] };
+      const filter = getFilter?.() ?? null;
+      const shown = (lines) => (filter ? filterLogLines(lines, filter) : lines);
+      const filtered = filter && (filter.level || String(filter.keyword ?? '').trim());
+      const raw = state.cleared ? state.visible : (data.lines || []);
+      const lines = shown(raw);
       const content = data.missing
         ? (data.message || '尚无日志，请确认对应服务已启动并开启日志。')
-        : state.cleared ? state.visible.join('\n')
-          : data.lines?.length ? data.lines.join('\n') : (data.message || '日志是空的');
+        : state.cleared ? lines.join('\n')
+          : lines.length ? lines.join('\n')
+            : filtered && raw.length ? '没有符合筛选条件的日志' : (data.message || '日志是空的');
       if (box.textContent !== content) box.textContent = content;
       if (follow) box.scrollTop = box.scrollHeight;
       const status = getStatus();

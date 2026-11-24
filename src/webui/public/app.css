@@ -1965,3 +1965,85 @@ button:focus-visible, select:focus-visible, input:focus-visible {
     color: #000;
   }
 }
+
+/* ------------------------------------------------------------ 运行统计 */
+.mode-embed .full-only { display: none; }
+.stats-card { display: flex; flex-direction: column; gap: var(--sp-3); }
+.segmented--sm .segmented__item { padding: 4px 12px; font-size: 12px; }
+.stats-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+.stats-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--surface-container-high);
+  min-width: 0;
+}
+.stats-kpi__label { font-size: 11.5px; color: var(--on-surface-variant); }
+.stats-kpi__value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stats-kpi__value.is-bad { color: var(--error); }
+.stats-kpi__value.is-good { color: var(--success); }
+.stats-chart { min-height: 160px; }
+.stats-chart svg { display: block; width: 100%; height: 170px; overflow: visible; }
+.stats-chart .bar-in { fill: var(--primary-container); }
+.stats-chart .bar-ok { fill: var(--primary); }
+.stats-chart .bar-fail { fill: var(--error); }
+.stats-chart .axis { fill: var(--on-surface-variant); font-size: 10px; }
+.stats-chart .grid-line { stroke: var(--outline-variant); stroke-width: 1; stroke-dasharray: 2 3; }
+.stats-chart .col-hit { fill: transparent; }
+.stats-chart .col-hit:hover { fill: color-mix(in srgb, var(--primary) 8%, transparent); }
+.stats-legend { display: flex; gap: var(--sp-4); font-size: 11.5px; color: var(--on-surface-variant); }
+.stats-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.stats-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+.stats-swatch--in { background: var(--primary-container); border: 1px solid var(--outline-variant); }
+.stats-swatch--ok { background: var(--primary); }
+.stats-swatch--fail { background: var(--error); }
+.stats-tops { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+.stats-tops__title { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+.stats-top { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.stats-top li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 12.5px;
+  position: relative;
+  padding: 4px 8px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.stats-top li::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--share, 0%);
+  background: var(--secondary-container);
+  z-index: 0;
+}
+.stats-top li > * { position: relative; z-index: 1; }
+.stats-top__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stats-top__count { font-variant-numeric: tabular-nums; color: var(--on-surface-variant); }
+.stats-top .empty { font-size: 12px; }
+@media (max-width: 640px) {
+  .stats-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stats-tops { grid-template-columns: 1fr; }
+}
+
+/* ------------------------------------------------------------ 日志筛选 */
+.log-filter { display: flex; gap: var(--sp-2); margin-top: var(--sp-3); flex-wrap: wrap; }
+.log-level {
+  min-height: 30px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--outline-variant);
+  background: var(--surface-container-lowest);
+  color: var(--on-surface);
+  font-size: 12px;
+}
+.log-filter .log-level { min-height: 40px; }
+.log-search { flex: 1 1 220px; min-height: 40px; padding: 6px 12px; }

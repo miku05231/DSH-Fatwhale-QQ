@@ -68,6 +68,10 @@ const SUITE = [
     note: '自定义文件名、目录参数、命令行优先级与环境变量相对路径',
   },
   {
+    name: '运行统计、内置指令与日志筛选', file: 'tests/stats-commands-test.mjs', expect: ['fail 0'], timeoutMs: 30_000,
+    note: '按日分桶、保留天数、坏文件与写盘失败容错、/帮助 /状态 /排行 文本、日志级别和关键词筛选',
+  },
+  {
     name: '安全准入与限流', file: 'tests/security-rate-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
     note: '私聊策略不放宽群成员准入、过期用户清理与活跃用户额度保留',
   },

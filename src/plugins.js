@@ -95,6 +95,11 @@ export function normalizeMeta(meta, fileBase) {
       description: asText(meta.description).trim(),
       defaultEnabled: meta.defaultEnabled !== false,
       configSchema: schema,
+      // 可选：插件声明的指令，只用于 /帮助 展示，不影响匹配逻辑
+      commands: (Array.isArray(meta.commands) ? meta.commands : [])
+        .filter((c) => c && typeof c.cmd === 'string' && c.cmd.trim())
+        .slice(0, 8)
+        .map((c) => ({ cmd: c.cmd.trim().slice(0, 24), desc: asText(c.desc).trim().slice(0, 60) })),
     },
   };
 }
