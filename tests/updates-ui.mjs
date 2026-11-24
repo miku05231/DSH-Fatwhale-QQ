@@ -37,6 +37,9 @@ async function startServer() {
   const files = new Map(await Promise.all([
     ['/', 'index.html', 'text/html'], ['/app.js', 'app.js', 'application/javascript'],
     ['/logs.js', 'logs.js', 'application/javascript'],
+    ['/keyword-rules.js', 'keyword-rules.js', 'application/javascript'],
+    ['/chat-manager.js', 'chat-manager.js', 'application/javascript'],
+    ['/summary-settings.js', 'summary-settings.js', 'application/javascript'],
     ['/app.css', 'app.css', 'text/css'], ['/app-icon.png', 'app-icon.png', 'image/png'],
   ].map(async ([url, name, type]) => [url, {
     bytes: await readFile(path.join(ROOT, 'src', 'webui', 'public', name)), type,
@@ -420,11 +423,18 @@ async function main() {
     await waitFor(async () => await evaluate('!document.querySelector("#snackbar").classList.contains("is-visible")'), 'settings confirmation dismissed');
     for (const width of [375, 768, 1440]) {
       await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: width < 600 ? 844 : 1000, mobile: width < 600, deviceScaleFactor: 1 });
-      await evaluate(`(() => {
-        const section = document.querySelector("#setAdminUserIds").closest("section");
-        window.scrollTo({top:Math.max(0,scrollY+section.getBoundingClientRect().top-80),behavior:"instant"});
-      })()`);
-      await sleep(80);
+      // The layout keeps settling for a frame or two after a viewport change (the
+      // wide-screen side navigation switches back to the bottom bar), so scroll
+      // until the section stays where it was placed.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await evaluate(`(() => {
+          const section = document.querySelector("#setAdminUserIds").closest("section");
+          window.scrollTo({top:Math.max(0,scrollY+section.getBoundingClientRect().top-80),behavior:"instant"});
+        })()`);
+        await sleep(80);
+        const settled = await evaluate(`Math.abs(document.querySelector("#setAdminUserIds").closest("section").getBoundingClientRect().top - 80) < 2`);
+        if (settled) break;
+      }
       const layout = await evaluate(`(() => {
         const field=document.querySelector("#setAdminUserIds"), r=field.getBoundingClientRect();
         return {width:innerWidth,scrollWidth:document.documentElement.scrollWidth,
