@@ -8,7 +8,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { createLogger } from './logger.js';
 import { envConfigFile, loadConfig, resolvePath } from './config.js';
@@ -23,6 +23,7 @@ import { resolveModelPlan } from './model-follow.js';
 import { PluginHost } from './plugins.js';
 import { StatsStore } from './stats.js';
 import { commandSettings, formatHelp, formatRanking, formatStatus, parseBuiltinCommand } from './commands.js';
+import { KeywordStore, keywordMessage } from './keywords.js';
 import { createAstrbotPolicy } from './astrbot-policy.mjs';
 import { createAstrbotBridge } from './astrbot-bridge.mjs';
 import { createAstrbotManager } from './astrbot-manager.mjs';
@@ -273,6 +274,8 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
   const lastErrorRef = { value: null };
   // 运行统计：只记桥接真正经手的请求，控制台概览和 /状态 /排行 都读它。
   const stats = new StatsStore({ file: path.join(stateDir, 'stats.json'), log });
+  // 关键词自动回复：控制台改 state/keywords.json，按修改时间热加载。
+  const keywords = new KeywordStore({ file: path.join(stateDir, 'keywords.json'), log });
   let lastMessageAt = null;
   // 最后一条「收到了但故意不理」的原因。QQ 那头看不出区别，全都表现为「没回」，
   // 所以把原因落到 status.json 里，排查时不用去翻 debug 日志。
@@ -759,6 +762,18 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
           return;
         }
       }
+    }
+
+    // 关键词自动回复：命中就直接回固定内容，不排队、不调模型；群里不用 @。
+    const keywordRule = keywords.take(text, { isGroup, groupId: msg.groupId, chatKey });
+    if (keywordRule) {
+      if (!limiter.take(String(userId))) {
+        noteDrop(`用户 ${userId} 触发限流（关键词回复）`);
+        return;
+      }
+      log.info(`关键词回复命中 ${keywordRule.id}（${chatKey}）`);
+      await sendSegments(msg, keywordMessage(keywordRule, { toFileUrl: (file) => pathToFileURL(file).href }));
+      return;
     }
 
     // This separate lane cannot grant access to the existing JS/DSH computer lane.
@@ -1309,6 +1324,21 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
       if (!await safeSend(msg, chunk, { textOnly, requireAdmin, grantUnchanged })) return false;
     }
     return chunks.length > 0;
+  }
+
+  /** 发一组 OneBot 消息段（关键词回复用：文本 + 图片，不解析 CQ 码） */
+  async function sendSegments(msg, message) {
+    if (!message.length) return false;
+    const isGroup = msg.messageType === 'group';
+    const action = isGroup ? 'send_group_msg' : 'send_private_msg';
+    const target = isGroup ? { group_id: msg.groupId } : { user_id: msg.userId };
+    try {
+      await bot.call(action, { ...target, message });
+      return true;
+    } catch (err) {
+      log.error(`发送消息失败（${action}）：`, err?.message ?? err);
+      return false;
+    }
   }
 
   async function safeSend(msg, text, { textOnly = false, requireAdmin = false, grantUnchanged } = {}) {

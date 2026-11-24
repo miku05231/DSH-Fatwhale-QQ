@@ -2083,3 +2083,28 @@ button:focus-visible, select:focus-visible, input:focus-visible {
     bottom: calc(var(--sp-6) + env(safe-area-inset-bottom));
   }
 }
+
+/* ------------------------------------------------------ 关键词自动回复 */
+.keyword-rule {
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--r-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.keyword-rule__legend { padding: 0 6px; font-size: 13px; font-weight: 600; color: var(--on-surface-variant); }
+.keyword-rule__head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.keyword-rule__switch { flex: 0 1 auto; padding: 0; gap: var(--sp-3); }
+.keyword-rule__grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: var(--sp-2) var(--sp-3); }
+.keyword-rule__grid--2 { grid-template-columns: 1fr 1fr; }
+.keyword-rule__field { display: flex; flex-direction: column; min-width: 0; }
+.keyword-rule__field .text-field,
+.keyword-rule__field .select-field { width: 100%; }
+@media (max-width: 720px) {
+  .keyword-rule__grid { grid-template-columns: 1fr 1fr; }
+  .keyword-rule__grid > :first-child { grid-column: 1 / -1; }
+  .keyword-rule__grid--2 { grid-template-columns: 1fr; }
+}

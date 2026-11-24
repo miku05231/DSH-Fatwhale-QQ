@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createUpdateManager } from '../updates.mjs';
 import { createImagegenApi } from './imagegen-api.mjs';
+import { createKeywordsApi } from './keywords-api.mjs';
 import { createPlatformScheduler } from '../platform-scheduler.js';
 import { createBilibiliQrLogin } from '../platforms/bilibili-login.js';
 import { consoleRequestTrusted, isLoopbackAddress } from './console-guard.mjs';
@@ -690,6 +691,7 @@ export function createWebUiServer({
   const imagegen = createImagegenApi({
     configPath, configRoot: root, config, readBody, ok, fail, log: safeLog, allow: trusted,
   });
+  const keywordsApi = createKeywordsApi({ stateDir, readJsonBody, ok, fail, log: safeLog });
   const astrbotApiState = { promise: null };
   async function getAstrbotApi() {
     if (!astrbotApiState.promise) {
@@ -2681,6 +2683,7 @@ export function createWebUiServer({
       return imagegen.route(req, res, pathname, method, url);
     }
 
+    if (pathname === '/api/keywords') return keywordsApi.route(req, res, pathname, method);
     if (pathname === '/api/updates' || pathname.startsWith('/api/updates/')) {
       return routeUpdates(req, res, pathname, method);
     }

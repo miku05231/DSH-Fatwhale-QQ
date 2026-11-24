@@ -19,6 +19,7 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 let imagegenUi;
 let astrbotUi;
+let keywordUi;
 
 const STATE = {
   page: 'overview',
@@ -272,7 +273,7 @@ const PAGES = {
   sessions: { title: '会话', subtitle: '群聊与私聊的 DSH 会话' },
   model: { title: '模型', subtitle: '跟随 DSH 桌面端，或在这里手动指定' },
   plugins: { title: '插件', subtitle: '开关与配置，扩展点不用改主流程' },
-  automation: { title: '自动化', subtitle: '定时浏览平台内容并按规则处理' },
+  automation: { title: '自动化', subtitle: '关键词自动回复，定时浏览平台内容并按规则处理' },
   system: { title: '系统', subtitle: '运行信息、日志与行为设置' },
 };
 
@@ -318,7 +319,7 @@ async function refreshPage(name = currentPage()) {
   if (name === 'sessions') return loadSessions();
   if (name === 'model') return loadModel();
   if (name === 'plugins') { await loadPlugins(); return astrbotUi?.load(); }
-  if (name === 'automation') return loadAutomation();
+  if (name === 'automation') { await Promise.all([keywordUi?.load(), loadAutomation()]); return undefined; }
   if (name === 'system') return loadSystem();
 }
 
@@ -3385,6 +3386,10 @@ function init() {
   document.body?.classList?.add(EMBED ? 'mode-embed' : 'mode-full');
   void import('./imagegen.js').then(({ initImagegen }) => {
     imagegenUi = initImagegen({ api, notify: snackbar, confirm: confirmDialog });
+  }).catch((err) => snackbar(err.message));
+  void import('./keyword-rules.js').then(({ initKeywordRules }) => {
+    keywordUi = initKeywordRules({ api, notify: snackbar, confirm: confirmDialog });
+    if (STATE.page === 'automation') keywordUi.load();
   }).catch((err) => snackbar(err.message));
   void import('./astrbot.js').then(({ initAstrbot }) => {
     astrbotUi = initAstrbot({ notify: snackbar, confirm: confirmDialog });

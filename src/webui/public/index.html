@@ -589,7 +589,19 @@
     </section>
 
     <!-- ------------------------- 平台自动化 ------------------------- -->
-    <section class="page" id="page-automation" data-page="automation" aria-label="平台自动化">
+    <section class="page" id="page-automation" data-page="automation" aria-label="自动化">
+      <section class="card card--pad" id="keywordCard" aria-labelledby="keywordTitle">
+        <div class="row-between">
+          <h2 class="card__title" id="keywordTitle">关键词自动回复</h2>
+          <button class="btn btn--tonal ripple" type="button" id="keywordAdd">添加规则</button>
+        </div>
+        <p class="card__hint">命中关键词就直接回固定文字或图片，不调模型、不排队，群里不用 @。只在已授权的群和白名单私聊生效，保存后下一条消息就用新规则。</p>
+        <div class="stack" id="keywordList"><p class="empty">读取中…</p></div>
+        <p class="card__hint" id="keywordStatus" role="status" aria-live="polite"></p>
+        <div class="row-end">
+          <button class="btn btn--filled ripple" type="button" id="keywordSave">保存关键词规则</button>
+        </div>
+      </section>
       <section class="card card--pad">
         <h2 class="card__title">网络平台自动化</h2>
         <p class="card__hint" id="biliAutomationStatus" role="status">读取自动化状态中…</p>

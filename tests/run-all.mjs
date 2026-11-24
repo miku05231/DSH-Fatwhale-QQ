@@ -72,6 +72,10 @@ const SUITE = [
     note: '按日分桶、保留天数、坏文件与写盘失败容错、/帮助 /状态 /排行 文本、日志级别和关键词筛选',
   },
   {
+    name: '关键词自动回复', file: 'tests/keywords-test.mjs', expect: ['fail 0'], timeoutMs: 30_000,
+    note: '规则校验、三种匹配方式、范围与指定群、冷却、热加载、坏文件容错、控制台接口',
+  },
+  {
     name: '安全准入与限流', file: 'tests/security-rate-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
     note: '私聊策略不放宽群成员准入、过期用户清理与活跃用户额度保留',
   },
