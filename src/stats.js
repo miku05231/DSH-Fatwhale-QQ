@@ -335,6 +335,11 @@ export class StatsStore {
     }
   }
 
+  /** 今天有人发言的群号（已授权的群才会被记） */
+  activeGroupsToday() {
+    return Object.keys(this.data.days[dayKey(this.now())]?.speakers ?? {});
+  }
+
   /** 会话最后活跃时间（浅拷贝） */
   chats() {
     return { ...this.data.chats };

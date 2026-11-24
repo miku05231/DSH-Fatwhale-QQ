@@ -21,6 +21,7 @@ let imagegenUi;
 let astrbotUi;
 let keywordUi;
 let chatUi;
+let summaryUi;
 
 const STATE = {
   page: 'overview',
@@ -320,7 +321,7 @@ async function refreshPage(name = currentPage()) {
   if (name === 'sessions') { await Promise.all([chatUi?.load(), loadSessions()]); return undefined; }
   if (name === 'model') return loadModel();
   if (name === 'plugins') { await loadPlugins(); return astrbotUi?.load(); }
-  if (name === 'automation') { await Promise.all([keywordUi?.load(), loadAutomation()]); return undefined; }
+  if (name === 'automation') { await Promise.all([keywordUi?.load(), summaryUi?.load(), loadAutomation()]); return undefined; }
   if (name === 'system') return loadSystem();
 }
 
@@ -3391,6 +3392,10 @@ function init() {
   void import('./chat-manager.js').then(({ initChatManager }) => {
     chatUi = initChatManager({ api, notify: snackbar, confirm: confirmDialog, onReset: () => loadSessions() });
     if (STATE.page === 'sessions') chatUi.load();
+  }).catch((err) => snackbar(err.message));
+  void import('./summary-settings.js').then(({ initSummarySettings }) => {
+    summaryUi = initSummarySettings({ api, notify: snackbar });
+    if (STATE.page === 'automation') summaryUi.load();
   }).catch((err) => snackbar(err.message));
   void import('./keyword-rules.js').then(({ initKeywordRules }) => {
     keywordUi = initKeywordRules({ api, notify: snackbar, confirm: confirmDialog });

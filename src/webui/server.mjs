@@ -29,6 +29,7 @@ import { createUpdateManager } from '../updates.mjs';
 import { createImagegenApi } from './imagegen-api.mjs';
 import { createKeywordsApi } from './keywords-api.mjs';
 import { createChatsApi } from './chats-api.mjs';
+import { normalizeSummarySettings, readSummaryState } from '../group-summary.js';
 import { createPlatformScheduler } from '../platform-scheduler.js';
 import { createBilibiliQrLogin } from '../platforms/bilibili-login.js';
 import { consoleRequestTrusted, isLoopbackAddress } from './console-guard.mjs';
@@ -187,6 +188,14 @@ const SETTINGS_SPEC = {
     contextMessages: 'int',
   },
   groupMemory: { limit: 'int' },
+  // 每日群聊总结（控制台「自动化」页）
+  groupSummary: {
+    enabled: 'bool',
+    time: 'time',
+    groupIds: 'intArray',
+    minMessages: 'int',
+    ranking: 'bool',
+  },
   // 表情包库：目录能搬、开关能关、阈值能调（都在控制台「表情」页上）
   stickers: {
     enabled: 'bool',
@@ -2692,6 +2701,10 @@ export function createWebUiServer({
 
     if (pathname === '/api/keywords') return keywordsApi.route(req, res, pathname, method);
     if (pathname === '/api/chats' || pathname.startsWith('/api/chats/')) return chatsApi.route(req, res, pathname, method);
+    if (pathname === '/api/group-summary') {
+      if (method !== 'GET') return fail(res, 405, '只支持 GET');
+      return ok(res, { ...readSummaryState(stateDir), settings: normalizeSummarySettings(config?.groupSummary) });
+    }
     if (pathname === '/api/updates' || pathname.startsWith('/api/updates/')) {
       return routeUpdates(req, res, pathname, method);
     }

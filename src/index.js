@@ -24,6 +24,8 @@ import { PluginHost } from './plugins.js';
 import { StatsStore } from './stats.js';
 import { commandSettings, formatHelp, formatRanking, formatStatus, parseBuiltinCommand } from './commands.js';
 import { KeywordStore, keywordMessage } from './keywords.js';
+import { createGroupSummaryScheduler } from './group-summary.js';
+import { runChatOnlyDsh } from './chat-only.js';
 import { createAstrbotPolicy } from './astrbot-policy.mjs';
 import { createAstrbotBridge } from './astrbot-bridge.mjs';
 import { createAstrbotManager } from './astrbot-manager.mjs';
@@ -556,6 +558,28 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
     modelPlan: () => ({ extraPatchPaths: refreshModelPlan(), model: modelInfo?.effective ?? null }),
     cwd: dshCwd, projectRoot: configRoot, stateDir, patchPath, log, signal: platformAbort.signal,
   });
+  // 每日群聊总结：不带工具的纯聊天调用，群消息只当不可信引用。
+  const groupSummary = createGroupSummaryScheduler({
+    configPath, stateDir, groupMem, stats, log,
+    activeGroups: () => stats.activeGroupsToday(),
+    canSend: (groupId) => Boolean(config?.security?.allowGroups)
+      && !isGroupBlocked(groupId, config) && isGroupWatched(groupId, config),
+    generate: async (prompt) => {
+      const cfg = accessConfig();
+      const result = await runChatOnlyDsh(prompt, {
+        cfg, sessionId: null, cwd: dshCwd, projectRoot: configRoot, stateDir, patchPath, log,
+        signal: platformAbort.signal, timeoutMs: Math.min(180_000, Math.max(1000, Number(cfg?.dsh?.timeoutMs) || 180_000)),
+        extraPatchPaths: refreshModelPlan(), model: modelInfo?.effective ?? null,
+      });
+      return String(result?.finalText ?? '').trim();
+    },
+    send: async (groupId, text) => {
+      if (!connected || shuttingDown) return false;
+      await bot.call('send_group_msg', { group_id: Number(groupId), message: [{ type: 'text', data: { text } }] });
+      return true;
+    },
+  });
+  groupSummary.start();
   const platformScheduler = createPlatformScheduler({
     configPath, stateDir, projectRoot: PROJECT_ROOT, log,
     generate: (request) => queue.enqueue('automation:bilibili', () => platformModel(request)),
@@ -760,6 +784,10 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
       if (memberOk) {
         if (!limiter.take(String(userId))) {
           noteDrop(`用户 ${userId} 触发限流（内置指令）`);
+          return;
+        }
+        if (builtin.name === 'summary') {
+          await handleSummaryCommand(msg, { isGroup });
           return;
         }
         const reply = handleBuiltinCommand(builtin, { isGroup, groupId: msg.groupId });
@@ -1175,6 +1203,25 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
       .catch((err) => log.debug('触发反思失败：', err?.message ?? err));
   }
 
+  /** /今日总结：管理员在群里手动触发，只总结当前这个群 */
+  async function handleSummaryCommand(msg, { isGroup }) {
+    if (!isGroup) {
+      await safeSend(msg, '总结只在群里能用。', { textOnly: true });
+      return;
+    }
+    if (!isCurrentAdmin(msg)) {
+      await safeSend(msg, '只有管理员能让我现在总结；每天的定时总结可以在控制台「自动化」页打开。', { textOnly: true });
+      return;
+    }
+    if (groupSummary.busy) {
+      await safeSend(msg, '正在写总结，稍等一下。', { textOnly: true });
+      return;
+    }
+    const [result] = await groupSummary.runOnce({ groupIds: [String(msg.groupId)] });
+    if (result && !result.ok) await safeSend(msg, `总结没成功：${result.error || '未知原因'}`, { textOnly: true });
+    else if (result?.skipped) await safeSend(msg, '今天还没有聊天记录可以总结。', { textOnly: true });
+  }
+
   /** 内置指令的回复文本；返回空串表示不处理、继续走正常流程 */
   function handleBuiltinCommand(cmd, { isGroup, groupId }) {
     try {
@@ -1385,6 +1432,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
       clearInterval(statusTimer);
       try { reflectScheduler.stop(); } catch { /* 忽略 */ }
       try { platformScheduler.stop(); } catch { /* 忽略 */ }
+      try { groupSummary.stop(); } catch { /* 忽略 */ }
       try { platformAbort.abort(); } catch { /* 忽略 */ }
       clearInterval(astrbotHeartbeat);
       try { await astrbot.stop(); } catch { /* 忽略 */ }

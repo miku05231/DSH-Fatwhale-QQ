@@ -20,6 +20,7 @@ const PATTERNS = [
   { name: 'status', re: /^[/／](状态|status)$/i },
   { name: 'rank', re: /^[/／](今日排行|排行|发言排行|rank)$/i },
   { name: 'rankYesterday', re: /^[/／](昨日排行)$/i },
+  { name: 'summary', re: /^[/／](今日总结|群聊总结)$/i },
 ];
 
 /**
@@ -72,6 +73,7 @@ export function formatHelp({ botName = '我', isGroup = false, rankEnabled = tru
   lines.push('/状态 —— 运行情况和今天的收发');
   if (rankEnabled && isGroup) lines.push('/排行 · /昨日排行 —— 本群发言排行');
   lines.push('/人格 —— 查看或切换人格（白名单用户）');
+  if (isGroup) lines.push('/今日总结 —— 立刻总结本群今天的聊天（管理员）');
   const extra = (Array.isArray(pluginCommands) ? pluginCommands : [])
     .filter((c) => c && typeof c.cmd === 'string' && c.cmd.trim())
     .slice(0, 12);
