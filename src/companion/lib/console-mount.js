@@ -137,6 +137,7 @@ export async function mountCompanionConsole(ctx, {
           publicBase: CONSOLE_PREFIX,
           bridgeControl: bridge,
           openConsole: page => entry.local.open(page),
+          pluginHost: true,
         });
         entry.server = consoleServer;
         entry.local = createLocalConsole({

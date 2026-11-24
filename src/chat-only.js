@@ -39,6 +39,33 @@ export const CHAT_ONLY_MODULES = Object.freeze({
   'agent-loop': '@deepseek-ai/dsh-agent-loop',
 });
 
+/**
+ * 同一个模块在不同 DSH 发行里的包名。npm 版 0.2.1 叫 dsh-deepseek-account-platform，
+ * Desktop 0.2.2 内置的叫 dsh-deepseek-account（配置项相同）。按顺序取第一个装了的。
+ */
+const MODULE_ALIASES = Object.freeze({
+  '@deepseek-ai/dsh-deepseek-account-platform': Object.freeze(['@deepseek-ai/dsh-deepseek-account']),
+});
+
+/**
+ * 在某份 DSH 安装里解析内核模块，认识改过名的包。
+ * @param {{resolve: (id: string) => string}} requireDsh 以 DSH 安装目录为基准的 require
+ * @param {string} name
+ * @returns {string} 模块文件的绝对路径
+ */
+export function resolveKernelModule(requireDsh, name) {
+  const candidates = [name, ...(MODULE_ALIASES[name] ?? [])];
+  let firstError = null;
+  for (const candidate of candidates) {
+    try {
+      return requireDsh.resolve(candidate);
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  throw firstError;
+}
+
 const MODEL_ENTRY_IDS = new Set([
   'agent-default-model', 'llm-pi-ai', 'llm-deepseek', 'llm-deepseek-account',
 ]);

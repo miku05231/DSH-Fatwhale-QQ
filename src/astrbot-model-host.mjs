@@ -5,7 +5,7 @@ import process from 'node:process';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { buildChatOnlyEntries, selectChatOnlyModelConfig } from './chat-only.js';
+import { buildChatOnlyEntries, resolveKernelModule, selectChatOnlyModelConfig } from './chat-only.js';
 import { killProcessTree } from './dsh.js';
 
 const HOST_SCRIPT = fileURLToPath(import.meta.url);
@@ -230,7 +230,7 @@ export async function executeAstrbotModelHost(rawInput, { signal, createMockAdap
   let entries = buildChatOnlyEntries({ dataRoot: input.dataRoot, modelConfig })
     .filter((entry) => FIXED_MODULES.has(entry.id));
   entries.push({ id: 'attachment-local', name: '@deepseek-ai/dsh-attachment-local', config: { dshHome: input.dataRoot } });
-  for (const entry of entries) entry.name = pathToFileURL(requireDsh.resolve(entry.name)).href;
+  for (const entry of entries) entry.name = pathToFileURL(resolveKernelModule(requireDsh, entry.name)).href;
 
   await fs.mkdir(input.dataRoot, { recursive: true });
   const tempRoot = await fs.mkdtemp(path.join(input.dataRoot, '.runtime-'));

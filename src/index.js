@@ -8,7 +8,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { createLogger } from './logger.js';
 import { envConfigFile, loadConfig, resolvePath } from './config.js';
@@ -23,6 +23,9 @@ import { resolveModelPlan } from './model-follow.js';
 import { PluginHost } from './plugins.js';
 import { StatsStore } from './stats.js';
 import { commandSettings, formatHelp, formatRanking, formatStatus, parseBuiltinCommand } from './commands.js';
+import { KeywordStore, keywordMessage } from './keywords.js';
+import { createGroupSummaryScheduler } from './group-summary.js';
+import { runChatOnlyDsh } from './chat-only.js';
 import { createAstrbotPolicy } from './astrbot-policy.mjs';
 import { createAstrbotBridge } from './astrbot-bridge.mjs';
 import { createAstrbotManager } from './astrbot-manager.mjs';
@@ -94,6 +97,12 @@ function chunkText(text, maxLen) {
 }
 
 /** 取发言人的显示名：群名片 > 昵称 > QQ 号。 */
+/** NapCat 的群消息事件带 group_name；没有就留空 */
+function groupNameOf(msg) {
+  const name = msg?.raw?.group_name;
+  return typeof name === 'string' ? name.trim() : '';
+}
+
 function senderName(msg) {
   const sender = msg?.raw?.sender ?? {};
   for (const value of [sender.card, sender.nickname]) {
@@ -273,6 +282,8 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
   const lastErrorRef = { value: null };
   // 运行统计：只记桥接真正经手的请求，控制台概览和 /状态 /排行 都读它。
   const stats = new StatsStore({ file: path.join(stateDir, 'stats.json'), log });
+  // 关键词自动回复：控制台改 state/keywords.json，按修改时间热加载。
+  const keywords = new KeywordStore({ file: path.join(stateDir, 'keywords.json'), log });
   let lastMessageAt = null;
   // 最后一条「收到了但故意不理」的原因。QQ 那头看不出区别，全都表现为「没回」，
   // 所以把原因落到 status.json 里，排查时不用去翻 debug 日志。
@@ -547,6 +558,28 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
     modelPlan: () => ({ extraPatchPaths: refreshModelPlan(), model: modelInfo?.effective ?? null }),
     cwd: dshCwd, projectRoot: configRoot, stateDir, patchPath, log, signal: platformAbort.signal,
   });
+  // 每日群聊总结：不带工具的纯聊天调用，群消息只当不可信引用。
+  const groupSummary = createGroupSummaryScheduler({
+    configPath, stateDir, groupMem, stats, log,
+    activeGroups: () => stats.activeGroupsToday(),
+    canSend: (groupId) => Boolean(config?.security?.allowGroups)
+      && !isGroupBlocked(groupId, config) && isGroupWatched(groupId, config),
+    generate: async (prompt) => {
+      const cfg = accessConfig();
+      const result = await runChatOnlyDsh(prompt, {
+        cfg, sessionId: null, cwd: dshCwd, projectRoot: configRoot, stateDir, patchPath, log,
+        signal: platformAbort.signal, timeoutMs: Math.min(180_000, Math.max(1000, Number(cfg?.dsh?.timeoutMs) || 180_000)),
+        extraPatchPaths: refreshModelPlan(), model: modelInfo?.effective ?? null,
+      });
+      return String(result?.finalText ?? '').trim();
+    },
+    send: async (groupId, text) => {
+      if (!connected || shuttingDown) return false;
+      await bot.call('send_group_msg', { group_id: Number(groupId), message: [{ type: 'text', data: { text } }] });
+      return true;
+    },
+  });
+  groupSummary.start();
   const platformScheduler = createPlatformScheduler({
     configPath, stateDir, projectRoot: PROJECT_ROOT, log,
     generate: (request) => queue.enqueue('automation:bilibili', () => platformModel(request)),
@@ -718,7 +751,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
         return;
       }
       rememberGroupMessage(msg);
-      stats.recordSpeaker({ groupId: msg.groupId, userId, nickname: senderName(msg) });
+      stats.recordSpeaker({ groupId: msg.groupId, userId, nickname: senderName(msg), groupName: groupNameOf(msg) });
     } else if (isUserBlocked(userId, config)) {
       noteDrop(`用户 ${userId} 在 denyFrom 黑名单里`);
       log.warn(`按黑名单拒绝用户 ${userId} 的消息`);
@@ -753,12 +786,30 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
           noteDrop(`用户 ${userId} 触发限流（内置指令）`);
           return;
         }
+        if (builtin.name === 'summary') {
+          await handleSummaryCommand(msg, { isGroup });
+          return;
+        }
         const reply = handleBuiltinCommand(builtin, { isGroup, groupId: msg.groupId });
         if (reply) {
           await safeSend(msg, reply);
           return;
         }
       }
+    }
+
+    // 关键词自动回复：命中就直接回固定内容，不排队、不调模型；群里不用 @。
+    const keywordHit = keywords.take(text, { isGroup, groupId: msg.groupId, chatKey }, {
+      allow: () => limiter.take(String(userId)),
+    });
+    if (keywordHit && !keywordHit.allowed) {
+      noteDrop(`用户 ${userId} 触发限流（关键词回复）`);
+      return;
+    }
+    if (keywordHit) {
+      log.info(`关键词回复命中 ${keywordHit.rule.id}（${chatKey}）`);
+      await sendSegments(msg, keywordMessage(keywordHit.rule, { toFileUrl: (file) => pathToFileURL(file).href }));
+      return;
     }
 
     // This separate lane cannot grant access to the existing JS/DSH computer lane.
@@ -855,7 +906,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
 
     if (shuttingDown) return;
     log.info(`收到 ${isGroup ? '群' : '私聊'} 消息 user=${userId} len=${text.length}`);
-    stats.recordIncoming({ isGroup, groupId: isGroup ? msg.groupId : null, userId, nickname: senderName(msg) });
+    stats.recordIncoming({ isGroup, groupId: isGroup ? msg.groupId : null, userId, nickname: senderName(msg), groupName: groupNameOf(msg) });
 
     const queueKey = chatKey;
     const waitCount = queue.size(queueKey);
@@ -1154,6 +1205,25 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
       .catch((err) => log.debug('触发反思失败：', err?.message ?? err));
   }
 
+  /** /今日总结：管理员在群里手动触发，只总结当前这个群 */
+  async function handleSummaryCommand(msg, { isGroup }) {
+    if (!isGroup) {
+      await safeSend(msg, '总结只在群里能用。', { textOnly: true });
+      return;
+    }
+    if (!isCurrentAdmin(msg)) {
+      await safeSend(msg, '只有管理员能让我现在总结；每天的定时总结可以在控制台「自动化」页打开。', { textOnly: true });
+      return;
+    }
+    if (groupSummary.busy) {
+      await safeSend(msg, '正在写总结，稍等一下。', { textOnly: true });
+      return;
+    }
+    const [result] = await groupSummary.runOnce({ groupIds: [String(msg.groupId)] });
+    if (result && !result.ok) await safeSend(msg, `总结没成功：${result.error || '未知原因'}`, { textOnly: true });
+    else if (result?.skipped) await safeSend(msg, '今天还没有聊天记录可以总结。', { textOnly: true });
+  }
+
   /** 内置指令的回复文本；返回空串表示不处理、继续走正常流程 */
   function handleBuiltinCommand(cmd, { isGroup, groupId }) {
     try {
@@ -1311,6 +1381,21 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
     return chunks.length > 0;
   }
 
+  /** 发一组 OneBot 消息段（关键词回复用：文本 + 图片，不解析 CQ 码） */
+  async function sendSegments(msg, message) {
+    if (!message.length) return false;
+    const isGroup = msg.messageType === 'group';
+    const action = isGroup ? 'send_group_msg' : 'send_private_msg';
+    const target = isGroup ? { group_id: msg.groupId } : { user_id: msg.userId };
+    try {
+      await bot.call(action, { ...target, message });
+      return true;
+    } catch (err) {
+      log.error(`发送消息失败（${action}）：`, err?.message ?? err);
+      return false;
+    }
+  }
+
   async function safeSend(msg, text, { textOnly = false, requireAdmin = false, grantUnchanged } = {}) {
     const isGroup = msg.messageType === 'group';
     const action = isGroup ? 'send_group_msg' : 'send_private_msg';
@@ -1349,6 +1434,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
       clearInterval(statusTimer);
       try { reflectScheduler.stop(); } catch { /* 忽略 */ }
       try { platformScheduler.stop(); } catch { /* 忽略 */ }
+      try { groupSummary.stop(); } catch { /* 忽略 */ }
       try { platformAbort.abort(); } catch { /* 忽略 */ }
       clearInterval(astrbotHeartbeat);
       try { await astrbot.stop(); } catch { /* 忽略 */ }

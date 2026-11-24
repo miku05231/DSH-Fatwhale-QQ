@@ -5,7 +5,7 @@ import process from 'node:process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { buildChatOnlyEntries, installChatOnlyPolicy, isChatOnlySessionId, selectChatOnlyModelConfig } from './chat-only.js';
+import { buildChatOnlyEntries, installChatOnlyPolicy, isChatOnlySessionId, resolveKernelModule, selectChatOnlyModelConfig } from './chat-only.js';
 import { installChatOnlyModelSelection } from './dsh-version.js';
 import { redactSecrets } from './redact.js';
 
@@ -67,7 +67,7 @@ async function main() {
   });
   // Use absolute, installation-owned entry points. A workspace node_modules
   // directory cannot substitute a plugin for one of the fixed kernel modules.
-  for (const entry of entries) entry.name = pathToFileURL(requireDsh.resolve(entry.name)).href;
+  for (const entry of entries) entry.name = pathToFileURL(resolveKernelModule(requireDsh, entry.name)).href;
   await fs.mkdir(request.dataRoot, { recursive: true });
   tempRoot = await fs.mkdtemp(path.join(request.dataRoot, '.runtime-'));
   const configPath = path.join(tempRoot, 'cordis.json');

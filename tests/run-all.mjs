@@ -72,6 +72,22 @@ const SUITE = [
     note: '按日分桶、保留天数、坏文件与写盘失败容错、/帮助 /状态 /排行 文本、日志级别和关键词筛选',
   },
   {
+    name: '关键词自动回复', file: 'tests/keywords-test.mjs', expect: ['fail 0'], timeoutMs: 30_000,
+    note: '规则校验、三种匹配方式、范围与指定群、冷却、热加载、坏文件容错、控制台接口',
+  },
+  {
+    name: '会话管理页', file: 'tests/chats-test.mjs', expect: ['fail 0'], timeoutMs: 30_000,
+    note: '会话最后活跃时间、合并会话映射与人格覆盖、按会话重置、相对时间与筛选、控制台接口',
+  },
+  {
+    name: '每日群聊总结', file: 'tests/group-summary-test.mjs', expect: ['fail 0'], timeoutMs: 30_000,
+    note: '设置收敛、到点与补跑、提示词边界与截断、发送文本清洗、失败隔离、手动 /今日总结',
+  },
+  {
+    name: '插件跟随宿主 DSH', file: 'tests/dsh-host-test.mjs', expect: ['fail 0'], timeoutMs: 30_000,
+    note: 'Desktop／dsh web 两种宿主识别、dsh.command 默认值才跟随、环境变量传给独立桥接、内核模块改名兼容',
+  },
+  {
     name: '安全准入与限流', file: 'tests/security-rate-test.mjs', expect: ['fail 0'], timeoutMs: 60_000,
     note: '私聊策略不放宽群成员准入、过期用户清理与活跃用户额度保留',
   },

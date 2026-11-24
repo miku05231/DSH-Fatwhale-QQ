@@ -10,6 +10,7 @@
  *   failed     模型调用失败 / 出错
  *   latency    从出队到回复发出的耗时
  *   speakers   已授权群里每个人的发言条数（给 /排行 用，不论是否唤醒它）
+ *   chats      每个会话（g:群号 / p:QQ号）最后活跃时间和名字（给会话管理页用）
  *
  * 按「本地日期」分桶，存 <stateDir>/stats.json，默认保留 30 天。
  * 写盘：防抖 + 临时文件 + rename。任何异常只记 debug，绝不影响收发。
@@ -26,6 +27,7 @@ const MAX_GROUPS = 500;
 const MAX_USERS = 5000;
 const MAX_SPEAKERS_PER_GROUP = 2000;
 const MAX_NAME = 32;
+const MAX_CHATS = 2000;
 
 /** 本地日期键：YYYY-MM-DD */
 export function dayKey(ts = Date.now()) {
@@ -90,6 +92,18 @@ function bump(map, key, limit, by = 1) {
 
 function cleanName(name) {
   return String(name ?? '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, MAX_NAME);
+}
+
+/** 读进来的 chats 映射收敛成 { key: { lastAt, name } } */
+function normalizeChats(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [key, value] of Object.entries(raw)) {
+    const lastAt = Number(value?.lastAt);
+    if (!/^[gp]:\d{1,20}$/.test(key) || !Number.isFinite(lastAt) || lastAt <= 0) continue;
+    out[key] = { lastAt, name: cleanName(value?.name) };
+  }
+  return out;
 }
 
 function topEntries(map, limit) {
@@ -181,7 +195,7 @@ export class StatsStore {
     this.flushMs = Math.max(0, Number(flushMs) || 0);
     this.log = log ?? null;
     this.now = typeof now === 'function' ? now : () => Date.now();
-    this.data = { version: STATS_VERSION, days: {} };
+    this.data = { version: STATS_VERSION, days: {}, chats: {} };
     this.timer = null;
     this.dirty = false;
     this.closed = false;
@@ -201,6 +215,7 @@ export class StatsStore {
           if (/^\d{4}-\d{2}-\d{2}$/.test(date)) this.data.days[date] = normalizeDay(date, day);
         }
       }
+      this.data.chats = normalizeChats(raw?.chats);
     } catch (err) {
       if (err?.code !== 'ENOENT') this.#debug('读取统计文件失败，从空白开始：', err?.message ?? err);
     }
@@ -252,10 +267,24 @@ export class StatsStore {
     day.names[id] = name;
   }
 
+  /** 记一个会话的最后活跃时间；超过上限时挤掉最久没动的 */
+  #noteChat(key, name) {
+    const chats = this.data.chats;
+    const clean = cleanName(name);
+    const previous = chats[key];
+    chats[key] = { lastAt: this.now(), name: clean || previous?.name || '' };
+    const keys = Object.keys(chats);
+    if (keys.length <= MAX_CHATS) return;
+    const oldest = keys.reduce((a, b) => (chats[a].lastAt <= chats[b].lastAt ? a : b));
+    delete chats[oldest];
+  }
+
   /** 一条通过准入、要交给模型的请求 */
-  recordIncoming({ isGroup = false, groupId = null, userId = null, nickname = '' } = {}) {
+  recordIncoming({ isGroup = false, groupId = null, userId = null, nickname = '', groupName = '' } = {}) {
     try {
       const day = this.#today();
+      if (isGroup && groupId != null) this.#noteChat(`g:${groupId}`, groupName);
+      else if (!isGroup && userId != null) this.#noteChat(`p:${userId}`, nickname);
       day.received += 1;
       if (isGroup) day.groupIn += 1; else day.privateIn += 1;
       day.hours[new Date(this.now()).getHours()] += 1;
@@ -288,10 +317,11 @@ export class StatsStore {
   }
 
   /** 已授权群里的一条发言（不论是否唤醒），给 /排行 用 */
-  recordSpeaker({ groupId, userId, nickname = '' } = {}) {
+  recordSpeaker({ groupId, userId, nickname = '', groupName = '' } = {}) {
     try {
       if (groupId == null || userId == null) return;
       const day = this.#today();
+      this.#noteChat(`g:${groupId}`, groupName);
       const gid = String(groupId);
       if (!day.speakers[gid]) {
         if (Object.keys(day.speakers).length >= MAX_GROUPS) return;
@@ -303,6 +333,16 @@ export class StatsStore {
     } catch (err) {
       this.#debug('统计 recordSpeaker 失败：', err?.message ?? err);
     }
+  }
+
+  /** 今天有人发言的群号（已授权的群才会被记） */
+  activeGroupsToday() {
+    return Object.keys(this.data.days[dayKey(this.now())]?.speakers ?? {});
+  }
+
+  /** 会话最后活跃时间（浅拷贝） */
+  chats() {
+    return { ...this.data.chats };
   }
 
   summary(opts) {

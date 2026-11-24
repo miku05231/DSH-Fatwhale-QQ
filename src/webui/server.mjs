@@ -27,6 +27,9 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createUpdateManager } from '../updates.mjs';
 import { createImagegenApi } from './imagegen-api.mjs';
+import { createKeywordsApi } from './keywords-api.mjs';
+import { createChatsApi } from './chats-api.mjs';
+import { normalizeSummarySettings, readSummaryState } from '../group-summary.js';
 import { createPlatformScheduler } from '../platform-scheduler.js';
 import { createBilibiliQrLogin } from '../platforms/bilibili-login.js';
 import { consoleRequestTrusted, isLoopbackAddress } from './console-guard.mjs';
@@ -185,6 +188,14 @@ const SETTINGS_SPEC = {
     contextMessages: 'int',
   },
   groupMemory: { limit: 'int' },
+  // 每日群聊总结（控制台「自动化」页）
+  groupSummary: {
+    enabled: 'bool',
+    time: 'time',
+    groupIds: 'intArray',
+    minMessages: 'int',
+    ranking: 'bool',
+  },
   // 表情包库：目录能搬、开关能关、阈值能调（都在控制台「表情」页上）
   stickers: {
     enabled: 'bool',
@@ -609,6 +620,8 @@ export function createWebUiServer({
   openPath = openLocalPath, openUrl = openExternalUrl, platformControl, platformQrLogin, napcatHealth,
   astrbotManager, astrbotPolicy, astrbotProxySecret = process.env.CONSOLE_PASSWORD_SHA256,
   publicBase = '', bridgeControl = null, openConsole = null,
+  // DSH 插件页里的控制台：更新的是插件代码所在目录（不是配置目录），装完提示重启 DSH。
+  pluginHost = false,
 } = {}) {
   const root = path.resolve(text(configRoot) || PROJECT_ROOT);
   const basePort = Number.isInteger(Number(port)) && Number(port) > 0 ? Number(port) : DEFAULT_PORT;
@@ -678,10 +691,11 @@ export function createWebUiServer({
   let healthSampling = null;
 
   const updates = updateManager ?? createUpdateManager({
-    projectRoot: root,
+    projectRoot: pluginHost ? PROJECT_ROOT : root,
     stateDir,
     configFile: configPath,
     log: safeLog,
+    pluginHost: Boolean(pluginHost),
   });
   const updateToken = randomBytes(32).toString('hex');
   // Only the bridge starts the scheduler; this instance edits configuration and queues work.
@@ -689,6 +703,13 @@ export function createWebUiServer({
   const automationToken = randomBytes(32).toString('hex');
   const imagegen = createImagegenApi({
     configPath, configRoot: root, config, readBody, ok, fail, log: safeLog, allow: trusted,
+  });
+  const keywordsApi = createKeywordsApi({ stateDir, readJsonBody, ok, fail, log: safeLog });
+  const chatsApi = createChatsApi({
+    statsFile, sessionsFile, chatSessionsFile, readJson, writeAtomic, ok, fail, log: safeLog,
+    personaDir: () => personaDir({ configRoot: root, config }),
+    readStats: readStatsFile, readPersonaState: readState,
+    listPersonaNames: async (dir) => (await listPersonas(dir)).map((p) => p.name),
   });
   const astrbotApiState = { promise: null };
   async function getAstrbotApi() {
@@ -2681,6 +2702,12 @@ export function createWebUiServer({
       return imagegen.route(req, res, pathname, method, url);
     }
 
+    if (pathname === '/api/keywords') return keywordsApi.route(req, res, pathname, method);
+    if (pathname === '/api/chats' || pathname.startsWith('/api/chats/')) return chatsApi.route(req, res, pathname, method);
+    if (pathname === '/api/group-summary') {
+      if (method !== 'GET') return fail(res, 405, '只支持 GET');
+      return ok(res, { ...readSummaryState(stateDir), settings: normalizeSummarySettings(config?.groupSummary) });
+    }
     if (pathname === '/api/updates' || pathname.startsWith('/api/updates/')) {
       return routeUpdates(req, res, pathname, method);
     }

@@ -71,6 +71,14 @@ export const DEFAULTS = deepFreeze({
     rank: true,
     rankSize: 10,
   },
+  // 每日群聊总结：到点用当前模型（不带工具）总结各群当天的聊天，附发言排行。
+  groupSummary: {
+    enabled: false,
+    time: '22:00',
+    groupIds: [],
+    minMessages: 20,
+    ranking: true,
+  },
   // JEV URL 和 token 齐全时用于群聊判断，否则沿用当前默认模型。
   jev: {
     baseUrl: '',
