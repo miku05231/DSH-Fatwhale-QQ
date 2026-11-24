@@ -2047,3 +2047,39 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 }
 .log-filter .log-level { min-height: 40px; }
 .log-search { flex: 1 1 220px; min-height: 40px; padding: 6px 12px; }
+
+/* ------------------------------------------------- 宽屏：左侧导航栏 */
+/* 9 个按钮在宽屏底栏上太挤，≥1024px 时改成左侧竖排导航（插件内嵌面板不受影响）。 */
+@media (min-width: 1024px) {
+  body:not(.mode-embed) { --rail-w: 92px; padding-left: var(--rail-w); }
+  body:not(.mode-embed) .nav-bar {
+    top: 0;
+    right: auto;
+    width: var(--rail-w);
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: var(--sp-2);
+    padding: var(--sp-4) var(--sp-2) calc(var(--sp-4) + env(safe-area-inset-bottom));
+    border-top: 0;
+    border-right: 1px solid var(--outline-variant);
+    overflow-y: auto;
+  }
+  body:not(.mode-embed) .nav-item {
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: none;
+    padding: 4px 0;
+  }
+  body:not(.mode-embed) .nav-item__pill { width: 56px; }
+  body:not(.mode-embed) .page-host {
+    padding-bottom: calc(56px + var(--sp-8) + env(safe-area-inset-bottom));
+  }
+  body:not(.mode-embed) .fab {
+    right: max(var(--sp-4), calc((100vw - var(--rail-w) - var(--content-max)) / 2 + var(--sp-4)));
+    bottom: calc(var(--sp-6) + env(safe-area-inset-bottom));
+  }
+  body:not(.mode-embed) .snackbar {
+    left: calc(50% + var(--rail-w) / 2);
+    bottom: calc(var(--sp-6) + env(safe-area-inset-bottom));
+  }
+}
