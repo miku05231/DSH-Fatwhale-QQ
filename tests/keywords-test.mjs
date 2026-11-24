@@ -4,7 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { KeywordStore, findKeywordRule, keywordMessage, normalizeRule, normalizeRules } from '../src/keywords.js';
+import { KeywordStore, findKeywordRule, keywordMessage, normalizeRule, normalizeRules, safeRegexTest } from '../src/keywords.js';
 import { createKeywordsApi } from '../src/webui/keywords-api.mjs';
 
 function tempDir() {
@@ -26,6 +26,8 @@ test('规则校验：默认值、去重、必填项和非法输入', () => {
   assert.throws(() => normalizeRule({ keywords: '(a', match: 'regex', reply: 'y' }), /正则写错了/);
   assert.throws(() => normalizeRule({ keywords: 'x', image: 'relative.png' }), /绝对路径/);
   assert.throws(() => normalizeRule({ keywords: 'x', image: path.join(os.tmpdir(), 'a.exe') }), /只支持/);
+  assert.throws(() => normalizeRule({ keywords: 'x', image: String.raw`\\host\share\a.png` }), /网络共享/);
+  assert.throws(() => normalizeRule({ keywords: 'x', image: '//host/share/a.png' }), /网络共享|绝对路径/);
   assert.equal(normalizeRule({ keywords: 'x', image: imagePath }).image, path.normalize(imagePath));
   assert.equal(normalizeRule({ keywords: 'x', image: 'https://example.com/a.png' }).image, 'https://example.com/a.png');
   const rules = normalizeRules([{ id: 'a', keywords: 'x', reply: '1' }, { id: 'a', keywords: 'y', reply: '2' }]);
@@ -80,18 +82,20 @@ test('存储：保存、热加载、坏文件当作没有规则、冷却按会�
 
     const ctxA = { isGroup: true, groupId: 200000001, chatKey: 'g:200000001' };
     const ctxB = { isGroup: true, groupId: 200000002, chatKey: 'g:200000002' };
-    assert.equal(store.take('早安', ctxA)?.id, 'hi');
+    assert.equal(store.take('早安', ctxA)?.rule.id, 'hi');
     assert.equal(store.take('早安', ctxA), null, '冷却中不重复回');
-    assert.equal(store.take('早安', ctxB)?.id, 'hi', '另一个群不受影响');
+    assert.equal(store.take('早安', ctxB)?.rule.id, 'hi', '另一个群不受影响');
     now += 10_000;
-    assert.equal(store.take('早安', ctxA)?.id, 'hi', '冷却过了再回');
+    const limited = store.take('早安', ctxA, { allow: () => false });
+    assert.deepEqual([limited.rule.id, limited.allowed], ['hi', false], '被限流时告诉调用方');
+    assert.equal(store.take('早安', ctxA)?.allowed, true, '被限流的那次不记冷却，别人还能触发');
 
     // 另一个进程（控制台）改了文件，桥接这边按 mtime 热加载
     const other = new KeywordStore({ file });
     await other.save([{ id: 'bye', keywords: '晚安', reply: '晚安' }]);
     const future = new Date(Date.now() + 5000);
     fs.utimesSync(file, future, future);
-    assert.equal(store.take('晚安', ctxA)?.id, 'bye');
+    assert.equal(store.take('晚安', ctxA)?.rule.id, 'bye');
 
     fs.writeFileSync(file, '{ not json');
     const later = new Date(Date.now() + 10_000);
@@ -150,4 +154,25 @@ test('接口：GET 空列表、PUT 保存、错误返回 400、其他方法 405'
     const del = await fetch(`${base}/api/keywords`, { method: 'DELETE' });
     assert.equal(del.status, 405);
   });
+});
+
+test('写坏的正则会被超时打断并停用，不会卡住桥接', () => {
+  const start = Date.now();
+  assert.equal(safeRegexTest('(a+)+$', `${'a'.repeat(30)}!`), null);
+  assert.ok(Date.now() - start < 2000, '超时打断');
+  assert.equal(safeRegexTest('^早', '早安'), true);
+  assert.equal(safeRegexTest('^晚', '早安'), false);
+
+  const slow = [];
+  const rules = normalizeRules([
+    { id: 'evil', keywords: '(a+)+$', match: 'regex', reply: 'x' },
+    { id: 'ok', keywords: 'a', reply: 'y' },
+  ]);
+  const ctx = { isGroup: true, groupId: 200000001, onSlow: (rule) => slow.push(rule.id) };
+  assert.equal(findKeywordRule(rules, `${'a'.repeat(30)}!`, ctx)?.id, 'ok');
+  assert.deepEqual(slow, ['evil']);
+  const again = Date.now();
+  assert.equal(findKeywordRule(rules, `${'a'.repeat(30)}!`, ctx)?.id, 'ok');
+  assert.ok(Date.now() - again < 30, '停用后不再白等');
+  assert.deepEqual(slow, ['evil']);
 });

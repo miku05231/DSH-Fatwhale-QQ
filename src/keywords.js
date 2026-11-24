@@ -19,6 +19,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 
 export const MATCH_MODES = Object.freeze(['exact', 'contains', 'regex']);
 export const SCOPES = Object.freeze(['all', 'group', 'private']);
@@ -32,6 +33,12 @@ const DEFAULT_COOLDOWN_SECONDS = 30;
 const MAX_COOLDOWN_SECONDS = 86_400;
 const MAX_TRACKED_HITS = 5000;
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
+/** 单次正则匹配的时间上限：写坏的正则（如 (a+)+$）会被打断，不会卡住整个桥接 */
+const REGEX_TIMEOUT_MS = 50;
+const regexContext = vm.createContext({ re: null, text: '' });
+const regexProbe = new vm.Script('re.test(text)');
+/** 超时过的正则（规则 id + 正则源码），本进程内不再尝试，免得每条消息都白等 50ms */
+const slowRegexes = new Set();
 
 class RuleError extends Error {
   constructor(message) {
@@ -60,6 +67,7 @@ function normalizeImage(raw) {
     }
   }
   if (!path.isAbsolute(image)) throw new RuleError('图片要填 http(s) 地址或本机文件的绝对路径');
+  if (/^[\\/]{2}/.test(image)) throw new RuleError('不支持网络共享路径，请把图片放到本机磁盘');
   if (!IMAGE_EXT.test(image)) throw new RuleError('只支持 png / jpg / gif / webp / bmp 图片');
   return path.normalize(image);
 }
@@ -126,15 +134,32 @@ export function normalizeRules(list) {
   });
 }
 
-function ruleMatches(rule, text) {
+/** 带超时的正则匹配；超时返回 null（调用方当作没命中，并停用这个正则） */
+export function safeRegexTest(source, text, timeoutMs = REGEX_TIMEOUT_MS) {
+  try {
+    regexContext.re = new RegExp(source, 'iu');
+    regexContext.text = text;
+    return regexProbe.runInContext(regexContext, { timeout: timeoutMs }) === true;
+  } catch (err) {
+    if (err?.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') return null;
+    return false;
+  } finally {
+    regexContext.re = null;
+    regexContext.text = '';
+  }
+}
+
+function ruleMatches(rule, text, onSlow) {
   if (rule.match === 'exact') return rule.keywords.some((k) => text === k);
   if (rule.match === 'contains') return rule.keywords.some((k) => text.includes(k));
   return rule.keywords.some((k) => {
-    try {
-      return new RegExp(k, 'iu').test(text);
-    } catch {
-      return false;
-    }
+    const key = `${rule.id}|${k}`;
+    if (slowRegexes.has(key)) return false;
+    const hit = safeRegexTest(k, text);
+    if (hit !== null) return hit;
+    slowRegexes.add(key);
+    onSlow?.(rule, k);
+    return false;
   });
 }
 
@@ -144,7 +169,7 @@ function ruleMatches(rule, text) {
  * @param {string} text 消息正文
  * @param {{isGroup: boolean, groupId?: number|string}} ctx
  */
-export function findKeywordRule(rules, text, { isGroup, groupId } = {}) {
+export function findKeywordRule(rules, text, { isGroup, groupId, onSlow } = {}) {
   const body = str(text).trim();
   if (!body || body.length > MAX_TEXT_TO_MATCH) return null;
   for (const rule of Array.isArray(rules) ? rules : []) {
@@ -152,7 +177,7 @@ export function findKeywordRule(rules, text, { isGroup, groupId } = {}) {
     if (rule.scope === 'group' && !isGroup) continue;
     if (rule.scope === 'private' && isGroup) continue;
     if (isGroup && rule.groupIds?.length && !rule.groupIds.includes(String(groupId))) continue;
-    if (ruleMatches(rule, body)) return rule;
+    if (ruleMatches(rule, body, onSlow)) return rule;
   }
   return null;
 }
@@ -217,19 +242,25 @@ export class KeywordStore {
 
   /**
    * 命中且不在冷却里时返回规则，并记下这次命中。
+   * allow() 在确定命中、记冷却之前调用（比如限流）；返回 false 时不记冷却，
+   * 这样一个人刷屏被限流，不会让这条规则对整个群进入冷却。
    * @param {string} text
    * @param {{isGroup: boolean, groupId?: number|string, chatKey: string}} ctx
+   * @param {{allow?: () => boolean}} [opts]
+   * @returns {{rule: object, allowed: boolean}|null}
    */
-  take(text, ctx) {
-    const rule = findKeywordRule(this.rules(), text, ctx);
+  take(text, ctx, { allow = () => true } = {}) {
+    const onSlow = (rule, source) => this.log?.warn?.(`关键词规则 ${rule.id} 的正则太慢（超过 ${REGEX_TIMEOUT_MS}ms），已暂停：${source}`);
+    const rule = findKeywordRule(this.rules(), text, { ...ctx, onSlow });
     if (!rule) return null;
     const key = `${rule.id}|${ctx.chatKey}`;
     const at = this.now();
     const last = this.lastHit.get(key);
     if (last != null && rule.cooldownSeconds > 0 && at - last < rule.cooldownSeconds * 1000) return null;
+    if (!allow()) return { rule, allowed: false };
     this.lastHit.delete(key);
     this.lastHit.set(key, at);
     if (this.lastHit.size > MAX_TRACKED_HITS) this.lastHit.delete(this.lastHit.keys().next().value);
-    return rule;
+    return { rule, allowed: true };
   }
 }

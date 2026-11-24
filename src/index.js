@@ -799,14 +799,16 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
     }
 
     // 关键词自动回复：命中就直接回固定内容，不排队、不调模型；群里不用 @。
-    const keywordRule = keywords.take(text, { isGroup, groupId: msg.groupId, chatKey });
-    if (keywordRule) {
-      if (!limiter.take(String(userId))) {
-        noteDrop(`用户 ${userId} 触发限流（关键词回复）`);
-        return;
-      }
-      log.info(`关键词回复命中 ${keywordRule.id}（${chatKey}）`);
-      await sendSegments(msg, keywordMessage(keywordRule, { toFileUrl: (file) => pathToFileURL(file).href }));
+    const keywordHit = keywords.take(text, { isGroup, groupId: msg.groupId, chatKey }, {
+      allow: () => limiter.take(String(userId)),
+    });
+    if (keywordHit && !keywordHit.allowed) {
+      noteDrop(`用户 ${userId} 触发限流（关键词回复）`);
+      return;
+    }
+    if (keywordHit) {
+      log.info(`关键词回复命中 ${keywordHit.rule.id}（${chatKey}）`);
+      await sendSegments(msg, keywordMessage(keywordHit.rule, { toFileUrl: (file) => pathToFileURL(file).href }));
       return;
     }
 

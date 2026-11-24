@@ -146,3 +146,29 @@ test('指令识别和控制台工具函数', () => {
   assert.match(describeRun({ groupId: '1', ok: true, skipped: '今天只有 1 条' }), /跳过/);
   assert.match(describeRun({ groupId: '1', ok: false, error: '发送失败' }), /失败：发送失败/);
 });
+
+test('一轮全部失败不算完成：隔 10 分钟重试，最多 3 轮', async () => {
+  const f = fixture({
+    settings: { enabled: true, time: '22:00', minMessages: 1 },
+    records: { 200000001: msgs(3) },
+    send: async () => false,
+  });
+  try {
+    f.setNow(at(22, 0));
+    assert.equal((await f.scheduler.tick())[0].ok, false);
+    assert.equal(f.scheduler.readState().lastDate, '');
+    assert.equal(f.scheduler.readState().failed.count, 1);
+    f.setNow(at(22, 5));
+    assert.equal(await f.scheduler.tick(), null, '没隔够 10 分钟');
+    f.setNow(at(22, 10));
+    await f.scheduler.tick();
+    f.setNow(at(22, 20));
+    await f.scheduler.tick();
+    assert.equal(f.scheduler.readState().lastDate, '2026-11-24', '3 次后收手');
+    f.setNow(at(22, 40));
+    assert.equal(await f.scheduler.tick(), null);
+    assert.equal(f.scheduler.readState().runs.length, 3);
+  } finally {
+    f.cleanup();
+  }
+});

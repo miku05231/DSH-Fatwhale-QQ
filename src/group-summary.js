@@ -12,7 +12,8 @@
  *   minMessages  当天少于这么多条就跳过，默认 20
  *   ranking      摘要后附今日发言排行，默认 true
  *
- * 运行记录：<stateDir>/group-summary.json { lastDate, runs: [...] }
+ * 运行记录：<stateDir>/group-summary.json { lastDate, failed: {date, count, at}, runs: [...] }
+ * 一轮里所有群都失败时不算完成，隔 10 分钟重试，当天最多 3 轮。
  */
 
 import fs from 'node:fs';
@@ -34,6 +35,9 @@ const MAX_SUMMARY_CHARS = 1200;
 const MAX_RUNS_KEPT = 50;
 const TICK_MS = 60_000;
 const RANKING_SIZE = 5;
+/** 一轮全部失败（NapCat 断线、模型超时）时，隔 10 分钟重试，当天最多 3 轮 */
+const RETRY_GAP_MS = 10 * 60_000;
+const MAX_ATTEMPTS = 3;
 
 function str(value) {
   return typeof value === 'string' ? value : value == null ? '' : String(value);
@@ -55,10 +59,12 @@ export function normalizeSummarySettings(raw = {}) {
   };
 }
 
-/** 现在是否该跑：今天到点了且今天还没跑过 */
-export function summaryDue(settings, { now = new Date(), lastDate = '' } = {}) {
+/** 现在是否该跑：今天到点了、今天还没跑完、上一轮失败后已隔够重试间隔 */
+export function summaryDue(settings, { now = new Date(), lastDate = '', failed = null } = {}) {
   if (!settings.enabled) return false;
-  if (lastDate === dayKey(now.getTime())) return false;
+  const today = dayKey(now.getTime());
+  if (lastDate === today) return false;
+  if (failed?.date === today && now.getTime() - Number(failed.at || 0) < RETRY_GAP_MS) return false;
   const [h, m] = settings.time.split(':').map(Number);
   return now.getHours() * 60 + now.getMinutes() >= h * 60 + m;
 }
@@ -147,7 +153,9 @@ function writeJsonSync(file, data) {
 /** 运行记录文件：桥接写，控制台只读 */
 export function readSummaryState(stateDir) {
   const raw = readJsonSync(path.join(stateDir, 'group-summary.json'));
-  return { lastDate: str(raw?.lastDate), runs: Array.isArray(raw?.runs) ? raw.runs : [] };
+  const failed = raw?.failed && typeof raw.failed === 'object'
+    ? { date: str(raw.failed.date), count: Number(raw.failed.count) || 0, at: Number(raw.failed.at) || 0 } : null;
+  return { lastDate: str(raw?.lastDate), failed, runs: Array.isArray(raw?.runs) ? raw.runs : [] };
 }
 
 /**
@@ -212,13 +220,21 @@ export function createGroupSummaryScheduler({
     return results;
   }
 
-  function record(results, { markDay }) {
+  /** 定时轮：有一个群成功（或正常跳过）就算今天完成；全失败则记一次失败，满 3 次也算完成 */
+  function nextSchedule(state, results) {
+    const today = dayKey(now());
+    const anyOk = results.length === 0 || results.some((r) => r.ok);
+    const count = (state.failed?.date === today ? state.failed.count : 0) + 1;
+    if (anyOk || count >= MAX_ATTEMPTS) return { lastDate: today, failed: null };
+    return { lastDate: state.lastDate, failed: { date: today, count, at: now() } };
+  }
+
+  function record(results, { scheduled }) {
     const state = readState();
+    const schedule = scheduled ? nextSchedule(state, results) : { lastDate: state.lastDate, failed: state.failed };
+    if (scheduled && schedule.failed) log?.warn?.(`每日群聊总结这一轮全部失败，${RETRY_GAP_MS / 60_000} 分钟后重试（第 ${schedule.failed.count} 次）`);
     try {
-      writeJsonSync(stateFile, {
-        lastDate: markDay ? dayKey(now()) : state.lastDate,
-        runs: [...results, ...state.runs].slice(0, MAX_RUNS_KEPT),
-      });
+      writeJsonSync(stateFile, { ...schedule, runs: [...results, ...state.runs].slice(0, MAX_RUNS_KEPT) });
     } catch (err) {
       log?.warn?.(`每日总结记录写入失败：${err?.message ?? err}`);
     }
@@ -236,7 +252,7 @@ export function createGroupSummaryScheduler({
     running = (async () => {
       const settings = readSettings();
       const results = await runGroups(manual ? groupIds : targets(settings), manual ? { ...settings, minMessages: 1 } : settings);
-      record(results, { markDay: !manual });
+      record(results, { scheduled: !manual });
       return results;
     })();
     try {
@@ -248,7 +264,8 @@ export function createGroupSummaryScheduler({
 
   async function tick() {
     if (running) return null;
-    if (!summaryDue(readSettings(), { now: new Date(now()), lastDate: readState().lastDate })) return null;
+    const state = readState();
+    if (!summaryDue(readSettings(), { now: new Date(now()), lastDate: state.lastDate, failed: state.failed })) return null;
     return runOnce();
   }
 
