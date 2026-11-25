@@ -4,6 +4,7 @@
  */
 
 import { createLogView } from './logs.js';
+import { bindPluginFold, foldCard } from './plugin-fold.js';
 
 const BASE = document.querySelector('meta[name="qq-bridge-base"]')?.content || '';
 
@@ -1791,21 +1792,21 @@ function renderPlugins(data) {
   list.innerHTML = plugins
     .map((plugin) => {
       const fields = (plugin.configSchema || []).map((field) => `<div data-plugin-row="${escapeHtml(field.key)}">${pluginFieldHtml(plugin, field)}</div>`).join('');
-      return `<section class="card card--pad plugin-card" data-plugin="${escapeHtml(plugin.name)}">
-        <div class="row-between">
-          <div class="card__head card__head--flush">
-            <h2 class="card__title">${escapeHtml(plugin.displayName)} <span class="chip chip--tiny">v${escapeHtml(plugin.version)}</span></h2>
-            <p class="card__sub">${escapeHtml(plugin.description || '（没有写说明）')}</p>
-          </div>
-          <label class="switch-row switch-row--tight">
+      return foldCard({
+        key: `dsh:${plugin.name}`,
+        extraClass: 'plugin-card',
+        attrs: { 'data-plugin': plugin.name },
+        title: escapeHtml(plugin.displayName),
+        version: `v${escapeHtml(plugin.version)}`,
+        description: escapeHtml(plugin.description || '（没有写说明）'),
+        control: `<label class="switch-row switch-row--tight">
             <span class="switch-row__text">启用</span>
             <input class="switch" type="checkbox" data-role="enabled" ${plugin.enabled ? 'checked' : ''} />
-          </label>
-        </div>
-        <p class="card__hint">钩子：${plugin.hooks.map((h) => `<code>${escapeHtml(h)}</code>`).join(' · ')}</p>
+          </label>`,
+        body: `<p class="card__hint">钩子：${plugin.hooks.map((h) => `<code>${escapeHtml(h)}</code>`).join(' · ')}</p>
         ${fields ? `<div class="plugin-card__fields">${fields}</div>
-        <div class="row-end"><button class="btn btn--text ripple" type="button" data-role="save-config">保存配置</button></div>` : ''}
-      </section>`;
+        <div class="row-end"><button class="btn btn--text ripple" type="button" data-role="save-config">保存配置</button></div>` : ''}`,
+      });
     })
     .join('');
 
@@ -3262,6 +3263,7 @@ function initEvents() {
 
   // 插件
   $('#pluginsReload')?.addEventListener('click', () => loadPlugins());
+  bindPluginFold($('#page-plugins'));
 
   // 日志切换
   // 日志筛选：级别记在本机，关键词输入停顿 250ms 再刷新

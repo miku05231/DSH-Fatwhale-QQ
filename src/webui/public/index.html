@@ -446,7 +446,11 @@
             <h2 class="card__title">插件</h2>
             <p class="card__sub" id="pluginsSummary">正在读取…</p>
           </div>
-          <button class="btn btn--text ripple" type="button" id="pluginsReload">重新读取</button>
+          <div class="plugin-fold-all" role="group" aria-label="插件卡片折叠">
+            <button class="btn btn--text ripple" type="button" data-fold-all="open">全部展开</button>
+            <button class="btn btn--text ripple" type="button" data-fold-all="close">全部收起</button>
+            <button class="btn btn--text ripple" type="button" id="pluginsReload">重新读取</button>
+          </div>
         </div>
         <p class="card__hint" id="pluginsHint">插件放在 <code>src/plugins/</code>，开关和配置写盘后需要重启桥接才会生效。</p>
         <p class="card__hint card__hint--warn" id="pluginsFailures" hidden></p>

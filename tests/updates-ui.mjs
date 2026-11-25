@@ -37,6 +37,7 @@ async function startServer() {
   const files = new Map(await Promise.all([
     ['/', 'index.html', 'text/html'], ['/app.js', 'app.js', 'application/javascript'],
     ['/logs.js', 'logs.js', 'application/javascript'],
+    ['/plugin-fold.js', 'plugin-fold.js', 'application/javascript'],
     ['/keyword-rules.js', 'keyword-rules.js', 'application/javascript'],
     ['/chat-manager.js', 'chat-manager.js', 'application/javascript'],
     ['/summary-settings.js', 'summary-settings.js', 'application/javascript'],

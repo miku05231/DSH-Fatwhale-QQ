@@ -1,3 +1,5 @@
+import { foldCard } from './plugin-fold.js';
+
 const BASE = '/api/astrbot';
 const GROUP_ID = /^[1-9]\d{0,19}$/;
 const PLUGIN_ID = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
@@ -101,10 +103,10 @@ function renderSchema(schema, config, pathParts = []) {
     const help = description ? `<small class="card__hint">${escapeHtml(description)}</small>` : '';
     if (type === 'object') {
       const nested = field?.properties ?? field?.schema ?? field?.children ?? field?.items ?? field;
-      return `<fieldset class="astrbot-nested"><legend>${escapeHtml(label)}</legend>${renderSchema(nested, config, parts)}</fieldset>`;
+      return `<fieldset class="astrbot-nested"><legend>${escapeHtml(label)}</legend>${description ? `<small class="card__hint astrbot-nested__hint">${escapeHtml(description)}</small>` : ''}<div class="astrbot-grid astrbot-grid--config">${renderSchema(nested, config, parts)}</div></fieldset>`;
     }
     if (type === 'boolean') {
-      return `<label class="astrbot-check"><input type="checkbox" data-config-path="${escapeHtml(pathValue)}" ${value === true ? 'checked' : ''}><span>${escapeHtml(label)}</span></label>${help}`;
+      return `<div class="astrbot-field astrbot-field--check"><label class="astrbot-check"><input type="checkbox" data-config-path="${escapeHtml(pathValue)}" ${value === true ? 'checked' : ''}><span>${escapeHtml(label)}</span></label>${help}</div>`;
     }
     if (type === 'select') {
       const options = field.options ?? field.enum ?? [];
@@ -265,15 +267,19 @@ export function initAstrbot({ notify = () => {}, confirm = async () => window.co
       const description = plugin?.description ?? plugin?.metadata?.description ?? '';
       const enabled = plugin?.enabled === true;
       const canUpdate = Boolean(String(source).trim()) && !['zip-upload', 'upload.zip'].includes(String(source).trim());
-      return `<section class="card card--pad astrbot-plugin" data-plugin-id="${escapeHtml(id)}">
-        <div class="row-between"><div><h3 class="card__title">${escapeHtml(pluginTitle(plugin))} <span class="chip chip--tiny">${escapeHtml(versionLabel)}</span></h3><p class="card__sub">${escapeHtml(description)}</p></div>
-          <label class="switch-row switch-row--tight"><span class="switch-row__text">启用</span><input class="switch" type="checkbox" data-action="plugin-enabled" ${enabled ? 'checked' : ''}></label>
-        </div>
-        <div class="astrbot-meta"><span>ID：<code>${escapeHtml(id)}</code></span>${source ? `<span>来源：${escapeHtml(source)}</span>` : ''}${sourceRef ? `<span>安装引用：<code title="${escapeHtml(sourceRef)}">${escapeHtml(shortSourceRef)}</code></span>` : ''}<span>兼容性：${escapeHtml(compatibilityText)}</span></div>
-        <div class="astrbot-grid" data-config-fields>${fields}</div>
-        <div class="astrbot-actions"><button class="btn btn--text ripple" type="button" data-action="plugin-save">保存配置</button><button class="btn btn--text ripple" type="button" data-action="update" ${canUpdate ? '' : 'disabled title="插件没有可用的 GitHub 更新来源"'}>更新</button><button class="btn btn--text ripple" type="button" data-action="rollback">回滚版本</button><button class="btn btn--text ripple" type="button" data-action="uninstall">卸载</button><label class="astrbot-check"><input type="checkbox" data-purge><span>同时删除插件数据</span></label></div>
-        <div data-plugin-job></div>
-      </section>`;
+      return foldCard({
+        key: `astrbot:${id}`,
+        extraClass: 'astrbot-plugin',
+        attrs: { 'data-plugin-id': id },
+        title: escapeHtml(pluginTitle(plugin)),
+        version: escapeHtml(versionLabel),
+        description: escapeHtml(description),
+        control: `<label class="switch-row switch-row--tight"><span class="switch-row__text">启用</span><input class="switch" type="checkbox" data-action="plugin-enabled" ${enabled ? 'checked' : ''}></label>`,
+        body: `<div class="astrbot-meta"><span>ID：<code>${escapeHtml(id)}</code></span>${source ? `<span>来源：${escapeHtml(source)}</span>` : ''}${sourceRef ? `<span>安装引用：<code title="${escapeHtml(sourceRef)}">${escapeHtml(shortSourceRef)}</code></span>` : ''}<span>兼容性：${escapeHtml(compatibilityText)}</span></div>
+        <div class="astrbot-grid astrbot-grid--config" data-config-fields>${fields}</div>
+        <div class="astrbot-actions"><label class="astrbot-check astrbot-check--inline"><input type="checkbox" data-purge><span>卸载时同时删除插件数据</span></label><button class="btn btn--text ripple" type="button" data-action="plugin-save">保存配置</button><button class="btn btn--text ripple" type="button" data-action="update" ${canUpdate ? '' : 'disabled title="插件没有可用的 GitHub 更新来源"'}>更新</button><button class="btn btn--text ripple" type="button" data-action="rollback">回滚版本</button><button class="btn btn--text ripple" type="button" data-action="uninstall">卸载</button></div>`,
+        footer: '<div class="plugin-fold__job" data-plugin-job></div>',
+      });
     }).join('');
   }
 
@@ -335,7 +341,7 @@ export function initAstrbot({ notify = () => {}, confirm = async () => window.co
 
   function render() {
     if (state.polls.size > 0) return;
-    root.innerHTML = `<div class="astrbot-panel">${renderRuntime()}${renderInstall()}<section class="astrbot-panel">${renderPlugins()}</section>${renderGroups()}${renderOutboundGrants()}</div>`;
+    root.innerHTML = `<div class="astrbot-panel">${renderRuntime()}${renderInstall()}<section class="plugin-fold-list" aria-label="已安装 AstrBot 插件">${renderPlugins()}</section>${renderGroups()}${renderOutboundGrants()}</div>`;
   }
 
   function renderOutboundGrantPanel() {
