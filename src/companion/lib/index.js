@@ -21,7 +21,7 @@
 //   - 不把聊天正文写日志；日志只记 sessionId、耗时、错误。
 
 import fs from 'node:fs';
-import { inferProjectRoot, mountCompanionConsole } from './console-mount.js';
+import { inferProjectRoot, mountCompanionConsole, resolveCompanionConfig } from './console-mount.js';
 import { createInProcessAgentRuntime } from './in-process-agent.js';
 import { resolveBridgeRunMode } from '../../bridge-run-mode.js';
 import { loadConfig } from '../../config.js';
@@ -316,8 +316,22 @@ export async function apply(ctx, rawConfig) {
   if (hostDsh) log.info(`companion: 跟随宿主 DSH ${hostDsh.version || ''}（${hostDsh.root}）`);
   else log.warn('companion: 没找到宿主 DSH 内核，普通聊天按 dsh.command 查找');
   const projectRoot = path.resolve(String(config.projectRoot || inferProjectRoot()));
-  const requestedConfig = String(config.configFile ?? '').trim();
-  const configPath = requestedConfig ? path.resolve(projectRoot, requestedConfig) : path.join(projectRoot, 'config.json');
+  const resolvedConfig = resolveCompanionConfig({
+    codeRoot: projectRoot,
+    requestedConfig: config.configFile,
+    dshHome: resolveDshHome(),
+  });
+  const configPath = resolvedConfig.path;
+  // The bridge child only gets --config when the path is not the default one.
+  const requestedConfig = resolvedConfig.explicit ? configPath : '';
+  if (resolvedConfig.installed) {
+    log.info(`companion: 从链接安装，配置和数据放在 ${path.dirname(configPath)}`);
+    try {
+      loadConfig(projectRoot, { createIfMissing: true, configFile: configPath });
+    } catch (error) {
+      log.warn(`companion: 无法准备配置文件：${String(error?.message ?? error)}`);
+    }
+  }
   let fileConfig = null;
   try {
     fileConfig = loadConfig(projectRoot, {

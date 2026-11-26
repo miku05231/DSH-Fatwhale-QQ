@@ -2,5 +2,34 @@
   "name": "qq-bridge",
   "private": true,
   "version": "3.4.1",
-  "type": "module"
+  "type": "module",
+  "description": "QQ-DSH 桥接：作为 DSH 插件在宿主内运行桥接、创建会话，并在插件页提供控制台",
+  "main": "src/companion/lib/index.js",
+  "exports": {
+    ".": "./src/companion/lib/index.js",
+    "./client": "./src/companion/lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src/",
+    "tools/",
+    "runtime/",
+    "assets/",
+    "cordis.patch.yml",
+    "config.example.json",
+    "patches/example-headless-model.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.0-rc.2 <0.3.0"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-plugin-manager"]
+    }
+  }
 }

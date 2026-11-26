@@ -279,7 +279,7 @@ export function createUpdateManager({
     } catch {
       return {
         allowed: false, mode: 'plugin',
-        reason: '插件模式下只有 git 检出的安装能在插件页更新；其他安装方式请到 GitHub 发布页下载新版后替换程序文件。',
+        reason: '插件模式下只有 git 检出的安装能在插件页更新。从 GitHub 链接安装的，请在 DSH 插件页卸载后重新粘贴链接安装新版（配置和数据在 ~/.dsh/qq-bridge，不会丢失）。',
       };
     }
   }

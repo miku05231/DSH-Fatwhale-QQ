@@ -1,0 +1,8 @@
+# Used when DSH installs this repository from its GitHub link: the package
+# is "qq-bridge", so the plugin entry loads that name. A clone linked from
+# src/companion uses src/companion/cordis.patch.yml instead.
+- insert:
+    - id: qq-bridge-companion
+      name: qq-bridge
+      config:
+        runMode: embedded

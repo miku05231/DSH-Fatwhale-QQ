@@ -514,7 +514,7 @@ export async function startBridge({ argv = process.argv.slice(2), embedded = fal
 
   const platformAbort = new AbortController();
   const astrbotPolicy = createAstrbotPolicy({ root: configRoot, readConfig: accessConfig });
-  const astrbotManager = createAstrbotManager({ projectRoot: configRoot, configPath, readConfig: accessConfig, logger: log });
+  const astrbotManager = createAstrbotManager({ projectRoot: configRoot, sourceRoot: PROJECT_ROOT, configPath, readConfig: accessConfig, logger: log });
   const astrbotModel = createAstrbotModelProvider({
     readConfig: accessConfig,
     modelPlan: () => ({ extraPatchPaths: refreshModelPlan(), model: modelInfo?.effective ?? null }),

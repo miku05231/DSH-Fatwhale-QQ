@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createBridgeSupervisor } from './bridge-supervisor.js';
@@ -8,6 +9,40 @@ export const CONSOLE_PREFIX = '/qq-bridge';
 
 export function inferProjectRoot(moduleUrl = import.meta.url) {
   return path.resolve(path.dirname(fileURLToPath(moduleUrl)), '..', '..', '..');
+}
+
+/** Folder under the DSH home that keeps config and data for link installs. */
+export const INSTALLED_DATA_DIRNAME = 'qq-bridge';
+
+/**
+ * Where the bridge config lives.
+ *
+ * A git clone or a folder that already has config.json keeps config.json next
+ * to the code. A copy installed from a GitHub link sits in the pnpm store,
+ * which a reinstall replaces, so its config and data go to
+ * <dshHome>/qq-bridge/config.json instead.
+ *
+ * @param {{codeRoot: string, requestedConfig?: string, dshHome: string, exists?: (p: string) => boolean}} options
+ * @returns {{path: string, installed: boolean, explicit: boolean}}
+ */
+export function resolveCompanionConfig({
+  codeRoot,
+  requestedConfig = '',
+  dshHome,
+  exists = fs.existsSync,
+} = {}) {
+  const root = path.resolve(codeRoot);
+  const requested = String(requestedConfig ?? '').trim();
+  if (requested) return { path: path.resolve(root, requested), installed: false, explicit: true };
+  const local = path.join(root, 'config.json');
+  if (exists(path.join(root, '.git')) || exists(local)) {
+    return { path: local, installed: false, explicit: false };
+  }
+  return {
+    path: path.join(path.resolve(dshHome), INSTALLED_DATA_DIRNAME, 'config.json'),
+    installed: true,
+    explicit: true,
+  };
 }
 
 function stripPrefix(url) {

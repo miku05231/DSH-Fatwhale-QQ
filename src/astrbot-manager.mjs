@@ -574,6 +574,9 @@ function withoutSecretSchemaDefaults(value, fieldName = '', depth = 0, budget = 
 
 export function createAstrbotManager({
   projectRoot,
+  // Code root that holds runtime/astrbot. Defaults to projectRoot; differs when
+  // config and data live outside the program folder (link installs).
+  sourceRoot = projectRoot,
   configPath,
   readConfig,
   logger = () => {},
@@ -595,8 +598,9 @@ export function createAstrbotManager({
   if (typeof fetchImpl !== 'function') throw new TypeError('fetchImpl must be a function.');
   const root = path.resolve(projectRoot);
   const absoluteConfigPath = path.resolve(configPath);
-  const runtimeSource = path.join(root, 'runtime', 'astrbot');
-  const lockPath = path.join(root, 'runtime', 'astrbot-lock.json');
+  const codeRoot = path.resolve(typeof sourceRoot === 'string' && sourceRoot ? sourceRoot : root);
+  const runtimeSource = path.join(codeRoot, 'runtime', 'astrbot');
+  const lockPath = path.join(codeRoot, 'runtime', 'astrbot-lock.json');
   let child = null;
   let childExit = null;
   let operationQueue = Promise.resolve();
@@ -1694,7 +1698,7 @@ export function createAstrbotManager({
 
   async function installPython() {
     if (typeof installManagedPython === 'function') {
-      return installManagedPython({ projectRoot: root, stateRoot: stateRoot(), lockPath });
+      return installManagedPython({ projectRoot: codeRoot, stateRoot: stateRoot(), lockPath });
     }
     if (platform !== 'win32') {
       throw failure('ASTRBOT_RUNTIME_UNAVAILABLE', 'No managed AstrBot Python runtime is installed for this platform.', 501);
