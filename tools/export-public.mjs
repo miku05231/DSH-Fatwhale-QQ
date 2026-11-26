@@ -72,6 +72,7 @@ const INCLUDE = [
   'SPEC-2.md',
   'SPEC-launcher.md',
   'package.json',
+  'cordis.patch.yml',
   'deepseek-waitou.png',
   'scripts',
   'docker',

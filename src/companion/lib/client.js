@@ -1,9 +1,15 @@
 // Browser half of the QQ-DSH console. The factory runs inside DSH's client
 // module loader (Desktop and `dsh web` share that page). It does not iframe
 // the standalone 5830 server.
-globalThis.window.__ModuleLoader__.load({
-  id: 'qq-bridge-companion',
-  factory: (require) => {
+//
+// DSH requires the bundle to register under its package name. The same file
+// ships as "qq-bridge" (GitHub link install) and "qq-bridge-companion"
+// (clone linked from src/companion), so register the factory under both.
+// Block scope: a classic script would otherwise leak these names to the page.
+{
+  const MODULE_IDS = ['qq-bridge', 'qq-bridge-companion'];
+
+  const factory = (require) => {
     const React = require('react');
     const { createElement: h, useEffect, useState, useRef } = React;
     const PREFIX = '/qq-bridge';
@@ -38,14 +44,30 @@ globalThis.window.__ModuleLoader__.load({
       );
     }
 
+    // The plugin page renders this slot by package name: "qq-bridge" when
+    // installed from the GitHub link, "qq-bridge-companion" for a clone
+    // linked from src/companion.
+    const PACKAGE_KEYS = ['qq-bridge', 'qq-bridge-companion'];
+
     function apply(ctx) {
-      ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
-        name: 'plugins.bundle.config',
-        key: 'qq-bridge-companion',
-        order: 10,
-      }, ConsolePage));
+      ctx.slots.inject('plugins.bundle.config', () => {
+        const disposers = PACKAGE_KEYS.map((key) => ctx.slots.register({
+          name: 'plugins.bundle.config',
+          key,
+          order: 10,
+        }, ConsolePage));
+        return () => {
+          for (const dispose of disposers) {
+            if (typeof dispose === 'function') dispose();
+          }
+        };
+      });
     }
 
     return { apply, inject: ['slots'] };
-  },
-});
+  };
+
+  for (const id of MODULE_IDS) {
+    globalThis.window.__ModuleLoader__.load({ id, factory });
+  }
+}
