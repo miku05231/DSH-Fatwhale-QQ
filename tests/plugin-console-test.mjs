@@ -181,11 +181,16 @@ const cross = fakeResponse();
 await routes[0].handler(fakeRequest('/qq-bridge/api/settings', { 'sec-fetch-site': 'cross-site' }), cross);
 check('cross-site plugin requests are refused', cross.status === 403);
 
+const moduleRegistrations = [];
 globalThis.window = {
-  __ModuleLoader__: { load(registration) { globalThis.__captured = registration; } },
+  __ModuleLoader__: { load(registration) { moduleRegistrations.push(registration); } },
 };
 await import('../src/companion/lib/client.js');
-const client = globalThis.__captured.factory((id) => {
+// DSH resolves a plugin's client bundle by its package name.
+check('client module registers under both package names',
+  moduleRegistrations.map((entry) => entry.id).sort().join(',') === 'qq-bridge,qq-bridge-companion' &&
+  moduleRegistrations.every((entry) => typeof entry.factory === 'function'));
+const client = moduleRegistrations[0].factory((id) => {
   if (id !== 'react') throw new Error(id);
   return { createElement: (type, props, ...children) => ({ type, props, children }), useEffect() {}, useState: (value) => [value, () => {}] };
 });
