@@ -38,12 +38,24 @@ globalThis.window.__ModuleLoader__.load({
       );
     }
 
+    // The plugin page renders this slot by package name: "qq-bridge" when
+    // installed from the GitHub link, "qq-bridge-companion" for a clone
+    // linked from src/companion.
+    const PACKAGE_KEYS = ['qq-bridge', 'qq-bridge-companion'];
+
     function apply(ctx) {
-      ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
-        name: 'plugins.bundle.config',
-        key: 'qq-bridge-companion',
-        order: 10,
-      }, ConsolePage));
+      ctx.slots.inject('plugins.bundle.config', () => {
+        const disposers = PACKAGE_KEYS.map((key) => ctx.slots.register({
+          name: 'plugins.bundle.config',
+          key,
+          order: 10,
+        }, ConsolePage));
+        return () => {
+          for (const dispose of disposers) {
+            if (typeof dispose === 'function') dispose();
+          }
+        };
+      });
     }
 
     return { apply, inject: ['slots'] };

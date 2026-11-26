@@ -190,13 +190,19 @@ const client = globalThis.__captured.factory((id) => {
   return { createElement: (type, props, ...children) => ({ type, props, children }), useEffect() {}, useState: (value) => [value, () => {}] };
 });
 const slots = [];
+const disposed = [];
+let disposeInjected = null;
 client.apply({
   slots: {
-    inject(_name, register) { register(); },
-    register(spec) { slots.push(spec); },
+    inject(_name, register) { disposeInjected = register(); },
+    register(spec) { slots.push(spec); return () => disposed.push(spec.key); },
   },
 });
-check('client registers the bundle config under the package name', slots[0]?.key === 'qq-bridge-companion');
+const slotKeys = slots.map((spec) => spec.key).sort();
+check('client registers the bundle config under both package names',
+  slotKeys.join(',') === 'qq-bridge,qq-bridge-companion' && slots.every((spec) => spec.name === 'plugins.bundle.config'));
+disposeInjected?.();
+check('client disposes every bundle config registration', disposed.sort().join(',') === 'qq-bridge,qq-bridge-companion');
 
 const imported = await new Promise((resolve) => {
   const child = spawn(process.execPath, ['--input-type=module', '-e', "await import('./src/index.js'); console.log('imported')"], {
